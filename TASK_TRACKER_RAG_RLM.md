@@ -27,7 +27,7 @@ Active planning tracker
 # M0 — Foundation / Audit
 
 ## M0.1 Repo and runtime audit
-- [-] Confirm build/test status of current Rust workspace *(blocked: `cargo` not installed / not in PATH)*
+- [x] Confirm build/test status of current Rust workspace
 - [x] Identify exact entrypoints for CLI session startup
 - [x] Identify exact insertion points for runtime orchestration wrapper
 - [x] Identify exact insertion points for config parsing extensions
@@ -61,7 +61,7 @@ Active planning tracker
 ### Acceptance
 - [x] Config loader accepts `rag`, `rlm`, `webResearch` sections
 - [x] Invalid config produces typed parse errors
-- [-] Existing config tests still pass *(pending Rust toolchain / compile verification)*
+- [x] Existing config tests still pass
 
 ## M1.2 Budget model
 - [ ] Add budget structs for depth / iteration / timeout / subcalls / optional cost
