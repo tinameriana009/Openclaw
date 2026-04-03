@@ -74,15 +74,15 @@ Active planning tracker
 - [x] Controller can query exhaustion state deterministically
 
 ## M1.3 Trace ledger schema
-- [ ] Define trace root record
-- [ ] Define event enum / event payload structs
-- [ ] Define trace serialization format (JSON recommended)
-- [ ] Add helper for emitting high-level summary
-- [ ] Add tests for serialization and backward-safe parsing assumptions
+- [x] Define trace root record
+- [x] Define event enum / event payload structs
+- [x] Define trace serialization format (JSON recommended)
+- [x] Add helper for emitting high-level summary
+- [x] Add tests for serialization and backward-safe parsing assumptions
 
 ### Acceptance
-- [ ] A trace file can be written and re-read
-- [ ] Event sequence is inspectable without raw transcript dumping
+- [x] A trace file can be written and re-read
+- [x] Event sequence is inspectable without raw transcript dumping
 
 ## M1.4 Corpus data model
 - [ ] Define corpus / document / chunk structs
