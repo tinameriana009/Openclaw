@@ -64,14 +64,14 @@ Active planning tracker
 - [x] Existing config tests still pass
 
 ## M1.2 Budget model
-- [ ] Add budget structs for depth / iteration / timeout / subcalls / optional cost
-- [ ] Add inheritance logic from parent to child budget
-- [ ] Add budget exhaustion helpers and stop-reason enum
-- [ ] Add unit tests for budget slicing and cap enforcement
+- [x] Add budget structs for depth / iteration / timeout / subcalls / optional cost
+- [x] Add inheritance logic from parent to child budget
+- [x] Add budget exhaustion helpers and stop-reason enum
+- [x] Add unit tests for budget slicing and cap enforcement
 
 ### Acceptance
-- [ ] Child budget can never exceed parent budget
-- [ ] Controller can query exhaustion state deterministically
+- [x] Child budget can never exceed parent budget
+- [x] Controller can query exhaustion state deterministically
 
 ## M1.3 Trace ledger schema
 - [ ] Define trace root record
