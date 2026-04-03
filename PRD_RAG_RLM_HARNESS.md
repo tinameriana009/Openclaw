@@ -1,7 +1,47 @@
 # PRD — RAG + Recursive Language Model (RLM) Integration for Claw Harness
 
 ## Status
-Draft v0.1
+Draft v0.2
+
+## Executive Summary
+This product is a **session-ready agent harness for coding and research workflows**. Its job is not merely to expose a model or a retrieval component, but to provide the full runtime layer that turns a language model into an operational agent for new sessions.
+
+In this PRD, the **agent harness is the product**. RAG and Recursive Language Models (RLMs) are enabling capabilities added to the harness so it can work effectively over large repositories, document corpora, note archives, and optionally web evidence.
+
+The intended outcome is a harness that can:
+- start new agent sessions with clear permissions, tools, memory, and runtime controls
+- execute practical coding and research tasks instead of only answering in one-shot text
+- use retrieval to ground itself in the right local or external evidence
+- use recursive reasoning/sub-queries to avoid context rot and handle large contexts more intelligently
+- expose traces, budgets, and controls so the system remains understandable and safe
+
+## Core Product Purpose
+The purpose of the harness in this PRD is to serve as the **main runtime layer for future agent sessions**. Concretely, that means it is responsible for:
+- session lifecycle management
+- tool execution and orchestration
+- permission and safety boundaries
+- retrieval and context selection
+- recursive sub-query execution
+- answer/action synthesis
+- traceability, budgeting, and stopping behavior
+
+Without this harness layer, the project would only be a collection of model calls, retrieval utilities, and experiments. With the harness layer, those components become a usable product for everyday coding and research work.
+
+## Product Positioning
+This PRD should be read with the following hierarchy in mind:
+1. **Primary product:** agent harness/runtime
+2. **Primary enhancements:** RAG and RLM capabilities
+3. **Secondary enhancement:** web/browser-aware evidence gathering
+
+That distinction matters because the goal is not to build a standalone RAG subsystem or a pure RLM research demo. The goal is to build a practical agent harness that uses RAG and RLM where they improve real-world task execution.
+
+## Primary User Experience
+The target UX is simple:
+1. A user starts a new session with the harness.
+2. The harness loads the right tools, permissions, and context sources.
+3. The user asks for a coding or research task.
+4. The harness decides whether to answer directly, retrieve context, recurse over slices, or escalate to web evidence.
+5. The harness returns a grounded final answer or performs a bounded action, with sources and optional trace output.
 
 ## Context
 We want to evolve `claw-code-parity` from a strong standalone harness into a practical long-context agent runtime that can:
