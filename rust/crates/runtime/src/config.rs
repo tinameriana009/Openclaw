@@ -54,6 +54,78 @@ pub struct RuntimeFeatureConfig {
     permission_mode: Option<ResolvedPermissionMode>,
     permission_rules: RuntimePermissionRuleConfig,
     sandbox: SandboxConfig,
+    rag: RuntimeRagConfig,
+    rlm: RuntimeRlmConfig,
+    web_research: RuntimeWebResearchConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeRagConfig {
+    pub enabled: bool,
+    pub backend: Option<String>,
+    pub default_corpora: Vec<String>,
+    pub chunk_bytes: Option<u64>,
+    pub max_hits: Option<u64>,
+}
+
+impl Default for RuntimeRagConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            backend: None,
+            default_corpora: Vec::new(),
+            chunk_bytes: None,
+            max_hits: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeRlmConfig {
+    pub enabled: bool,
+    pub max_depth: Option<u64>,
+    pub max_iterations: Option<u64>,
+    pub max_subcalls: Option<u64>,
+    pub max_runtime_ms: Option<u64>,
+    pub subcall_model: Option<String>,
+    pub trace: bool,
+}
+
+impl Default for RuntimeRlmConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_depth: None,
+            max_iterations: None,
+            max_subcalls: None,
+            max_runtime_ms: None,
+            subcall_model: None,
+            trace: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeWebResearchConfig {
+    pub mode: RuntimeWebResearchMode,
+    pub max_fetches: Option<u64>,
+}
+
+impl Default for RuntimeWebResearchConfig {
+    fn default() -> Self {
+        Self {
+            mode: RuntimeWebResearchMode::Off,
+            max_fetches: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RuntimeWebResearchMode {
+    #[default]
+    Off,
+    Ask,
+    On,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -260,6 +332,9 @@ impl ConfigLoader {
             permission_mode: parse_optional_permission_mode(&merged_value)?,
             permission_rules: parse_optional_permission_rules(&merged_value)?,
             sandbox: parse_optional_sandbox_config(&merged_value)?,
+            rag: parse_optional_rag_config(&merged_value)?,
+            rlm: parse_optional_rlm_config(&merged_value)?,
+            web_research: parse_optional_web_research_config(&merged_value)?,
         };
 
         Ok(RuntimeConfig {
@@ -344,6 +419,21 @@ impl RuntimeConfig {
     pub fn sandbox(&self) -> &SandboxConfig {
         &self.feature_config.sandbox
     }
+
+    #[must_use]
+    pub fn rag(&self) -> &RuntimeRagConfig {
+        &self.feature_config.rag
+    }
+
+    #[must_use]
+    pub fn rlm(&self) -> &RuntimeRlmConfig {
+        &self.feature_config.rlm
+    }
+
+    #[must_use]
+    pub fn web_research(&self) -> &RuntimeWebResearchConfig {
+        &self.feature_config.web_research
+    }
 }
 
 impl RuntimeFeatureConfig {
@@ -397,6 +487,21 @@ impl RuntimeFeatureConfig {
     #[must_use]
     pub fn sandbox(&self) -> &SandboxConfig {
         &self.sandbox
+    }
+
+    #[must_use]
+    pub fn rag(&self) -> &RuntimeRagConfig {
+        &self.rag
+    }
+
+    #[must_use]
+    pub fn rlm(&self) -> &RuntimeRlmConfig {
+        &self.rlm
+    }
+
+    #[must_use]
+    pub fn web_research(&self) -> &RuntimeWebResearchConfig {
+        &self.web_research
     }
 }
 
@@ -755,6 +860,81 @@ fn parse_filesystem_mode_label(value: &str) -> Result<FilesystemIsolationMode, C
     }
 }
 
+fn parse_optional_rag_config(root: &JsonValue) -> Result<RuntimeRagConfig, ConfigError> {
+    let Some(object) = root.as_object() else {
+        return Ok(RuntimeRagConfig::default());
+    };
+    let Some(rag_value) = object.get("rag") else {
+        return Ok(RuntimeRagConfig::default());
+    };
+    let rag = expect_object(rag_value, "merged settings.rag")?;
+    Ok(RuntimeRagConfig {
+        enabled: optional_bool(rag, "enabled", "merged settings.rag")?.unwrap_or(false),
+        backend: optional_string(rag, "backend", "merged settings.rag")?.map(str::to_string),
+        default_corpora: optional_string_array(
+            rag,
+            "defaultCorpora",
+            "merged settings.rag",
+        )?
+        .unwrap_or_default(),
+        chunk_bytes: optional_u64(rag, "chunkBytes", "merged settings.rag")?,
+        max_hits: optional_u64(rag, "maxHits", "merged settings.rag")?,
+    })
+}
+
+fn parse_optional_rlm_config(root: &JsonValue) -> Result<RuntimeRlmConfig, ConfigError> {
+    let Some(object) = root.as_object() else {
+        return Ok(RuntimeRlmConfig::default());
+    };
+    let Some(rlm_value) = object.get("rlm") else {
+        return Ok(RuntimeRlmConfig::default());
+    };
+    let rlm = expect_object(rlm_value, "merged settings.rlm")?;
+    Ok(RuntimeRlmConfig {
+        enabled: optional_bool(rlm, "enabled", "merged settings.rlm")?.unwrap_or(false),
+        max_depth: optional_u64(rlm, "maxDepth", "merged settings.rlm")?,
+        max_iterations: optional_u64(rlm, "maxIterations", "merged settings.rlm")?,
+        max_subcalls: optional_u64(rlm, "maxSubcalls", "merged settings.rlm")?,
+        max_runtime_ms: optional_u64(rlm, "maxRuntimeMs", "merged settings.rlm")?,
+        subcall_model: optional_string(rlm, "subcallModel", "merged settings.rlm")?
+            .map(str::to_string),
+        trace: optional_bool(rlm, "trace", "merged settings.rlm")?.unwrap_or(false),
+    })
+}
+
+fn parse_optional_web_research_config(
+    root: &JsonValue,
+) -> Result<RuntimeWebResearchConfig, ConfigError> {
+    let Some(object) = root.as_object() else {
+        return Ok(RuntimeWebResearchConfig::default());
+    };
+    let Some(web_value) = object.get("webResearch") else {
+        return Ok(RuntimeWebResearchConfig::default());
+    };
+    let web = expect_object(web_value, "merged settings.webResearch")?;
+    Ok(RuntimeWebResearchConfig {
+        mode: optional_string(web, "mode", "merged settings.webResearch")?
+            .map(|value| parse_web_research_mode(value, "merged settings.webResearch.mode"))
+            .transpose()?
+            .unwrap_or_default(),
+        max_fetches: optional_u64(web, "maxFetches", "merged settings.webResearch")?,
+    })
+}
+
+fn parse_web_research_mode(
+    value: &str,
+    context: &str,
+) -> Result<RuntimeWebResearchMode, ConfigError> {
+    match value {
+        "off" => Ok(RuntimeWebResearchMode::Off),
+        "ask" => Ok(RuntimeWebResearchMode::Ask),
+        "on" => Ok(RuntimeWebResearchMode::On),
+        other => Err(ConfigError::Parse(format!(
+            "{context}: unsupported web research mode {other}"
+        ))),
+    }
+}
+
 fn parse_optional_oauth_config(
     root: &JsonValue,
     context: &str,
@@ -1046,7 +1226,7 @@ mod tests {
     use super::{
         deep_merge_objects, parse_permission_mode_label, ConfigLoader, ConfigSource,
         McpServerConfig, McpTransport, ResolvedPermissionMode, RuntimeHookConfig,
-        RuntimePluginConfig, CLAW_SETTINGS_SCHEMA_NAME,
+        RuntimePluginConfig, RuntimeWebResearchMode, CLAW_SETTINGS_SCHEMA_NAME,
     };
     use crate::json::JsonValue;
     use crate::sandbox::FilesystemIsolationMode;
@@ -1331,6 +1511,94 @@ mod tests {
                 .get("sample-plugin@external"),
             Some(&false)
         );
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn parses_rag_rlm_and_web_research_config() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(cwd.join(".claw")).expect("project config dir");
+        fs::create_dir_all(&home).expect("home config dir");
+
+        fs::write(
+            home.join("settings.json"),
+            r#"{
+              "rag": {
+                "enabled": true,
+                "backend": "lexical",
+                "defaultCorpora": [".", "docs"],
+                "chunkBytes": 2048,
+                "maxHits": 12
+              },
+              "rlm": {
+                "enabled": true,
+                "maxDepth": 2,
+                "maxIterations": 9,
+                "maxSubcalls": 5,
+                "maxRuntimeMs": 45000,
+                "subcallModel": "haiku",
+                "trace": true
+              },
+              "webResearch": {
+                "mode": "ask",
+                "maxFetches": 7
+              }
+            }"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+
+        assert!(loaded.rag().enabled);
+        assert_eq!(loaded.rag().backend, Some("lexical".to_string()));
+        assert_eq!(loaded.rag().default_corpora, vec![".", "docs"]);
+        assert_eq!(loaded.rag().chunk_bytes, Some(2048));
+        assert_eq!(loaded.rag().max_hits, Some(12));
+
+        assert!(loaded.rlm().enabled);
+        assert_eq!(loaded.rlm().max_depth, Some(2));
+        assert_eq!(loaded.rlm().max_iterations, Some(9));
+        assert_eq!(loaded.rlm().max_subcalls, Some(5));
+        assert_eq!(loaded.rlm().max_runtime_ms, Some(45_000));
+        assert_eq!(loaded.rlm().subcall_model, Some("haiku".to_string()));
+        assert!(loaded.rlm().trace);
+
+        assert_eq!(loaded.web_research().mode, RuntimeWebResearchMode::Ask);
+        assert_eq!(loaded.web_research().max_fetches, Some(7));
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn rejects_invalid_web_research_mode() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(cwd.join(".claw")).expect("project config dir");
+        fs::create_dir_all(&home).expect("home config dir");
+
+        fs::write(
+            home.join("settings.json"),
+            r#"{
+              "webResearch": {
+                "mode": "maybe"
+              }
+            }"#,
+        )
+        .expect("write broken settings");
+
+        let error = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect_err("config should fail");
+
+        assert!(error
+            .to_string()
+            .contains("merged settings.webResearch.mode: unsupported web research mode maybe"));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }

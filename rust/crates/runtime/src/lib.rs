@@ -29,7 +29,8 @@ pub use config::{
     McpManagedProxyServerConfig, McpOAuthConfig, McpRemoteServerConfig, McpSdkServerConfig,
     McpServerConfig, McpStdioServerConfig, McpTransport, McpWebSocketServerConfig, OAuthConfig,
     ResolvedPermissionMode, RuntimeConfig, RuntimeFeatureConfig, RuntimeHookConfig,
-    RuntimePermissionRuleConfig, RuntimePluginConfig, ScopedMcpServerConfig,
+    RuntimePermissionRuleConfig, RuntimePluginConfig, RuntimeRagConfig, RuntimeRlmConfig,
+    RuntimeWebResearchConfig, RuntimeWebResearchMode, ScopedMcpServerConfig,
     CLAW_SETTINGS_SCHEMA_NAME,
 };
 pub use conversation::{

@@ -27,15 +27,15 @@ Active planning tracker
 # M0 — Foundation / Audit
 
 ## M0.1 Repo and runtime audit
-- [ ] Confirm build/test status of current Rust workspace
-- [ ] Identify exact entrypoints for CLI session startup
-- [ ] Identify exact insertion points for runtime orchestration wrapper
-- [ ] Identify exact insertion points for config parsing extensions
-- [ ] Identify existing telemetry hooks reusable for RLM trace events
+- [-] Confirm build/test status of current Rust workspace *(blocked: `cargo` not installed / not in PATH)*
+- [x] Identify exact entrypoints for CLI session startup
+- [x] Identify exact insertion points for runtime orchestration wrapper
+- [x] Identify exact insertion points for config parsing extensions
+- [x] Identify existing telemetry hooks reusable for RLM trace events
 
 ### Deliverables
-- [ ] Build/test audit notes committed
-- [ ] Concrete module map appended to architecture doc if needed
+- [x] Build/test audit notes committed
+- [x] Concrete module map appended to architecture doc if needed
 
 ## M0.2 Execution profiles and defaults
 - [ ] Decide default user-facing profiles: `fast`, `balanced`, `deep`, `research`
@@ -51,17 +51,17 @@ Active planning tracker
 # M1 — Config and Core Data Models
 
 ## M1.1 Config schema additions
-- [ ] Add `RuntimeRagConfig` to runtime config model
-- [ ] Add `RuntimeRlmConfig` to runtime config model
-- [ ] Add `RuntimeWebResearchConfig` to runtime config model
-- [ ] Wire them into `RuntimeFeatureConfig`
-- [ ] Parse typed config from settings JSON
-- [ ] Add unit tests for config parsing precedence and defaults
+- [x] Add `RuntimeRagConfig` to runtime config model
+- [x] Add `RuntimeRlmConfig` to runtime config model
+- [x] Add `RuntimeWebResearchConfig` to runtime config model
+- [x] Wire them into `RuntimeFeatureConfig`
+- [x] Parse typed config from settings JSON
+- [x] Add unit tests for config parsing precedence and defaults
 
 ### Acceptance
-- [ ] Config loader accepts `rag`, `rlm`, `webResearch` sections
-- [ ] Invalid config produces typed parse errors
-- [ ] Existing config tests still pass
+- [x] Config loader accepts `rag`, `rlm`, `webResearch` sections
+- [x] Invalid config produces typed parse errors
+- [-] Existing config tests still pass *(pending Rust toolchain / compile verification)*
 
 ## M1.2 Budget model
 - [ ] Add budget structs for depth / iteration / timeout / subcalls / optional cost
