@@ -4,6 +4,7 @@ mod budget;
 mod compact;
 mod config;
 mod conversation;
+mod corpus;
 mod file_ops;
 mod hooks;
 mod json;
@@ -26,6 +27,10 @@ pub use budget::{BudgetSliceRequest, BudgetStopReason, RuntimeBudget, RuntimeBud
 pub use compact::{
     compact_session, estimate_session_tokens, format_compact_summary,
     get_compact_continuation_message, should_compact, CompactionConfig, CompactionResult,
+};
+pub use corpus::{
+    CorpusBackend, CorpusChunk, CorpusDocument, CorpusError, CorpusKind, CorpusManifest,
+    RetrievalHit, RetrievalResult,
 };
 pub use config::{
     ConfigEntry, ConfigError, ConfigLoader, ConfigSource, McpConfigCollection,

@@ -85,13 +85,13 @@ Active planning tracker
 - [x] Event sequence is inspectable without raw transcript dumping
 
 ## M1.4 Corpus data model
-- [ ] Define corpus / document / chunk structs
-- [ ] Define retrieval hit/result structs
-- [ ] Define corpus manifest storage layout
-- [ ] Add tests for chunk/document id stability
+- [x] Define corpus / document / chunk structs
+- [x] Define retrieval hit/result structs
+- [x] Define corpus manifest storage layout
+- [x] Add tests for chunk/document id stability
 
 ### Acceptance
-- [ ] Corpus can represent repo/docs/notes roots in one schema
+- [x] Corpus can represent repo/docs/notes roots in one schema
 
 ---
 
