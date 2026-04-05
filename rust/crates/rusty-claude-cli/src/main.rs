@@ -40,7 +40,7 @@ use plugins::{PluginHooks, PluginManager, PluginManagerConfig, PluginRegistry};
 use render::{MarkdownStreamState, Spinner, TerminalRenderer};
 use runtime::{
     attach_corpus, clear_oauth_credentials, default_corpus_store_dir, generate_pkce_pair,
-    generate_state, inspect_corpus, list_corpora, load_system_prompt,
+    generate_state, inspect_corpus, list_corpora, load_corpus, load_system_prompt,
     parse_oauth_callback_request_target, resolve_sandbox_status, save_oauth_credentials,
     search_corpus, slice_corpus, ApiClient, ApiRequest, AssistantEvent, CompactionConfig,
     ConfigLoader, ConfigSource, ContentBlock, ConversationMessage, ConversationRuntime,
@@ -1397,10 +1397,98 @@ fn run_corpus_command(
     if let Some(corpus_id) = args.strip_prefix("inspect ") {
         return Ok(serde_json::to_string_pretty(&inspect_corpus(&cwd, corpus_id.trim())?)?);
     }
-    Err("unsupported /corpus usage; try /corpus, /corpus attach <path>, /corpus search <query>, /corpus inspect <id>, or /corpus slice <chunk-id>".into())
+    Err("unsupported /corpus usage; try /corpus, /corpus attach <path>, /corpus search <query>, /corpus answer <query>, /corpus inspect <id>, or /corpus slice <chunk-id>".into())
+}
+
+struct CorpusAnswerExecutor;
+
+impl runtime::ChildSubqueryExecutor for CorpusAnswerExecutor {
+    fn execute(
+        &self,
+        request: &runtime::ChildSubqueryRequest,
+    ) -> Result<runtime::ChildSubqueryOutput, runtime::RecursiveRuntimeError> {
+        let answer = request
+            .slices
+            .iter()
+            .map(|slice| format!("{}: {}", slice.path, slice.preview.trim()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(runtime::ChildSubqueryOutput {
+            subquery_id: request.subquery_id.clone(),
+            answer,
+            citations: request.slices.iter().map(|slice| slice.chunk_id.clone()).collect(),
+            prompt_tokens: u32::try_from(request.prompt.len()).unwrap_or(u32::MAX),
+            completion_tokens: 0,
+            cost_usd: 0.0,
+        })
+    }
+}
+
+fn run_corpus_answer(
+    cwd: &Path,
+    query: &str,
+    profile: ExecutionProfile,
+    session_id: Option<&str>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let corpus = list_corpora(cwd)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "no corpora attached".to_string())?;
+    let manifest = load_corpus(cwd, &corpus.corpus_id)?;
+    let resolved = profile.resolve();
+    let runtime = runtime::RecursiveConversationRuntime::new(&manifest, CorpusAnswerExecutor);
+    let telemetry_path = cwd
+        .join(".claw")
+        .join("telemetry")
+        .join("recursive-runtime.jsonl");
+    let tracer = SessionTracer::new(
+        session_id.unwrap_or("corpus-cli"),
+        std::sync::Arc::new(JsonlTelemetrySink::new(&telemetry_path)?),
+    );
+    let result = runtime.run_with_tracer(
+        session_id.unwrap_or("corpus-cli"),
+        &format!("corpus-answer-{}", sanitize_session_segment(query)),
+        query,
+        runtime::RuntimeBudget {
+            max_depth: resolved.rlm.max_depth.and_then(|value| u32::try_from(value).ok()),
+            max_iterations: resolved
+                .rlm
+                .max_iterations
+                .and_then(|value| u32::try_from(value).ok()),
+            max_subcalls: resolved
+                .rlm
+                .max_subcalls
+                .and_then(|value| u32::try_from(value).ok()),
+            max_runtime_ms: resolved.rlm.max_runtime_ms,
+            max_prompt_tokens: None,
+            max_completion_tokens: None,
+            max_cost_usd: None,
+        },
+        Some(&cwd.join(".claw").join("trace")),
+        Some(&tracer),
+    )?;
+    Ok(format!(
+        "{}\n\n{}\n  Telemetry        {}",
+        result.final_answer,
+        runtime::render_trace_summary(&result.trace),
+        telemetry_path.display()
+    ))
 }
 
 #[allow(clippy::too_many_lines)]
+fn sanitize_session_segment(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>();
+    let trimmed = sanitized.trim_matches('-');
+    if trimmed.is_empty() {
+        "task".to_string()
+    } else {
+        trimmed.chars().take(48).collect()
+    }
+}
+
 fn run_resume_command(
     session_path: &Path,
     session: &Session,
@@ -1554,7 +1642,11 @@ fn run_resume_command(
         }
         SlashCommand::Corpus { args } => Ok(ResumeCommandOutcome {
             session: session.clone(),
-            message: Some(run_corpus_command(args.as_deref())?),
+            message: Some(run_corpus_command(
+                args.as_deref(),
+                ExecutionProfile::Balanced,
+                Some(&session.session_id),
+            )?),
         }),
         SlashCommand::Unknown(name) => Err(format_unknown_slash_command(name).into()),
         SlashCommand::Bughunter { .. }
@@ -1800,6 +1892,7 @@ impl LiveCli {
             true,
             allowed_tools.clone(),
             permission_mode,
+            profile,
             None,
         )?;
         let cli = Self {
@@ -1886,6 +1979,7 @@ impl LiveCli {
             emit_output,
             self.allowed_tools.clone(),
             self.permission_mode,
+            self.profile,
             None,
         )?
         .with_hook_abort_signal(hook_abort_signal.clone());
@@ -2092,7 +2186,10 @@ impl LiveCli {
                 false
             }
             SlashCommand::Corpus { args } => {
-                println!("{}", run_corpus_command(args.as_deref())?);
+                println!(
+                    "{}",
+                    run_corpus_command(args.as_deref(), self.profile, Some(&self.session.id))?
+                );
                 false
             }
             SlashCommand::Unknown(name) => {
@@ -2179,6 +2276,7 @@ impl LiveCli {
             true,
             self.allowed_tools.clone(),
             self.permission_mode,
+            self.profile,
             None,
         )?;
         self.replace_runtime(runtime)?;
@@ -2225,6 +2323,7 @@ impl LiveCli {
             true,
             self.allowed_tools.clone(),
             self.permission_mode,
+            self.profile,
             None,
         )?;
         self.replace_runtime(runtime)?;
@@ -2255,6 +2354,7 @@ impl LiveCli {
             true,
             self.allowed_tools.clone(),
             self.permission_mode,
+            self.profile,
             None,
         )?;
         self.replace_runtime(runtime)?;
@@ -2297,6 +2397,7 @@ impl LiveCli {
             true,
             self.allowed_tools.clone(),
             self.permission_mode,
+            self.profile,
             None,
         )?;
         self.replace_runtime(runtime)?;
@@ -2394,6 +2495,7 @@ impl LiveCli {
                     true,
                     self.allowed_tools.clone(),
                     self.permission_mode,
+                    self.profile,
                     None,
                 )?;
                 self.replace_runtime(runtime)?;
@@ -2429,6 +2531,7 @@ impl LiveCli {
                     true,
                     self.allowed_tools.clone(),
                     self.permission_mode,
+                    self.profile,
                     None,
                 )?;
                 self.replace_runtime(runtime)?;
@@ -2479,6 +2582,7 @@ impl LiveCli {
             true,
             self.allowed_tools.clone(),
             self.permission_mode,
+            self.profile,
             None,
         )?;
         self.replace_runtime(runtime)?;
@@ -2499,6 +2603,7 @@ impl LiveCli {
             true,
             self.allowed_tools.clone(),
             self.permission_mode,
+            self.profile,
             None,
         )?;
         self.replace_runtime(runtime)?;
@@ -2523,6 +2628,7 @@ impl LiveCli {
             false,
             self.allowed_tools.clone(),
             self.permission_mode,
+            self.profile,
             progress,
         )?;
         let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
@@ -3582,17 +3688,20 @@ fn build_system_prompt() -> Result<Vec<String>, Box<dyn std::error::Error>> {
     )?)
 }
 
-fn build_runtime_plugin_state() -> Result<RuntimePluginState, Box<dyn std::error::Error>> {
+fn build_runtime_plugin_state(
+    profile: ExecutionProfile,
+) -> Result<RuntimePluginState, Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
     let loader = ConfigLoader::default_for(&cwd);
     let runtime_config = loader.load()?;
-    build_runtime_plugin_state_with_loader(&cwd, &loader, &runtime_config)
+    build_runtime_plugin_state_with_loader(&cwd, &loader, &runtime_config, profile)
 }
 
 fn build_runtime_plugin_state_with_loader(
     cwd: &Path,
     loader: &ConfigLoader,
     runtime_config: &runtime::RuntimeConfig,
+    profile: ExecutionProfile,
 ) -> Result<RuntimePluginState, Box<dyn std::error::Error>> {
     let plugin_manager = build_plugin_manager(cwd, loader, runtime_config);
     let plugin_registry = plugin_manager.plugin_registry()?;
@@ -3601,6 +3710,7 @@ fn build_runtime_plugin_state_with_loader(
     let feature_config = runtime_config
         .feature_config()
         .clone()
+        .with_execution_profile(profile)
         .with_hooks(runtime_config.hooks().merged(&plugin_hook_config));
     let tool_registry = GlobalToolRegistry::with_plugin_tools(plugin_registry.aggregated_tools()?)?;
     Ok(RuntimePluginState {
@@ -3993,9 +4103,10 @@ fn build_runtime(
     emit_output: bool,
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
+    profile: ExecutionProfile,
     progress_reporter: Option<InternalPromptProgressReporter>,
 ) -> Result<BuiltRuntime, Box<dyn std::error::Error>> {
-    let runtime_plugin_state = build_runtime_plugin_state()?;
+    let runtime_plugin_state = build_runtime_plugin_state(profile)?;
     build_runtime_with_plugin_state(
         session,
         session_id,
@@ -4422,6 +4533,7 @@ fn slash_command_completion_candidates_with_sessions(
         "/corpus",
         "/corpus attach ",
         "/corpus search ",
+        "/corpus answer ",
         "/corpus inspect ",
         "/corpus slice ",
         "/mcp ",
@@ -5169,6 +5281,7 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     )?;
     writeln!(out, "  --allowedTools TOOLS       Restrict enabled tools (repeatable; comma-separated aliases supported)")?;
     writeln!(out, "  --corpus PATH              Attach a local corpus root before running (repeatable)")?;
+    writeln!(out, "                         Use /corpus answer <query> in REPL to run the grounded recursive corpus path")?;
     writeln!(
         out,
         "  --version, -V              Print version and build information locally"
@@ -6927,7 +7040,12 @@ UU conflicted.rs",
             .expect("plugin install should succeed");
         let loader = ConfigLoader::new(&workspace, &config_home);
         let runtime_config = loader.load().expect("runtime config should load");
-        let state = build_runtime_plugin_state_with_loader(&workspace, &loader, &runtime_config)
+        let state = build_runtime_plugin_state_with_loader(
+            &workspace,
+            &loader,
+            &runtime_config,
+            ExecutionProfile::Balanced,
+        )
             .expect("plugin state should load");
         let pre_hooks = state.feature_config.hooks().pre_tool_use();
         assert_eq!(pre_hooks.len(), 1);
@@ -6962,7 +7080,12 @@ UU conflicted.rs",
         let loader = ConfigLoader::new(&workspace, &config_home);
         let runtime_config = loader.load().expect("runtime config should load");
         let runtime_plugin_state =
-            build_runtime_plugin_state_with_loader(&workspace, &loader, &runtime_config)
+            build_runtime_plugin_state_with_loader(
+                &workspace,
+                &loader,
+                &runtime_config,
+                ExecutionProfile::Balanced,
+            )
                 .expect("plugin state should load");
         let mut runtime = build_runtime_with_plugin_state(
             Session::new(),

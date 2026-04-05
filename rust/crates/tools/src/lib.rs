@@ -5099,7 +5099,7 @@ printf 'pwsh:%s' "$1"
         let _ = fs::remove_dir_all(root);
     }
 
-    struct TestServer {"}
+    struct TestServer {
         addr: SocketAddr,
         shutdown: Option<std::sync::mpsc::Sender<()>>,
         handle: Option<thread::JoinHandle<()>>,

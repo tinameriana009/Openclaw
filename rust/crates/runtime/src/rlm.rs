@@ -383,7 +383,7 @@ where
             ]),
         );
 
-        let mut usage = RuntimeBudgetUsage {
+        let usage = RuntimeBudgetUsage {
             depth: 0,
             ..RuntimeBudgetUsage::default()
         };
@@ -498,6 +498,17 @@ where
             max_iterations: Some(1),
             ..BudgetSliceRequest::default()
         });
+        if matches!(child_budget.max_depth, Some(0)) {
+            return finalize_early_success(
+                task,
+                trace,
+                trace_artifact_dir,
+                RecursiveStopReason::NoChildCapacity,
+                retrieval,
+                state.usage,
+                tracer,
+            );
+        }
 
         let request = ChildSubqueryRequest {
             subquery_id: format!("{task_id}-child-1"),

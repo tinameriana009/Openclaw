@@ -2810,8 +2810,8 @@ mod tests {
         assert!(help.contains("aliases: /plugins, /marketplace"));
         assert!(help.contains("/agents [list|help]"));
         assert!(help.contains("/skills [list|install <path>|help]"));
-        assert_eq!(slash_command_specs().len(), 28);
-        assert_eq!(resume_supported_slash_commands().len(), 16);
+        assert_eq!(slash_command_specs().len(), 29);
+        assert_eq!(resume_supported_slash_commands().len(), 17);
     }
 
     #[test]
