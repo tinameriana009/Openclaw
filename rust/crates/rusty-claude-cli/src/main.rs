@@ -45,9 +45,9 @@ use runtime::{
     search_corpus, slice_corpus, ApiClient, ApiRequest, AssistantEvent, CompactionConfig,
     ConfigLoader, ConfigSource, ContentBlock, ConversationMessage, ConversationRuntime,
     CorpusAttachOptions, ExecutionProfile, MessageRole, OAuthAuthorizationRequest, OAuthConfig,
-    OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext,
-    PromptCacheEvent, ResolvedPermissionMode, RuntimeError, Session, TokenUsage, ToolError,
-    ToolExecutor, UsageTracker,
+    OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext, PromptCacheEvent,
+    ResolvedPermissionMode, RuntimeError, Session, TokenUsage, ToolError, ToolExecutor,
+    UsageTracker,
 };
 use serde_json::json;
 use telemetry::{JsonlTelemetrySink, SessionTracer};
@@ -139,7 +139,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             attach_cli_corpora(&corpus_roots)?;
             LiveCli::new(model, true, allowed_tools, permission_mode, profile)?
                 .run_turn_with_output(&prompt, output_format)?
-        },
+        }
         CliAction::Login => run_login()?,
         CliAction::Logout => run_logout()?,
         CliAction::Init => run_init()?,
@@ -149,7 +149,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             permission_mode,
             profile,
             corpus_roots,
-        } => run_repl(model, allowed_tools, permission_mode, profile, corpus_roots)?, 
+        } => run_repl(model, allowed_tools, permission_mode, profile, corpus_roots)?,
         CliAction::Help => print_help(),
     }
     Ok(())
@@ -292,7 +292,8 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 index += 2;
             }
             flag if flag.starts_with("--profile=") => {
-                profile = ExecutionProfile::parse(&flag[10..]).map_err(|error| error.to_string())?;
+                profile =
+                    ExecutionProfile::parse(&flag[10..]).map_err(|error| error.to_string())?;
                 index += 1;
             }
             "-p" => {
@@ -686,7 +687,7 @@ fn default_permission_mode() -> PermissionMode {
         .and_then(normalize_permission_mode)
         .map(permission_mode_from_label)
         .or_else(config_permission_mode_for_current_dir)
-        .unwrap_or(PermissionMode::DangerFullAccess)
+        .unwrap_or(PermissionMode::WorkspaceWrite)
 }
 
 fn config_permission_mode_for_current_dir() -> Option<PermissionMode> {
@@ -1369,7 +1370,11 @@ fn run_corpus_command(
         ));
     }
     if let Some(path) = args.strip_prefix("attach ") {
-        let manifest = attach_corpus(&cwd, &[PathBuf::from(path.trim())], CorpusAttachOptions::default())?;
+        let manifest = attach_corpus(
+            &cwd,
+            &[PathBuf::from(path.trim())],
+            CorpusAttachOptions::default(),
+        )?;
         return Ok(format!(
             "Corpus attached\n  Corpus id        {}\n  Documents        {}\n  Chunks           {}",
             manifest.corpus_id, manifest.document_count, manifest.chunk_count
@@ -1395,7 +1400,10 @@ fn run_corpus_command(
         return Ok(serde_json::to_string_pretty(&result)?);
     }
     if let Some(corpus_id) = args.strip_prefix("inspect ") {
-        return Ok(serde_json::to_string_pretty(&inspect_corpus(&cwd, corpus_id.trim())?)?);
+        return Ok(serde_json::to_string_pretty(&inspect_corpus(
+            &cwd,
+            corpus_id.trim(),
+        )?)?);
     }
     Err("unsupported /corpus usage; try /corpus, /corpus attach <path>, /corpus search <query>, /corpus answer <query>, /corpus inspect <id>, or /corpus slice <chunk-id>".into())
 }
@@ -1416,7 +1424,11 @@ impl runtime::ChildSubqueryExecutor for CorpusAnswerExecutor {
         Ok(runtime::ChildSubqueryOutput {
             subquery_id: request.subquery_id.clone(),
             answer,
-            citations: request.slices.iter().map(|slice| slice.chunk_id.clone()).collect(),
+            citations: request
+                .slices
+                .iter()
+                .map(|slice| slice.chunk_id.clone())
+                .collect(),
             prompt_tokens: u32::try_from(request.prompt.len()).unwrap_or(u32::MAX),
             completion_tokens: 0,
             cost_usd: 0.0,
@@ -1436,7 +1448,6 @@ fn run_corpus_answer(
         .ok_or_else(|| "no corpora attached".to_string())?;
     let manifest = load_corpus(cwd, &corpus.corpus_id)?;
     let resolved = profile.resolve();
-    let runtime = runtime::RecursiveConversationRuntime::new(&manifest, CorpusAnswerExecutor);
     let telemetry_path = cwd
         .join(".claw")
         .join("telemetry")
@@ -1445,12 +1456,19 @@ fn run_corpus_answer(
         session_id.unwrap_or("corpus-cli"),
         std::sync::Arc::new(JsonlTelemetrySink::new(&telemetry_path)?),
     );
+    let runtime = runtime::RecursiveConversationRuntime::new(
+        &manifest,
+        CorpusAnswerExecutor::new(resolved.model.clone(), tracer.clone())?,
+    );
     let result = runtime.run_with_tracer(
         session_id.unwrap_or("corpus-cli"),
         &format!("corpus-answer-{}", sanitize_session_segment(query)),
         query,
         runtime::RuntimeBudget {
-            max_depth: resolved.rlm.max_depth.and_then(|value| u32::try_from(value).ok()),
+            max_depth: resolved
+                .rlm
+                .max_depth
+                .and_then(|value| u32::try_from(value).ok()),
             max_iterations: resolved
                 .rlm
                 .max_iterations
@@ -5285,11 +5303,26 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     )?;
     writeln!(
         out,
-        "  --dangerously-skip-permissions  Skip all permission checks"
+        "                           Default: workspace-write unless overridden by config/env"
+    )?;
+    writeln!(
+        out,
+        "  --dangerously-skip-permissions  Escalate to danger-full-access for this run"
+    )?;
+    writeln!(
+        out,
+        "  --profile PROFILE          Set fast, balanced, deep, or research execution budgets"
+    )?;
+    writeln!(
+        out,
+        "                           Balanced enables recursive trace capture by default"
     )?;
     writeln!(out, "  --allowedTools TOOLS       Restrict enabled tools (repeatable; comma-separated aliases supported)")?;
-    writeln!(out, "  --corpus PATH              Attach a local corpus root before running (repeatable)")?;
-    writeln!(out, "                         Use /corpus answer <query> in REPL to run the grounded recursive corpus path")?;
+    writeln!(
+        out,
+        "  --corpus PATH              Attach a local corpus root before running (repeatable)"
+    )?;
+    writeln!(out, "                           Use /corpus answer <query> in REPL or prompt mode to run the grounded recursive corpus path")?;
     writeln!(
         out,
         "  --version, -V              Print version and build information locally"
@@ -5325,11 +5358,15 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     writeln!(out, "  claw --model claude-opus \"summarize this repo\"")?;
     writeln!(
         out,
-        "  claw --output-format json prompt \"explain src/main.rs\""
+        "  claw --profile deep --output-format json prompt \"explain src/main.rs\""
     )?;
     writeln!(
         out,
         "  claw --allowedTools read,glob \"summarize Cargo.toml\""
+    )?;
+    writeln!(
+        out,
+        "  claw --corpus ./docs --profile research prompt \"What changed in auth flow?\""
     )?;
     writeln!(out, "  claw --resume {LATEST_SESSION_REFERENCE}")?;
     writeln!(
@@ -5495,7 +5532,7 @@ mod tests {
             CliAction::Repl {
                 model: DEFAULT_MODEL.to_string(),
                 allowed_tools: None,
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: PermissionMode::WorkspaceWrite,
                 profile: ExecutionProfile::Balanced,
                 corpus_roots: Vec::new(),
             }
@@ -5584,7 +5621,7 @@ mod tests {
                 model: DEFAULT_MODEL.to_string(),
                 output_format: CliOutputFormat::Text,
                 allowed_tools: None,
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: PermissionMode::WorkspaceWrite,
                 profile: ExecutionProfile::Balanced,
                 corpus_roots: Vec::new(),
             }
@@ -5607,7 +5644,7 @@ mod tests {
                 model: "claude-opus".to_string(),
                 output_format: CliOutputFormat::Json,
                 allowed_tools: None,
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: PermissionMode::WorkspaceWrite,
                 profile: ExecutionProfile::Balanced,
                 corpus_roots: Vec::new(),
             }
@@ -5629,7 +5666,7 @@ mod tests {
                 model: "claude-opus-4-6".to_string(),
                 output_format: CliOutputFormat::Text,
                 allowed_tools: None,
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: PermissionMode::WorkspaceWrite,
                 profile: ExecutionProfile::Balanced,
                 corpus_roots: Vec::new(),
             }
@@ -5699,7 +5736,7 @@ mod tests {
                         .map(str::to_string)
                         .collect()
                 ),
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: PermissionMode::WorkspaceWrite,
                 profile: ExecutionProfile::Balanced,
                 corpus_roots: Vec::new(),
             }
@@ -5780,7 +5817,7 @@ mod tests {
             parse_args(&["status".to_string()]).expect("status should parse"),
             CliAction::Status {
                 model: DEFAULT_MODEL.to_string(),
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: PermissionMode::WorkspaceWrite,
                 profile: ExecutionProfile::Balanced,
             }
         );
@@ -5807,7 +5844,7 @@ mod tests {
                 model: DEFAULT_MODEL.to_string(),
                 output_format: CliOutputFormat::Text,
                 allowed_tools: None,
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: PermissionMode::WorkspaceWrite,
                 profile: ExecutionProfile::Balanced,
                 corpus_roots: Vec::new(),
             }
@@ -6047,7 +6084,11 @@ mod tests {
         assert!(help.contains("/mcp [list|show <server>|help]"));
         assert!(help.contains("/memory"));
         assert!(help.contains("/init"));
-        assert!(help.contains("/corpus [attach <path>|search <query>|slice <chunk-id>|inspect <corpus-id>]"));
+        assert!(help.contains("--profile PROFILE"));
+        assert!(help.contains("Balanced enables recursive trace capture by default"));
+        assert!(help.contains(
+            "/corpus [attach <path>|search <query>|slice <chunk-id>|inspect <corpus-id>]"
+        ));
         assert!(help.contains("/diff"));
         assert!(help.contains("/version"));
         assert!(help.contains("/export [file]"));
@@ -6192,6 +6233,9 @@ mod tests {
         assert!(help.contains("claw mcp"));
         assert!(help.contains("claw skills"));
         assert!(help.contains("claw /skills"));
+        assert!(help.contains(
+            "claw --corpus ./docs --profile research prompt \"What changed in auth flow?\""
+        ));
     }
 
     #[test]
@@ -7083,7 +7127,7 @@ UU conflicted.rs",
             &runtime_config,
             ExecutionProfile::Balanced,
         )
-            .expect("plugin state should load");
+        .expect("plugin state should load");
         let pre_hooks = state.feature_config.hooks().pre_tool_use();
         assert_eq!(pre_hooks.len(), 1);
         assert!(
@@ -7116,14 +7160,13 @@ UU conflicted.rs",
         let log_path = install.install_path.join("lifecycle.log");
         let loader = ConfigLoader::new(&workspace, &config_home);
         let runtime_config = loader.load().expect("runtime config should load");
-        let runtime_plugin_state =
-            build_runtime_plugin_state_with_loader(
-                &workspace,
-                &loader,
-                &runtime_config,
-                ExecutionProfile::Balanced,
-            )
-                .expect("plugin state should load");
+        let runtime_plugin_state = build_runtime_plugin_state_with_loader(
+            &workspace,
+            &loader,
+            &runtime_config,
+            ExecutionProfile::Balanced,
+        )
+        .expect("plugin state should load");
         let mut runtime = build_runtime_with_plugin_state(
             Session::new(),
             "runtime-plugin-lifecycle",
