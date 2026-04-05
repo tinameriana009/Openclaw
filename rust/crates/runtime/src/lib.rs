@@ -7,6 +7,7 @@ mod conversation;
 mod corpus;
 mod file_ops;
 mod hooks;
+mod hybrid;
 mod json;
 mod mcp;
 mod mcp_client;
@@ -15,11 +16,13 @@ mod oauth;
 mod permissions;
 mod prompt;
 mod remote;
+mod rlm;
 pub mod sandbox;
 mod session;
 mod sse;
 mod trace;
 mod usage;
+mod ux;
 
 pub use bash::{execute_bash, BashCommandInput, BashCommandOutput};
 pub use bootstrap::{BootstrapPhase, BootstrapPlan};
@@ -27,10 +30,6 @@ pub use budget::{BudgetSliceRequest, BudgetStopReason, RuntimeBudget, RuntimeBud
 pub use compact::{
     compact_session, estimate_session_tokens, format_compact_summary,
     get_compact_continuation_message, should_compact, CompactionConfig, CompactionResult,
-};
-pub use corpus::{
-    CorpusBackend, CorpusChunk, CorpusDocument, CorpusError, CorpusKind, CorpusManifest,
-    RetrievalHit, RetrievalResult,
 };
 pub use config::{
     ConfigEntry, ConfigError, ConfigLoader, ConfigSource, McpConfigCollection,
@@ -46,6 +45,12 @@ pub use conversation::{
     ConversationRuntime, PromptCacheEvent, RuntimeError, StaticToolExecutor, ToolError,
     ToolExecutor, TurnSummary,
 };
+pub use corpus::{
+    attach_corpus, default_corpus_store_dir, inspect_corpus, list_corpora, load_corpus,
+    search_corpus, slice_corpus, CorpusAttachOptions, CorpusBackend, CorpusChunk, CorpusDocument,
+    CorpusDocumentSummary, CorpusError, CorpusInspectResult, CorpusKind, CorpusManifest,
+    CorpusSlice, RetrievalHit, RetrievalResult,
+};
 pub use file_ops::{
     edit_file, glob_search, grep_search, read_file, write_file, EditFileOutput, GlobSearchOutput,
     GrepSearchInput, GrepSearchOutput, ReadFileOutput, StructuredPatchHunk, TextFilePayload,
@@ -53,6 +58,13 @@ pub use file_ops::{
 };
 pub use hooks::{
     HookAbortSignal, HookEvent, HookProgressEvent, HookProgressReporter, HookRunResult, HookRunner,
+};
+pub use hybrid::{
+    evaluate_web_escalation, format_citations, is_local_evidence_weak, local_evidence_trace_event,
+    normalize_local_evidence, summarize_local_evidence, web_evidence_trace_event,
+    EscalationHeuristicInput, EscalationOutcome, EscalationReason, EvidenceKind, EvidenceRecord,
+    HybridExecutionContext, LocalEvidenceSummary, WebAccessDecision, WebAccessMode,
+    WebEvidenceInput, WebPolicy,
 };
 pub use mcp::{
     mcp_server_signature, mcp_tool_name, mcp_tool_prefix, normalize_name_for_mcp,
@@ -90,6 +102,13 @@ pub use remote::{
     RemoteSessionContext, UpstreamProxyBootstrap, UpstreamProxyState, DEFAULT_REMOTE_BASE_URL,
     DEFAULT_SESSION_TOKEN_PATH, DEFAULT_SYSTEM_CA_BUNDLE, NO_PROXY_HOSTS, UPSTREAM_PROXY_ENV_KEYS,
 };
+pub use rlm::{
+    export_trace, render_trace_summary, ChildOutputAggregator, ChildSubqueryExecutor,
+    ChildSubqueryOutput, ChildSubqueryRequest, DefaultChildOutputAggregator,
+    RecursiveContextSlice, RecursiveConversationRuntime, RecursiveCorpusPeekResult,
+    RecursiveExecutionMode, RecursiveExecutionResult, RecursiveIterationState,
+    RecursiveRuntimeError, RecursiveRuntimeState, RecursiveStopReason,
+};
 pub use sandbox::{
     build_linux_sandbox_command, detect_container_environment, detect_container_environment_from,
     resolve_sandbox_status, resolve_sandbox_status_for_request, ContainerEnvironment,
@@ -101,9 +120,15 @@ pub use session::{
     SessionFork,
 };
 pub use sse::{IncrementalSseParser, SseEvent};
-pub use trace::{TraceError, TraceEvent, TraceEventType, TraceFinalStatus, TraceLedger};
+pub use trace::{
+    TraceCounters, TraceError, TraceEvent, TraceEventType, TraceFinalStatus, TraceLedger,
+};
 pub use usage::{
     format_usd, pricing_for_model, ModelPricing, TokenUsage, UsageCostEstimate, UsageTracker,
+};
+pub use ux::{
+    Citation, ConfidenceLevel, ConfidenceNote, EvidenceProvenance, ExecutionProfile,
+    ExecutionProfileConfig, ExecutionProfileParseError, FinalAnswer,
 };
 
 #[cfg(test)]

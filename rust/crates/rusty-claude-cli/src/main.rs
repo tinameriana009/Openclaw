@@ -39,13 +39,15 @@ use init::initialize_repo;
 use plugins::{PluginHooks, PluginManager, PluginManagerConfig, PluginRegistry};
 use render::{MarkdownStreamState, Spinner, TerminalRenderer};
 use runtime::{
-    clear_oauth_credentials, generate_pkce_pair, generate_state, load_system_prompt,
-    parse_oauth_callback_request_target, resolve_sandbox_status, save_oauth_credentials, ApiClient,
-    ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader, ConfigSource, ContentBlock,
-    ConversationMessage, ConversationRuntime, MessageRole, OAuthAuthorizationRequest, OAuthConfig,
-    OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext, PromptCacheEvent,
-    ResolvedPermissionMode, RuntimeError, Session, TokenUsage, ToolError, ToolExecutor,
-    UsageTracker,
+    attach_corpus, clear_oauth_credentials, default_corpus_store_dir, generate_pkce_pair,
+    generate_state, inspect_corpus, list_corpora, load_system_prompt,
+    parse_oauth_callback_request_target, resolve_sandbox_status, save_oauth_credentials,
+    search_corpus, slice_corpus, ApiClient, ApiRequest, AssistantEvent, CompactionConfig,
+    ConfigLoader, ConfigSource, ContentBlock, ConversationMessage, ConversationRuntime,
+    CorpusAttachOptions, ExecutionProfile, MessageRole, OAuthAuthorizationRequest, OAuthConfig,
+    OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext,
+    PromptCacheEvent, ResolvedPermissionMode, RuntimeError, Session, TokenUsage, ToolError,
+    ToolExecutor, UsageTracker,
 };
 use serde_json::json;
 use tools::GlobalToolRegistry;
@@ -76,9 +78,11 @@ const CLI_OPTION_SUGGESTIONS: &[&str] = &[
     "--model",
     "--output-format",
     "--permission-mode",
+    "--profile",
     "--dangerously-skip-permissions",
     "--allowedTools",
     "--allowed-tools",
+    "--corpus",
     "--resume",
     "--print",
     "-p",
@@ -119,7 +123,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::Status {
             model,
             permission_mode,
-        } => print_status_snapshot(&model, permission_mode)?,
+            profile,
+        } => print_status_snapshot(&model, permission_mode, profile)?,
         CliAction::Sandbox => print_sandbox_status_snapshot()?,
         CliAction::Prompt {
             prompt,
@@ -127,8 +132,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             output_format,
             allowed_tools,
             permission_mode,
-        } => LiveCli::new(model, true, allowed_tools, permission_mode)?
-            .run_turn_with_output(&prompt, output_format)?,
+            profile,
+            corpus_roots,
+        } => {
+            attach_cli_corpora(&corpus_roots)?;
+            LiveCli::new(model, true, allowed_tools, permission_mode, profile)?
+                .run_turn_with_output(&prompt, output_format)?
+        },
         CliAction::Login => run_login()?,
         CliAction::Logout => run_logout()?,
         CliAction::Init => run_init()?,
@@ -136,7 +146,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             model,
             allowed_tools,
             permission_mode,
-        } => run_repl(model, allowed_tools, permission_mode)?,
+            profile,
+            corpus_roots,
+        } => run_repl(model, allowed_tools, permission_mode, profile, corpus_roots)?, 
         CliAction::Help => print_help(),
     }
     Ok(())
@@ -167,6 +179,7 @@ enum CliAction {
     Status {
         model: String,
         permission_mode: PermissionMode,
+        profile: ExecutionProfile,
     },
     Sandbox,
     Prompt {
@@ -175,6 +188,8 @@ enum CliAction {
         output_format: CliOutputFormat,
         allowed_tools: Option<AllowedToolSet>,
         permission_mode: PermissionMode,
+        profile: ExecutionProfile,
+        corpus_roots: Vec<PathBuf>,
     },
     Login,
     Logout,
@@ -183,6 +198,8 @@ enum CliAction {
         model: String,
         allowed_tools: Option<AllowedToolSet>,
         permission_mode: PermissionMode,
+        profile: ExecutionProfile,
+        corpus_roots: Vec<PathBuf>,
     },
     // prompt-mode formatting is only supported for non-interactive runs
     Help,
@@ -211,9 +228,11 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
     let mut model = DEFAULT_MODEL.to_string();
     let mut output_format = CliOutputFormat::Text;
     let mut permission_mode = default_permission_mode();
+    let mut profile = ExecutionProfile::Balanced;
     let mut wants_help = false;
     let mut wants_version = false;
     let mut allowed_tool_values = Vec::new();
+    let mut corpus_roots = Vec::new();
     let mut rest = Vec::new();
     let mut index = 0;
 
@@ -264,6 +283,17 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 permission_mode = PermissionMode::DangerFullAccess;
                 index += 1;
             }
+            "--profile" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --profile".to_string())?;
+                profile = ExecutionProfile::parse(value).map_err(|error| error.to_string())?;
+                index += 2;
+            }
+            flag if flag.starts_with("--profile=") => {
+                profile = ExecutionProfile::parse(&flag[10..]).map_err(|error| error.to_string())?;
+                index += 1;
+            }
             "-p" => {
                 // Claw Code compat: -p "prompt" = one-shot prompt
                 let prompt = args[index + 1..].join(" ");
@@ -276,6 +306,8 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                     output_format,
                     allowed_tools: normalize_allowed_tools(&allowed_tool_values)?,
                     permission_mode,
+                    profile,
+                    corpus_roots: corpus_roots.clone(),
                 });
             }
             "--print" => {
@@ -307,6 +339,17 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 allowed_tool_values.push(flag[16..].to_string());
                 index += 1;
             }
+            "--corpus" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --corpus".to_string())?;
+                corpus_roots.push(PathBuf::from(value));
+                index += 2;
+            }
+            flag if flag.starts_with("--corpus=") => {
+                corpus_roots.push(PathBuf::from(&flag[9..]));
+                index += 1;
+            }
             other if rest.is_empty() && other.starts_with('-') => {
                 return Err(format_unknown_option(other))
             }
@@ -332,12 +375,14 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             model,
             allowed_tools,
             permission_mode,
+            profile,
+            corpus_roots,
         });
     }
     if rest.first().map(String::as_str) == Some("--resume") {
         return parse_resume_args(&rest[1..]);
     }
-    if let Some(action) = parse_single_word_command_alias(&rest, &model, permission_mode) {
+    if let Some(action) = parse_single_word_command_alias(&rest, &model, permission_mode, profile) {
         return action;
     }
 
@@ -368,6 +413,8 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 output_format,
                 allowed_tools,
                 permission_mode,
+                profile,
+                corpus_roots: corpus_roots.clone(),
             })
         }
         other if other.starts_with('/') => parse_direct_slash_cli_action(&rest),
@@ -377,6 +424,8 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             output_format,
             allowed_tools,
             permission_mode,
+            profile,
+            corpus_roots,
         }),
     }
 }
@@ -385,6 +434,7 @@ fn parse_single_word_command_alias(
     rest: &[String],
     model: &str,
     permission_mode: PermissionMode,
+    profile: ExecutionProfile,
 ) -> Option<Result<CliAction, String>> {
     if rest.len() != 1 {
         return None;
@@ -396,6 +446,7 @@ fn parse_single_word_command_alias(
         "status" => Some(Ok(CliAction::Status {
             model: model.to_string(),
             permission_mode,
+            profile,
         })),
         "sandbox" => Some(Ok(CliAction::Sandbox)),
         other => bare_slash_command_guidance(other).map(Err),
@@ -1301,6 +1352,46 @@ fn parse_git_status_metadata_for(
     (project_root, branch)
 }
 
+fn run_corpus_command(args: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    let args = args.unwrap_or("").trim();
+    if args.is_empty() {
+        let corpora = list_corpora(&cwd)?;
+        return Ok(format!(
+            "Corpus store\n  Directory        {}\n  Attached corpora {}",
+            default_corpus_store_dir(&cwd).display(),
+            corpora.len()
+        ));
+    }
+    if let Some(path) = args.strip_prefix("attach ") {
+        let manifest = attach_corpus(&cwd, &[PathBuf::from(path.trim())], CorpusAttachOptions::default())?;
+        return Ok(format!(
+            "Corpus attached\n  Corpus id        {}\n  Documents        {}\n  Chunks           {}",
+            manifest.corpus_id, manifest.document_count, manifest.chunk_count
+        ));
+    }
+    if let Some(query) = args.strip_prefix("search ") {
+        let corpus = list_corpora(&cwd)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| "no corpora attached".to_string())?;
+        let result = search_corpus(&cwd, &corpus.corpus_id, query.trim(), 5, None)?;
+        return Ok(serde_json::to_string_pretty(&result)?);
+    }
+    if let Some(chunk_id) = args.strip_prefix("slice ") {
+        let corpus = list_corpora(&cwd)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| "no corpora attached".to_string())?;
+        let result = slice_corpus(&cwd, &corpus.corpus_id, Some(chunk_id.trim()), None, None)?;
+        return Ok(serde_json::to_string_pretty(&result)?);
+    }
+    if let Some(corpus_id) = args.strip_prefix("inspect ") {
+        return Ok(serde_json::to_string_pretty(&inspect_corpus(&cwd, corpus_id.trim())?)?);
+    }
+    Err("unsupported /corpus usage; try /corpus, /corpus attach <path>, /corpus search <query>, /corpus inspect <id>, or /corpus slice <chunk-id>".into())
+}
+
 #[allow(clippy::too_many_lines)]
 fn run_resume_command(
     session_path: &Path,
@@ -1368,6 +1459,7 @@ fn run_resume_command(
                         estimated_tokens: 0,
                     },
                     default_permission_mode().as_str(),
+                    ExecutionProfile::Balanced.as_str(),
                     &status_context(Some(session_path))?,
                 )),
             })
@@ -1452,6 +1544,10 @@ fn run_resume_command(
                 message: Some(handle_skills_slash_command(args.as_deref(), &cwd)?),
             })
         }
+        SlashCommand::Corpus { args } => Ok(ResumeCommandOutcome {
+            session: session.clone(),
+            message: Some(run_corpus_command(args.as_deref())?),
+        }),
         SlashCommand::Unknown(name) => Err(format_unknown_slash_command(name).into()),
         SlashCommand::Bughunter { .. }
         | SlashCommand::Commit { .. }
@@ -1468,12 +1564,24 @@ fn run_resume_command(
     }
 }
 
+fn attach_cli_corpora(corpus_roots: &[PathBuf]) -> Result<(), Box<dyn std::error::Error>> {
+    if corpus_roots.is_empty() {
+        return Ok(());
+    }
+    let cwd = env::current_dir()?;
+    attach_corpus(&cwd, corpus_roots, CorpusAttachOptions::default())?;
+    Ok(())
+}
+
 fn run_repl(
     model: String,
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
+    profile: ExecutionProfile,
+    corpus_roots: Vec<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut cli = LiveCli::new(model, true, allowed_tools, permission_mode)?;
+    attach_cli_corpora(&corpus_roots)?;
+    let mut cli = LiveCli::new(model, true, allowed_tools, permission_mode, profile)?;
     let mut editor =
         input::LineEditor::new("> ", cli.repl_completion_candidates().unwrap_or_default());
     println!("{}", cli.startup_banner());
@@ -1537,6 +1645,7 @@ struct LiveCli {
     model: String,
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
+    profile: ExecutionProfile,
     system_prompt: Vec<String>,
     runtime: BuiltRuntime,
     session: SessionHandle,
@@ -1669,6 +1778,7 @@ impl LiveCli {
         enable_tools: bool,
         allowed_tools: Option<AllowedToolSet>,
         permission_mode: PermissionMode,
+        profile: ExecutionProfile,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let system_prompt = build_system_prompt()?;
         let session_state = Session::new();
@@ -1688,6 +1798,7 @@ impl LiveCli {
             model,
             allowed_tools,
             permission_mode,
+            profile,
             system_prompt,
             runtime,
             session,
@@ -1724,6 +1835,7 @@ impl LiveCli {
  ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝\x1b[0m \x1b[38;5;208mCode\x1b[0m 🦞\n\n\
   \x1b[2mModel\x1b[0m            {}\n\
   \x1b[2mPermissions\x1b[0m      {}\n\
+  \x1b[2mProfile\x1b[0m          {}\n\
   \x1b[2mBranch\x1b[0m           {}\n\
   \x1b[2mWorkspace\x1b[0m        {}\n\
   \x1b[2mDirectory\x1b[0m        {}\n\
@@ -1732,6 +1844,7 @@ impl LiveCli {
   Type \x1b[1m/help\x1b[0m for commands · \x1b[1m/status\x1b[0m for live context · \x1b[2m/resume latest\x1b[0m jumps back to the newest session · \x1b[1m/diff\x1b[0m then \x1b[1m/commit\x1b[0m to ship · \x1b[2mTab\x1b[0m for workflow completions · \x1b[2mShift+Enter\x1b[0m for newline",
             self.model,
             self.permission_mode.as_str(),
+            self.profile.as_str(),
             git_branch,
             workspace,
             cwd,
@@ -1970,6 +2083,10 @@ impl LiveCli {
                 Self::print_skills(args.as_deref())?;
                 false
             }
+            SlashCommand::Corpus { args } => {
+                println!("{}", run_corpus_command(args.as_deref())?);
+                false
+            }
             SlashCommand::Unknown(name) => {
                 eprintln!("{}", format_unknown_slash_command(&name));
                 false
@@ -1997,6 +2114,7 @@ impl LiveCli {
                     estimated_tokens: self.runtime.estimated_tokens(),
                 },
                 self.permission_mode.as_str(),
+                self.profile.as_str(),
                 &status_context(Some(&self.session.path)).expect("status context should load"),
             )
         );
@@ -2720,6 +2838,7 @@ fn render_repl_help() -> String {
 fn print_status_snapshot(
     model: &str,
     permission_mode: PermissionMode,
+    profile: ExecutionProfile,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "{}",
@@ -2733,6 +2852,7 @@ fn print_status_snapshot(
                 estimated_tokens: 0,
             },
             permission_mode.as_str(),
+            profile.as_str(),
             &status_context(None)?,
         )
     );
@@ -2768,6 +2888,7 @@ fn format_status_report(
     model: &str,
     usage: StatusUsage,
     permission_mode: &str,
+    profile: &str,
     context: &StatusContext,
 ) -> String {
     [
@@ -2775,6 +2896,7 @@ fn format_status_report(
             "Status
   Model            {model}
   Permission mode  {permission_mode}
+  Profile          {profile}
   Messages         {}
   Turns            {}
   Estimated tokens {}",
@@ -4289,6 +4411,11 @@ fn slash_command_completion_candidates_with_sessions(
         "/config hooks",
         "/config model",
         "/config plugins",
+        "/corpus",
+        "/corpus attach ",
+        "/corpus search ",
+        "/corpus inspect ",
+        "/corpus slice ",
         "/mcp ",
         "/mcp list",
         "/mcp show ",
@@ -5033,6 +5160,7 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
         "  --dangerously-skip-permissions  Skip all permission checks"
     )?;
     writeln!(out, "  --allowedTools TOOLS       Restrict enabled tools (repeatable; comma-separated aliases supported)")?;
+    writeln!(out, "  --corpus PATH              Attach a local corpus root before running (repeatable)")?;
     writeln!(
         out,
         "  --version, -V              Print version and build information locally"
@@ -5948,6 +6076,7 @@ mod tests {
                 estimated_tokens: 128,
             },
             "workspace-write",
+            "balanced",
             &super::StatusContext {
                 cwd: PathBuf::from("/tmp/project"),
                 session_path: Some(PathBuf::from("session.jsonl")),

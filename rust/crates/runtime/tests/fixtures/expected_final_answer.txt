@@ -1,0 +1,11 @@
+Implemented the recursive trace summary and grounding formatter.
+
+Sources
+- [L1] local · runtime/src/trace.rs — summary counters
+- [L2] local · runtime/src/ux.rs — final answer renderer
+
+Confidence: high — Covered by unit and regression tests.
+Open questions:
+- Recursive orchestration is still scaffold-level in this repo.
+
+Trace id: trace-fixture-001
