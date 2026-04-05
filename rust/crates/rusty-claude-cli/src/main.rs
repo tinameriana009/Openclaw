@@ -50,6 +50,7 @@ use runtime::{
     ToolExecutor, UsageTracker,
 };
 use serde_json::json;
+use telemetry::{JsonlTelemetrySink, SessionTracer};
 use tools::GlobalToolRegistry;
 
 const DEFAULT_MODEL: &str = "claude-opus-4-6";
@@ -1352,7 +1353,11 @@ fn parse_git_status_metadata_for(
     (project_root, branch)
 }
 
-fn run_corpus_command(args: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
+fn run_corpus_command(
+    args: Option<&str>,
+    profile: ExecutionProfile,
+    session_id: Option<&str>,
+) -> Result<String, Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
     let args = args.unwrap_or("").trim();
     if args.is_empty() {
@@ -1377,6 +1382,9 @@ fn run_corpus_command(args: Option<&str>) -> Result<String, Box<dyn std::error::
             .ok_or_else(|| "no corpora attached".to_string())?;
         let result = search_corpus(&cwd, &corpus.corpus_id, query.trim(), 5, None)?;
         return Ok(serde_json::to_string_pretty(&result)?);
+    }
+    if let Some(query) = args.strip_prefix("answer ") {
+        return run_corpus_answer(&cwd, query.trim(), profile, session_id);
     }
     if let Some(chunk_id) = args.strip_prefix("slice ") {
         let corpus = list_corpora(&cwd)?

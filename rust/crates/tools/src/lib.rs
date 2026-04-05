@@ -11,10 +11,12 @@ use api::{
 use plugins::PluginTool;
 use reqwest::blocking::Client;
 use runtime::{
-    edit_file, execute_bash, glob_search, grep_search, load_system_prompt, read_file, write_file,
-    ApiClient, ApiRequest, AssistantEvent, BashCommandInput, ContentBlock, ConversationMessage,
-    ConversationRuntime, GrepSearchInput, MessageRole, PermissionMode, PermissionPolicy,
-    PromptCacheEvent, RuntimeError, Session, ToolError, ToolExecutor,
+    attach_corpus, default_corpus_store_dir, edit_file, execute_bash, glob_search, grep_search,
+    inspect_corpus, list_corpora, load_system_prompt, read_file, search_corpus, slice_corpus,
+    write_file, ApiClient, ApiRequest, AssistantEvent, BashCommandInput, ContentBlock,
+    ConversationMessage, ConversationRuntime, CorpusAttachOptions, GrepSearchInput, MessageRole,
+    PermissionMode, PermissionPolicy, PromptCacheEvent, RuntimeError, Session, ToolError,
+    ToolExecutor,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -549,6 +551,51 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             required_permission: PermissionMode::DangerFullAccess,
         },
         ToolSpec {
+            name: "CorpusInspect",
+            description: "Inspect attached local corpus metadata and document summaries.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "corpus_id": { "type": "string" }
+                },
+                "required": ["corpus_id"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "CorpusSearch",
+            description: "Search an attached local corpus using lexical retrieval.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "corpus_id": { "type": "string" },
+                    "query": { "type": "string" },
+                    "top_k": { "type": "integer", "minimum": 1 },
+                    "path_filter": { "type": "string" }
+                },
+                "required": ["corpus_id", "query"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "CorpusSlice",
+            description: "Fetch the text body for a specific attached corpus chunk.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "corpus_id": { "type": "string" },
+                    "chunk_id": { "type": "string" },
+                    "path": { "type": "string" },
+                    "ordinal": { "type": "integer", "minimum": 0 }
+                },
+                "required": ["corpus_id"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
             name: "PowerShell",
             description: "Execute a PowerShell command with optional timeout.",
             input_schema: json!({
@@ -591,6 +638,9 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
             from_value::<StructuredOutputInput>(input).and_then(run_structured_output)
         }
         "REPL" => from_value::<ReplInput>(input).and_then(run_repl),
+        "CorpusInspect" => from_value::<CorpusInspectInput>(input).and_then(run_corpus_inspect),
+        "CorpusSearch" => from_value::<CorpusSearchInput>(input).and_then(run_corpus_search),
+        "CorpusSlice" => from_value::<CorpusSliceInput>(input).and_then(run_corpus_slice),
         "PowerShell" => from_value::<PowerShellInput>(input).and_then(run_powershell),
         _ => Err(format!("unsupported tool: {name}")),
     }
@@ -694,6 +744,43 @@ fn run_structured_output(input: StructuredOutputInput) -> Result<String, String>
 
 fn run_repl(input: ReplInput) -> Result<String, String> {
     to_pretty_json(execute_repl(input)?)
+}
+
+fn run_corpus_inspect(input: CorpusInspectInput) -> Result<String, String> {
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    to_pretty_json(inspect_corpus(&cwd, &input.corpus_id).map_err(|error| error.to_string())?)
+}
+
+fn run_corpus_search(input: CorpusSearchInput) -> Result<String, String> {
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    to_pretty_json(
+        search_corpus(
+            &cwd,
+            &input.corpus_id,
+            &input.query,
+            input.top_k.unwrap_or(5),
+            input.path_filter.as_deref(),
+        )
+        .map_err(|error| error.to_string())?,
+    )
+}
+
+fn run_corpus_slice(input: CorpusSliceInput) -> Result<String, String> {
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let ordinal = input
+        .ordinal
+        .map(|value| u32::try_from(value).map_err(|_| "ordinal is out of range".to_string()))
+        .transpose()?;
+    to_pretty_json(
+        slice_corpus(
+            &cwd,
+            &input.corpus_id,
+            input.chunk_id.as_deref(),
+            input.path.as_deref(),
+            ordinal,
+        )
+        .map_err(|error| error.to_string())?,
+    )
 }
 
 fn run_powershell(input: PowerShellInput) -> Result<String, String> {
@@ -865,6 +952,27 @@ struct ReplInput {
     code: String,
     language: String,
     timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CorpusInspectInput {
+    corpus_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CorpusSearchInput {
+    corpus_id: String,
+    query: String,
+    top_k: Option<usize>,
+    path_filter: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CorpusSliceInput {
+    corpus_id: String,
+    chunk_id: Option<String>,
+    path: Option<String>,
+    ordinal: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3467,6 +3575,9 @@ mod tests {
         assert!(names.contains(&"ExitPlanMode"));
         assert!(names.contains(&"StructuredOutput"));
         assert!(names.contains(&"REPL"));
+        assert!(names.contains(&"CorpusInspect"));
+        assert!(names.contains(&"CorpusSearch"));
+        assert!(names.contains(&"CorpusSlice"));
         assert!(names.contains(&"PowerShell"));
     }
 
@@ -4936,7 +5047,59 @@ printf 'pwsh:%s' "$1"
         assert!(err.contains("PowerShell executable not found"));
     }
 
-    struct TestServer {
+    #[test]
+    fn corpus_tools_inspect_search_and_slice_attached_data() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let root = temp_path("corpus-tools");
+        let docs = root.join("docs");
+        fs::create_dir_all(&docs).expect("create docs dir");
+        fs::write(
+            docs.join("guide.md"),
+            "# Intro\nlexical corpus search\n\n## Slice\nchunk body text\n",
+        )
+        .expect("write guide");
+        let original_dir = std::env::current_dir().expect("cwd");
+        std::env::set_current_dir(&root).expect("set cwd");
+
+        let manifest = attach_corpus(
+            &root,
+            &[docs.clone()],
+            CorpusAttachOptions::default(),
+        )
+        .expect("attach corpus");
+
+        let inspect = execute_tool(
+            "CorpusInspect",
+            &json!({ "corpus_id": manifest.corpus_id }),
+        )
+        .expect("inspect should succeed");
+        let inspect_output: serde_json::Value = serde_json::from_str(&inspect).expect("json");
+        assert_eq!(inspect_output["document_count"], 1);
+
+        let search = execute_tool(
+            "CorpusSearch",
+            &json!({ "corpus_id": manifest.corpus_id, "query": "lexical slice", "top_k": 3 }),
+        )
+        .expect("search should succeed");
+        let search_output: serde_json::Value = serde_json::from_str(&search).expect("json");
+        let hit = search_output["hits"][0]["chunk_id"].as_str().expect("chunk id").to_string();
+        assert!(search_output["hits"][0]["preview"].as_str().expect("preview").contains("lexical"));
+
+        let slice = execute_tool(
+            "CorpusSlice",
+            &json!({ "corpus_id": manifest.corpus_id, "chunk_id": hit }),
+        )
+        .expect("slice should succeed");
+        let slice_output: serde_json::Value = serde_json::from_str(&slice).expect("json");
+        assert!(slice_output["text"].as_str().expect("text").contains("chunk body text"));
+
+        std::env::set_current_dir(&original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    struct TestServer {"}
         addr: SocketAddr,
         shutdown: Option<std::sync::mpsc::Sender<()>>,
         handle: Option<thread::JoinHandle<()>>,

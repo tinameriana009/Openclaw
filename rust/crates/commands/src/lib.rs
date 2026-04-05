@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use plugins::{PluginError, PluginManager, PluginSummary};
 use runtime::{
-    compact_session, CompactionConfig, ConfigLoader, ConfigSource, McpOAuthConfig, McpServerConfig,
-    ScopedMcpServerConfig, Session,
+    compact_session, export_trace, render_trace_summary, CompactionConfig, ConfigLoader,
+    ConfigSource, McpOAuthConfig, McpServerConfig, ScopedMcpServerConfig, Session, TraceLedger,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,6 +212,13 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         resume_supported: true,
     },
     SlashCommandSpec {
+        name: "trace",
+        aliases: &[],
+        summary: "Show a recursive trace summary or export a trace ledger",
+        argument_hint: Some("[summary <trace-file>|export <trace-file> [destination]]"),
+        resume_supported: true,
+    },
+    SlashCommandSpec {
         name: "session",
         aliases: &[],
         summary: "List, switch, or fork managed local sessions",
@@ -239,6 +246,13 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         aliases: &[],
         summary: "List or install available skills",
         argument_hint: Some("[list|install <path>|help]"),
+        resume_supported: true,
+    },
+    SlashCommandSpec {
+        name: "corpus",
+        aliases: &[],
+        summary: "Inspect, attach, or search local corpora",
+        argument_hint: Some("[attach <path>|search <query>|slice <chunk-id>|inspect <corpus-id>]") ,
         resume_supported: true,
     },
 ];
@@ -293,6 +307,11 @@ pub enum SlashCommand {
     Export {
         path: Option<String>,
     },
+    Trace {
+        action: Option<String>,
+        target: Option<String>,
+        destination: Option<String>,
+    },
     Session {
         action: Option<String>,
         target: Option<String>,
@@ -305,6 +324,9 @@ pub enum SlashCommand {
         args: Option<String>,
     },
     Skills {
+        args: Option<String>,
+    },
+    Corpus {
         args: Option<String>,
     },
     Unknown(String),
@@ -425,6 +447,7 @@ pub fn validate_slash_command_input(
             SlashCommand::Version
         }
         "export" => SlashCommand::Export { path: remainder },
+        "trace" => parse_trace_command(&args)?,
         "session" => parse_session_command(&args)?,
         "plugin" | "plugins" | "marketplace" => parse_plugin_command(&args)?,
         "agents" => SlashCommand::Agents {
@@ -433,6 +456,7 @@ pub fn validate_slash_command_input(
         "skills" => SlashCommand::Skills {
             args: parse_skills_args(remainder.as_deref())?,
         },
+        "corpus" => SlashCommand::Corpus { args: remainder },
         other => SlashCommand::Unknown(other.to_string()),
     }))
 }
@@ -520,6 +544,48 @@ fn parse_config_section(args: &[&str]) -> Result<Option<String>, SlashCommandPar
     }
 
     Ok(None)
+}
+
+fn parse_trace_command(args: &[&str]) -> Result<SlashCommand, SlashCommandParseError> {
+    match args {
+        [] => Ok(SlashCommand::Trace {
+            action: None,
+            target: None,
+            destination: None,
+        }),
+        ["summary", target] => Ok(SlashCommand::Trace {
+            action: Some("summary".to_string()),
+            target: Some((*target).to_string()),
+            destination: None,
+        }),
+        ["summary", ..] => Err(command_error(
+            "Unexpected arguments for /trace summary.",
+            "trace",
+            "/trace summary <trace-file>",
+        )),
+        ["export", target] => Ok(SlashCommand::Trace {
+            action: Some("export".to_string()),
+            target: Some((*target).to_string()),
+            destination: None,
+        }),
+        ["export", target, destination] => Ok(SlashCommand::Trace {
+            action: Some("export".to_string()),
+            target: Some((*target).to_string()),
+            destination: Some((*destination).to_string()),
+        }),
+        ["export", ..] => Err(command_error(
+            "Unexpected arguments for /trace export.",
+            "trace",
+            "/trace export <trace-file> [destination]",
+        )),
+        [action, ..] => Err(command_error(
+            &format!(
+                "Unknown /trace action '{action}'. Use summary <trace-file> or export <trace-file> [destination]."
+            ),
+            "trace",
+            "/trace [summary <trace-file>|export <trace-file> [destination]]",
+        )),
+    }
 }
 
 fn parse_session_command(args: &[&str]) -> Result<SlashCommand, SlashCommandParseError> {
@@ -805,7 +871,7 @@ pub fn resume_supported_slash_commands() -> Vec<&'static SlashCommandSpec> {
 fn slash_command_category(name: &str) -> &'static str {
     match name {
         "help" | "status" | "sandbox" | "model" | "permissions" | "cost" | "resume" | "session"
-        | "version" => "Session & visibility",
+        | "version" | "trace" => "Session & visibility",
         "compact" | "clear" | "config" | "memory" | "init" | "diff" | "commit" | "pr" | "issue"
         | "export" | "plugin" => "Workspace & git",
         "agents" | "skills" | "teleport" | "debug-tool-call" | "mcp" => "Discovery & debugging",
@@ -1167,6 +1233,55 @@ pub fn handle_mcp_slash_command(
 ) -> Result<String, runtime::ConfigError> {
     let loader = ConfigLoader::default_for(cwd);
     render_mcp_report_for(&loader, cwd, args)
+}
+
+pub fn handle_trace_slash_command(args: Option<&str>, cwd: &Path) -> std::io::Result<String> {
+    match normalize_optional_args(args) {
+        None => Ok(render_trace_usage(None)),
+        Some("summary") => Ok(render_trace_usage(Some("summary"))),
+        Some(args) if args.split_whitespace().next() == Some("summary") => {
+            let mut parts = args.split_whitespace();
+            let _ = parts.next();
+            let Some(trace_file) = parts.next() else {
+                return Ok(render_trace_usage(Some("summary")));
+            };
+            if parts.next().is_some() {
+                return Ok(render_trace_usage(Some(args)));
+            }
+            let path = resolve_trace_path(cwd, trace_file);
+            let trace = TraceLedger::read_from_path(&path).map_err(std::io::Error::other)?;
+            Ok(render_trace_summary(&trace))
+        }
+        Some("export") => Ok(render_trace_usage(Some("export"))),
+        Some(args) if args.split_whitespace().next() == Some("export") => {
+            let parts = args.split_whitespace().collect::<Vec<_>>();
+            match parts.as_slice() {
+                ["export", trace_file] => {
+                    let source = resolve_trace_path(cwd, trace_file);
+                    let trace = TraceLedger::read_from_path(&source).map_err(std::io::Error::other)?;
+                    let destination = export_trace(&trace, &cwd.join("trace-exports")).map_err(std::io::Error::other)?;
+                    Ok(format!(
+                        "Trace\n  Action           export\n  Source           {}\n  Destination      {}",
+                        source.display(),
+                        destination.display()
+                    ))
+                }
+                ["export", trace_file, destination] => {
+                    let source = resolve_trace_path(cwd, trace_file);
+                    let trace = TraceLedger::read_from_path(&source).map_err(std::io::Error::other)?;
+                    let destination = export_trace(&trace, &resolve_trace_path(cwd, destination))
+                        .map_err(std::io::Error::other)?;
+                    Ok(format!(
+                        "Trace\n  Action           export\n  Source           {}\n  Destination      {}",
+                        source.display(),
+                        destination.display()
+                    ))
+                }
+                _ => Ok(render_trace_usage(Some(args))),
+            }
+        }
+        Some(args) => Ok(render_trace_usage(Some(args))),
+    }
 }
 
 pub fn handle_skills_slash_command(args: Option<&str>, cwd: &Path) -> std::io::Result<String> {
@@ -1626,7 +1741,7 @@ fn load_agents_from_roots(
         let mut root_agents = Vec::new();
         for entry in fs::read_dir(root)? {
             let entry = entry?;
-            if entry.path().extension().is_none_or(|ext| ext != "toml") {
+            if entry.path().extension().map_or(true, |ext| ext != "toml") {
                 continue;
             }
             let contents = fs::read_to_string(entry.path())?;
@@ -2084,6 +2199,28 @@ fn render_mcp_usage(unexpected: Option<&str>) -> String {
     lines.join("\n")
 }
 
+fn resolve_trace_path(cwd: &Path, input: &str) -> PathBuf {
+    let candidate = PathBuf::from(input);
+    if candidate.is_absolute() {
+        candidate
+    } else {
+        cwd.join(candidate)
+    }
+}
+
+fn render_trace_usage(unexpected: Option<&str>) -> String {
+    let mut lines = vec![
+        "Trace".to_string(),
+        "  Usage            /trace [summary <trace-file>|export <trace-file> [destination]]".to_string(),
+        "  Direct CLI       claw trace [summary <trace-file>|export <trace-file> [destination]]".to_string(),
+        "  Inputs           Trace ledger JSON files produced by the recursive runtime".to_string(),
+    ];
+    if let Some(args) = unexpected {
+        lines.push(format!("  Unexpected       {args}"));
+    }
+    lines.join("\n")
+}
+
 fn config_source_label(source: ConfigSource) -> &'static str {
     match source {
         ConfigSource::User => "user",
@@ -2218,10 +2355,12 @@ pub fn handle_slash_command(
         | SlashCommand::Diff
         | SlashCommand::Version
         | SlashCommand::Export { .. }
+        | SlashCommand::Trace { .. }
         | SlashCommand::Session { .. }
         | SlashCommand::Plugins { .. }
         | SlashCommand::Agents { .. }
         | SlashCommand::Skills { .. }
+        | SlashCommand::Corpus { .. }
         | SlashCommand::Unknown(_) => None,
     }
 }
@@ -2229,11 +2368,12 @@ pub fn handle_slash_command(
 #[cfg(test)]
 mod tests {
     use super::{
-        handle_plugins_slash_command, handle_slash_command, load_agents_from_roots,
-        load_skills_from_roots, render_agents_report, render_plugins_report, render_skills_report,
-        render_slash_command_help, render_slash_command_help_detail,
-        resume_supported_slash_commands, slash_command_specs, suggest_slash_commands,
-        validate_slash_command_input, DefinitionSource, SkillOrigin, SkillRoot, SlashCommand,
+        handle_plugins_slash_command, handle_slash_command, handle_trace_slash_command,
+        load_agents_from_roots, load_skills_from_roots, render_agents_report,
+        render_plugins_report, render_skills_report, render_slash_command_help,
+        render_slash_command_help_detail, resume_supported_slash_commands,
+        slash_command_specs, suggest_slash_commands, validate_slash_command_input,
+        DefinitionSource, SkillOrigin, SkillRoot, SlashCommand,
     };
     use plugins::{PluginKind, PluginManager, PluginManagerConfig, PluginMetadata, PluginSummary};
     use runtime::{
@@ -2470,6 +2610,22 @@ mod tests {
             }))
         );
         assert_eq!(
+            SlashCommand::parse("/trace summary trace.json"),
+            Ok(Some(SlashCommand::Trace {
+                action: Some("summary".to_string()),
+                target: Some("trace.json".to_string()),
+                destination: None,
+            }))
+        );
+        assert_eq!(
+            SlashCommand::parse("/trace export trace.json out"),
+            Ok(Some(SlashCommand::Trace {
+                action: Some("export".to_string()),
+                target: Some("trace.json".to_string()),
+                destination: Some("out".to_string()),
+            }))
+        );
+        assert_eq!(
             SlashCommand::parse("/session switch abc123"),
             Ok(Some(SlashCommand::Session {
                 action: Some("switch".to_string()),
@@ -2645,6 +2801,7 @@ mod tests {
         assert!(help.contains("/diff"));
         assert!(help.contains("/version"));
         assert!(help.contains("/export [file]"));
+        assert!(help.contains("/trace [summary <trace-file>|export <trace-file> [destination]]"));
         assert!(help.contains("/session [list|switch <session-id>|fork [branch-name]]"));
         assert!(help.contains("/sandbox"));
         assert!(help.contains(
@@ -2653,8 +2810,8 @@ mod tests {
         assert!(help.contains("aliases: /plugins, /marketplace"));
         assert!(help.contains("/agents [list|help]"));
         assert!(help.contains("/skills [list|install <path>|help]"));
-        assert_eq!(slash_command_specs().len(), 27);
-        assert_eq!(resume_supported_slash_commands().len(), 15);
+        assert_eq!(slash_command_specs().len(), 28);
+        assert_eq!(resume_supported_slash_commands().len(), 16);
     }
 
     #[test]
@@ -2986,6 +3143,47 @@ mod tests {
         let skills_unexpected =
             super::handle_skills_slash_command(Some("show help"), &cwd).expect("skills usage");
         assert!(skills_unexpected.contains("Unexpected       show help"));
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn trace_usage_supports_summary_and_export() {
+        let cwd = temp_dir("trace-usage");
+        let trace_path = cwd.join("trace.json");
+        fs::create_dir_all(&cwd).expect("trace workspace");
+        fs::write(
+            &trace_path,
+            r#"{
+              "traceId":"trace-1",
+              "sessionId":"session-1",
+              "rootTaskId":"task-1",
+              "startedAtMs":1,
+              "finishedAtMs":2,
+              "finalStatus":"succeeded",
+              "events":[{
+                "sequence":1,
+                "eventType":"stop_condition_reached",
+                "timestampMs":2,
+                "data":{"stopReason":"completed"}
+              }]
+            }"#,
+        )
+        .expect("write trace");
+
+        let summary = handle_trace_slash_command(Some("summary trace.json"), &cwd)
+            .expect("trace summary should work");
+        assert!(summary.contains("Status           succeeded"));
+        assert!(summary.contains("Stop reason      completed"));
+
+        let export = handle_trace_slash_command(Some("export trace.json exports"), &cwd)
+            .expect("trace export should work");
+        assert!(export.contains("Action           export"));
+        assert!(cwd.join("exports").join("trace-1.json").is_file());
+
+        let usage = handle_trace_slash_command(Some("inspect trace.json"), &cwd)
+            .expect("unexpected args should return usage");
+        assert!(usage.contains("Usage            /trace [summary <trace-file>|export <trace-file> [destination]]"));
 
         let _ = fs::remove_dir_all(cwd);
     }
