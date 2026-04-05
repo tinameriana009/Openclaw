@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::json::JsonValue;
 use crate::sandbox::{FilesystemIsolationMode, SandboxConfig};
+use crate::ExecutionProfile;
 
 pub const CLAW_SETTINGS_SCHEMA_NAME: &str = "SettingsSchema";
 
@@ -502,6 +503,15 @@ impl RuntimeFeatureConfig {
     #[must_use]
     pub fn web_research(&self) -> &RuntimeWebResearchConfig {
         &self.web_research
+    }
+
+    #[must_use]
+    pub fn with_execution_profile(mut self, profile: ExecutionProfile) -> Self {
+        let resolved = profile.resolve();
+        self.rag = resolved.rag;
+        self.rlm = resolved.rlm;
+        self.web_research = resolved.web_research;
+        self
     }
 }
 

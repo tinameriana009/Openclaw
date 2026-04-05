@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+use serde::Serialize;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum JsonValue {
     Null,
     Bool(bool),

@@ -874,7 +874,7 @@ fn slash_command_category(name: &str) -> &'static str {
         | "version" | "trace" => "Session & visibility",
         "compact" | "clear" | "config" | "memory" | "init" | "diff" | "commit" | "pr" | "issue"
         | "export" | "plugin" => "Workspace & git",
-        "agents" | "skills" | "teleport" | "debug-tool-call" | "mcp" => "Discovery & debugging",
+        "agents" | "skills" | "teleport" | "debug-tool-call" | "mcp" | "corpus" => "Discovery & debugging",
         "bughunter" | "ultraplan" => "Analysis & automation",
         _ => "Other",
     }

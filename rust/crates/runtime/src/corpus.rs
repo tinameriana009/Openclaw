@@ -4,12 +4,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use serde::Serialize;
+
 use crate::json::{JsonError, JsonValue};
 
 const DEFAULT_MAX_FILE_BYTES: u64 = 512 * 1024;
 const DEFAULT_CHUNK_BYTES: usize = 2_048;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum CorpusKind {
     Repo,
     Docs,
@@ -17,14 +19,14 @@ pub enum CorpusKind {
     Mixed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum CorpusBackend {
     Lexical,
     Hybrid,
     Semantic,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CorpusManifest {
     pub corpus_id: String,
     pub roots: Vec<String>,
@@ -36,7 +38,7 @@ pub struct CorpusManifest {
     pub documents: Vec<CorpusDocument>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CorpusDocument {
     pub document_id: String,
     pub path: String,
@@ -48,7 +50,7 @@ pub struct CorpusDocument {
     pub chunks: Vec<CorpusChunk>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CorpusChunk {
     pub chunk_id: String,
     pub document_id: String,
@@ -59,7 +61,7 @@ pub struct CorpusChunk {
     pub metadata: BTreeMap<String, JsonValue>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CorpusInspectResult {
     pub corpus_id: String,
     pub kind: CorpusKind,
@@ -71,7 +73,7 @@ pub struct CorpusInspectResult {
     pub documents: Vec<CorpusDocumentSummary>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CorpusDocumentSummary {
     pub document_id: String,
     pub path: String,
@@ -81,7 +83,7 @@ pub struct CorpusDocumentSummary {
     pub bytes: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CorpusSlice {
     pub corpus_id: String,
     pub chunk_id: String,
@@ -93,7 +95,7 @@ pub struct CorpusSlice {
     pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RetrievalResult {
     pub query: String,
     pub backend: CorpusBackend,
@@ -101,7 +103,7 @@ pub struct RetrievalResult {
     pub hits: Vec<RetrievalHit>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RetrievalHit {
     pub chunk_id: String,
     pub document_id: String,

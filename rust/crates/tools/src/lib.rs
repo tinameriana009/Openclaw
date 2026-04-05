@@ -3537,7 +3537,10 @@ mod tests {
         SubagentToolExecutor,
     };
     use api::OutputContentBlock;
-    use runtime::{ApiRequest, AssistantEvent, ConversationRuntime, RuntimeError, Session};
+    use runtime::{
+        attach_corpus, ApiRequest, AssistantEvent, ConversationRuntime, CorpusAttachOptions,
+        RuntimeError, Session,
+    };
     use serde_json::json;
 
     fn env_lock() -> &'static Mutex<()> {

@@ -1648,6 +1648,10 @@ fn run_resume_command(
                 Some(&session.session_id),
             )?),
         }),
+        SlashCommand::Trace { .. } => Ok(ResumeCommandOutcome {
+            session: session.clone(),
+            message: Some("trace: resume mode support is not wired yet".to_string()),
+        }),
         SlashCommand::Unknown(name) => Err(format_unknown_slash_command(name).into()),
         SlashCommand::Bughunter { .. }
         | SlashCommand::Commit { .. }
@@ -2190,6 +2194,10 @@ impl LiveCli {
                     "{}",
                     run_corpus_command(args.as_deref(), self.profile, Some(&self.session.id))?
                 );
+                false
+            }
+            SlashCommand::Trace { .. } => {
+                println!("trace: repl support is not wired yet");
                 false
             }
             SlashCommand::Unknown(name) => {
@@ -5358,8 +5366,9 @@ mod tests {
         resolve_model_alias, resolve_session_reference, response_to_events,
         resume_supported_slash_commands, run_resume_command,
         slash_command_completion_candidates_with_sessions, status_context, validate_no_args,
-        CliAction, CliOutputFormat, GitWorkspaceSummary, InternalPromptProgressEvent,
-        InternalPromptProgressState, LiveCli, SlashCommand, StatusUsage, DEFAULT_MODEL,
+        CliAction, CliOutputFormat, ExecutionProfile, GitWorkspaceSummary,
+        InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, SlashCommand,
+        StatusUsage, DEFAULT_MODEL,
     };
     use api::{MessageResponse, OutputContentBlock, Usage};
     use plugins::{
@@ -5487,6 +5496,8 @@ mod tests {
                 model: DEFAULT_MODEL.to_string(),
                 allowed_tools: None,
                 permission_mode: PermissionMode::DangerFullAccess,
+                profile: ExecutionProfile::Balanced,
+                corpus_roots: Vec::new(),
             }
         );
     }
@@ -5574,6 +5585,8 @@ mod tests {
                 output_format: CliOutputFormat::Text,
                 allowed_tools: None,
                 permission_mode: PermissionMode::DangerFullAccess,
+                profile: ExecutionProfile::Balanced,
+                corpus_roots: Vec::new(),
             }
         );
     }
@@ -5595,6 +5608,8 @@ mod tests {
                 output_format: CliOutputFormat::Json,
                 allowed_tools: None,
                 permission_mode: PermissionMode::DangerFullAccess,
+                profile: ExecutionProfile::Balanced,
+                corpus_roots: Vec::new(),
             }
         );
     }
@@ -5615,6 +5630,8 @@ mod tests {
                 output_format: CliOutputFormat::Text,
                 allowed_tools: None,
                 permission_mode: PermissionMode::DangerFullAccess,
+                profile: ExecutionProfile::Balanced,
+                corpus_roots: Vec::new(),
             }
         );
     }
@@ -5648,6 +5665,8 @@ mod tests {
                 model: DEFAULT_MODEL.to_string(),
                 allowed_tools: None,
                 permission_mode: PermissionMode::ReadOnly,
+                profile: ExecutionProfile::Balanced,
+                corpus_roots: Vec::new(),
             }
         );
     }
@@ -5681,6 +5700,8 @@ mod tests {
                         .collect()
                 ),
                 permission_mode: PermissionMode::DangerFullAccess,
+                profile: ExecutionProfile::Balanced,
+                corpus_roots: Vec::new(),
             }
         );
     }
@@ -5760,6 +5781,7 @@ mod tests {
             CliAction::Status {
                 model: DEFAULT_MODEL.to_string(),
                 permission_mode: PermissionMode::DangerFullAccess,
+                profile: ExecutionProfile::Balanced,
             }
         );
         assert_eq!(
@@ -5786,6 +5808,8 @@ mod tests {
                 output_format: CliOutputFormat::Text,
                 allowed_tools: None,
                 permission_mode: PermissionMode::DangerFullAccess,
+                profile: ExecutionProfile::Balanced,
+                corpus_roots: Vec::new(),
             }
         );
     }
@@ -6070,6 +6094,7 @@ mod tests {
                 true,
                 None,
                 PermissionMode::DangerFullAccess,
+                ExecutionProfile::Balanced,
             )
             .expect("cli should initialize")
             .startup_banner()
@@ -6092,7 +6117,7 @@ mod tests {
             names,
             vec![
                 "help", "status", "sandbox", "compact", "clear", "cost", "config", "mcp", "memory",
-                "init", "diff", "version", "export", "agents", "skills",
+                "init", "diff", "version", "export", "trace", "agents", "skills", "corpus",
             ]
         );
     }
