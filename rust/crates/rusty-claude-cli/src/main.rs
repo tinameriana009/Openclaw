@@ -25,7 +25,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use api::{
     resolve_startup_auth_source, AnthropicClient, AuthSource, ContentBlockDelta, InputContentBlock,
-    InputMessage, MessageRequest, MessageResponse, OutputContentBlock, PromptCache,
+    InputMessage, MessageRequest, MessageResponse, OutputContentBlock, PromptCache, ProviderClient,
     StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition, ToolResultContentBlock,
 };
 
@@ -1358,6 +1358,7 @@ fn run_corpus_command(
     args: Option<&str>,
     profile: ExecutionProfile,
     session_id: Option<&str>,
+    active_model: Option<&str>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
     let args = args.unwrap_or("").trim();
@@ -1389,7 +1390,7 @@ fn run_corpus_command(
         return Ok(serde_json::to_string_pretty(&result)?);
     }
     if let Some(query) = args.strip_prefix("answer ") {
-        return run_corpus_answer(&cwd, query.trim(), profile, session_id);
+        return run_corpus_answer(&cwd, query.trim(), profile, session_id, active_model);
     }
     if let Some(chunk_id) = args.strip_prefix("slice ") {
         let corpus = list_corpora(&cwd)?
@@ -1408,31 +1409,64 @@ fn run_corpus_command(
     Err("unsupported /corpus usage; try /corpus, /corpus attach <path>, /corpus search <query>, /corpus answer <query>, /corpus inspect <id>, or /corpus slice <chunk-id>".into())
 }
 
-struct CorpusAnswerExecutor;
+struct CorpusAnswerExecutor {
+    backend: CorpusAnswerBackend,
+}
+
+enum CorpusAnswerBackend {
+    Provider {
+        runtime: tokio::runtime::Runtime,
+        client: ProviderClient,
+        model: String,
+    },
+    ExtractiveFallback {
+        reason: String,
+        model: String,
+    },
+}
+
+impl CorpusAnswerExecutor {
+    fn from_runtime_config(
+        cwd: &Path,
+        session_id: Option<&str>,
+        active_model: Option<&str>,
+    ) -> Self {
+        let resolved_model = resolve_corpus_answer_model(cwd, active_model);
+        match build_corpus_answer_backend(session_id.unwrap_or("corpus-cli"), &resolved_model) {
+            Ok(backend) => Self { backend },
+            Err(reason) => Self {
+                backend: CorpusAnswerBackend::ExtractiveFallback {
+                    reason,
+                    model: resolved_model,
+                },
+            },
+        }
+    }
+}
 
 impl runtime::ChildSubqueryExecutor for CorpusAnswerExecutor {
     fn execute(
         &self,
         request: &runtime::ChildSubqueryRequest,
     ) -> Result<runtime::ChildSubqueryOutput, runtime::RecursiveRuntimeError> {
-        let answer = request
-            .slices
-            .iter()
-            .map(|slice| format!("{}: {}", slice.path, slice.preview.trim()))
-            .collect::<Vec<_>>()
-            .join("\n");
-        Ok(runtime::ChildSubqueryOutput {
-            subquery_id: request.subquery_id.clone(),
-            answer,
-            citations: request
-                .slices
-                .iter()
-                .map(|slice| slice.chunk_id.clone())
-                .collect(),
-            prompt_tokens: u32::try_from(request.prompt.len()).unwrap_or(u32::MAX),
-            completion_tokens: 0,
-            cost_usd: 0.0,
-        })
+        match &self.backend {
+            CorpusAnswerBackend::Provider {
+                runtime,
+                client,
+                model,
+            } => execute_provider_backed_corpus_answer(runtime, client, model, request).or_else(
+                |error| {
+                    Ok(render_extractive_corpus_answer(
+                        request,
+                        Some(&format!("provider fallback: {error}")),
+                        model,
+                    ))
+                },
+            ),
+            CorpusAnswerBackend::ExtractiveFallback { reason, model } => Ok(
+                render_extractive_corpus_answer(request, Some(reason), model),
+            ),
+        }
     }
 }
 
@@ -1441,6 +1475,7 @@ fn run_corpus_answer(
     query: &str,
     profile: ExecutionProfile,
     session_id: Option<&str>,
+    active_model: Option<&str>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let corpus = list_corpora(cwd)?
         .into_iter()
@@ -1458,9 +1493,9 @@ fn run_corpus_answer(
     );
     let runtime = runtime::RecursiveConversationRuntime::new(
         &manifest,
-        CorpusAnswerExecutor::new(resolved.model.clone(), tracer.clone())?,
+        CorpusAnswerExecutor::from_runtime_config(cwd, session_id, active_model),
     );
-    let result = runtime.run_with_tracer(
+    let result = runtime.run_with_tracer_and_policy(
         session_id.unwrap_or("corpus-cli"),
         &format!("corpus-answer-{}", sanitize_session_segment(query)),
         query,
@@ -1484,6 +1519,7 @@ fn run_corpus_answer(
         },
         Some(&cwd.join(".claw").join("trace")),
         Some(&tracer),
+        runtime::WebPolicy::from_config(&resolved.web_research),
     )?;
     Ok(format!(
         "{}\n\n{}\n  Telemetry        {}",
@@ -1491,6 +1527,125 @@ fn run_corpus_answer(
         runtime::render_trace_summary(&result.trace),
         telemetry_path.display()
     ))
+}
+
+fn resolve_corpus_answer_model(cwd: &Path, active_model: Option<&str>) -> String {
+    let configured = ConfigLoader::default_for(cwd)
+        .load()
+        .ok()
+        .and_then(|config| {
+            config
+                .rlm()
+                .subcall_model
+                .clone()
+                .or_else(|| config.model().map(ToOwned::to_owned))
+        });
+    resolve_model_alias(
+        configured
+            .as_deref()
+            .or(active_model)
+            .unwrap_or(DEFAULT_MODEL),
+    )
+    .to_string()
+}
+
+fn build_corpus_answer_backend(
+    session_id: &str,
+    model: &str,
+) -> Result<CorpusAnswerBackend, String> {
+    let client =
+        ProviderClient::from_model_with_anthropic_auth(model, resolve_cli_auth_source().ok())
+            .map_err(|error| error.to_string())?
+            .with_prompt_cache(PromptCache::new(&format!("{session_id}-corpus-answer")));
+    let runtime = tokio::runtime::Runtime::new().map_err(|error| error.to_string())?;
+    Ok(CorpusAnswerBackend::Provider {
+        runtime,
+        client,
+        model: model.to_string(),
+    })
+}
+
+fn execute_provider_backed_corpus_answer(
+    runtime: &tokio::runtime::Runtime,
+    client: &ProviderClient,
+    model: &str,
+    request: &runtime::ChildSubqueryRequest,
+) -> Result<runtime::ChildSubqueryOutput, runtime::RecursiveRuntimeError> {
+    let response = runtime.block_on(async {
+        client
+            .send_message(&MessageRequest {
+                model: model.to_string(),
+                max_tokens: max_tokens_for_model(model),
+                messages: vec![InputMessage::user_text(request.prompt.clone())],
+                system: Some(
+                    "You are a grounded corpus subquery worker. Answer the task using only the provided corpus slices. If the slices are insufficient, say what is missing briefly. Do not invent sources. Keep the answer concise and directly useful.".to_string(),
+                ),
+                tools: None,
+                tool_choice: None,
+                stream: false,
+            })
+            .await
+    })
+    .map_err(|error| runtime::RecursiveRuntimeError::ChildExecution(error.to_string()))?;
+
+    let answer = response
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            OutputContentBlock::Text { text } => Some(text.trim()),
+            _ => None,
+        })
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if answer.trim().is_empty() {
+        return Err(runtime::RecursiveRuntimeError::ChildExecution(
+            "provider returned an empty child answer".to_string(),
+        ));
+    }
+
+    Ok(runtime::ChildSubqueryOutput {
+        subquery_id: request.subquery_id.clone(),
+        answer,
+        citations: request
+            .slices
+            .iter()
+            .map(|slice| format!("{} ({})", slice.path, slice.chunk_id))
+            .collect(),
+        prompt_tokens: response.usage.input_tokens,
+        completion_tokens: response.usage.output_tokens,
+        cost_usd: response.usage.estimated_cost_usd(model).total_cost_usd(),
+    })
+}
+
+fn render_extractive_corpus_answer(
+    request: &runtime::ChildSubqueryRequest,
+    reason: Option<&str>,
+    model: &str,
+) -> runtime::ChildSubqueryOutput {
+    let mut answer = request
+        .slices
+        .iter()
+        .map(|slice| format!("{}: {}", slice.path, slice.preview.trim()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if let Some(reason) = reason {
+        answer = format!(
+            "Using extractive fallback instead of provider-backed subquery ({reason}; model={model}).\n{answer}"
+        );
+    }
+    runtime::ChildSubqueryOutput {
+        subquery_id: request.subquery_id.clone(),
+        answer,
+        citations: request
+            .slices
+            .iter()
+            .map(|slice| slice.chunk_id.clone())
+            .collect(),
+        prompt_tokens: u32::try_from(request.prompt.len()).unwrap_or(u32::MAX),
+        completion_tokens: 0,
+        cost_usd: 0.0,
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1664,6 +1819,7 @@ fn run_resume_command(
                 args.as_deref(),
                 ExecutionProfile::Balanced,
                 Some(&session.session_id),
+                None,
             )?),
         }),
         SlashCommand::Trace { .. } => Ok(ResumeCommandOutcome {
@@ -2210,7 +2366,12 @@ impl LiveCli {
             SlashCommand::Corpus { args } => {
                 println!(
                     "{}",
-                    run_corpus_command(args.as_deref(), self.profile, Some(&self.session.id))?
+                    run_corpus_command(
+                        args.as_deref(),
+                        self.profile,
+                        Some(&self.session.id),
+                        Some(&self.model),
+                    )?
                 );
                 false
             }
@@ -7199,6 +7360,75 @@ UU conflicted.rs",
         let _ = fs::remove_dir_all(workspace);
         let _ = fs::remove_dir_all(source_root);
         std::env::remove_var("ANTHROPIC_API_KEY");
+    }
+}
+
+#[cfg(test)]
+mod corpus_answer_tests {
+    use super::{render_extractive_corpus_answer, resolve_corpus_answer_model};
+    use runtime::{ChildSubqueryRequest, RecursiveContextSlice, RuntimeBudget};
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("corpus-answer-{label}-{nanos}"))
+    }
+
+    fn sample_request() -> ChildSubqueryRequest {
+        ChildSubqueryRequest {
+            subquery_id: "child-1".to_string(),
+            prompt: "answer from slices".to_string(),
+            slices: vec![RecursiveContextSlice {
+                chunk_id: "chunk-1".to_string(),
+                document_id: "doc-1".to_string(),
+                path: "docs/spec.md".to_string(),
+                ordinal: 0,
+                start_offset: 0,
+                end_offset: 42,
+                preview: "provider-backed subqueries should cite grounded slices".to_string(),
+                metadata: BTreeMap::new(),
+            }],
+            budget: RuntimeBudget::default(),
+        }
+    }
+
+    #[test]
+    fn resolve_corpus_answer_model_prefers_rlm_subcall_model() {
+        let cwd = temp_dir("model-resolution");
+        fs::create_dir_all(cwd.join(".claw")).expect("config dir");
+        fs::write(
+            cwd.join(".claw").join("settings.json"),
+            r#"{"model":"claude-opus-4-6","rlm":{"subcallModel":"haiku"}}"#,
+        )
+        .expect("write settings");
+
+        let resolved = resolve_corpus_answer_model(&cwd, Some("claude-sonnet-4-6"));
+        assert_eq!(resolved, "claude-haiku-4-5-20251213");
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn extractive_fallback_marks_reason_and_keeps_grounded_citations() {
+        let output = render_extractive_corpus_answer(
+            &sample_request(),
+            Some("missing provider auth"),
+            "claude-sonnet-4-6",
+        );
+
+        assert!(output
+            .answer
+            .contains("Using extractive fallback instead of provider-backed subquery"));
+        assert!(output.answer.contains("docs/spec.md"));
+        assert_eq!(output.citations, vec!["chunk-1".to_string()]);
+        assert_eq!(output.completion_tokens, 0);
+        assert_eq!(output.cost_usd, 0.0);
     }
 }
 
