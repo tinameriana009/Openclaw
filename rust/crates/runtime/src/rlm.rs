@@ -592,7 +592,9 @@ where
                     user_requested_web: task_requests_web(task),
                 },
             );
-            if escalation.reason != EscalationReason::LocalEvidenceSufficient || last_escalation.is_none() {
+            if escalation.reason != EscalationReason::LocalEvidenceSufficient
+                || last_escalation.is_none()
+            {
                 last_escalation = Some(escalation.clone());
             }
             if escalation.reason != EscalationReason::LocalEvidenceSufficient {
