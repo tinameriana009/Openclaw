@@ -5653,6 +5653,17 @@ mod tests {
     }
 
     #[test]
+    fn parses_corpus_flags_for_repl_mode() {
+        let args = vec!["--corpus".to_string(), "./docs".to_string()];
+        match parse_args(&args).expect("args should parse") {
+            CliAction::Repl { corpus_roots, .. } => {
+                assert_eq!(corpus_roots, vec![PathBuf::from("./docs")]);
+            }
+            other => panic!("expected repl action, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn parses_allowed_tools_flags_with_aliases_and_lists() {
         let args = vec![
             "--allowedTools".to_string(),
@@ -6012,6 +6023,7 @@ mod tests {
         assert!(help.contains("/mcp [list|show <server>|help]"));
         assert!(help.contains("/memory"));
         assert!(help.contains("/init"));
+        assert!(help.contains("/corpus [attach <path>|search <query>|slice <chunk-id>|inspect <corpus-id>]"));
         assert!(help.contains("/diff"));
         assert!(help.contains("/version"));
         assert!(help.contains("/export [file]"));

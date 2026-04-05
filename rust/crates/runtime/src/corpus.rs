@@ -8,7 +8,6 @@ use crate::json::{JsonError, JsonValue};
 
 const DEFAULT_MAX_FILE_BYTES: u64 = 512 * 1024;
 const DEFAULT_CHUNK_BYTES: usize = 2_048;
-const DEFAULT_SLICE_CHARS: usize = 1_200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CorpusKind {

@@ -2810,6 +2810,7 @@ mod tests {
         assert!(help.contains("aliases: /plugins, /marketplace"));
         assert!(help.contains("/agents [list|help]"));
         assert!(help.contains("/skills [list|install <path>|help]"));
+        assert!(help.contains("/corpus [attach <path>|search <query>|slice <chunk-id>|inspect <corpus-id>]"));
         assert_eq!(slash_command_specs().len(), 29);
         assert_eq!(resume_supported_slash_commands().len(), 17);
     }
@@ -2836,6 +2837,17 @@ mod tests {
         assert!(help.contains("Summary          Inspect configured MCP servers"));
         assert!(help.contains("Category         Discovery & debugging"));
         assert!(help.contains("Resume           Supported with --resume SESSION.jsonl"));
+    }
+
+    #[test]
+    fn parses_corpus_slash_command_remainder() {
+        assert_eq!(
+            validate_slash_command_input("/corpus search lexical retrieval")
+                .expect("command should parse"),
+            Some(SlashCommand::Corpus {
+                args: Some("search lexical retrieval".to_string())
+            })
+        );
     }
 
     #[test]
