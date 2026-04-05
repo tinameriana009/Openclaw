@@ -881,12 +881,8 @@ fn parse_optional_rag_config(root: &JsonValue) -> Result<RuntimeRagConfig, Confi
     Ok(RuntimeRagConfig {
         enabled: optional_bool(rag, "enabled", "merged settings.rag")?.unwrap_or(false),
         backend: optional_string(rag, "backend", "merged settings.rag")?.map(str::to_string),
-        default_corpora: optional_string_array(
-            rag,
-            "defaultCorpora",
-            "merged settings.rag",
-        )?
-        .unwrap_or_default(),
+        default_corpora: optional_string_array(rag, "defaultCorpora", "merged settings.rag")?
+            .unwrap_or_default(),
         chunk_bytes: optional_u64(rag, "chunkBytes", "merged settings.rag")?,
         max_hits: optional_u64(rag, "maxHits", "merged settings.rag")?,
     })

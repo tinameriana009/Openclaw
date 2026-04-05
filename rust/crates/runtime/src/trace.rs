@@ -193,12 +193,18 @@ impl TraceLedger {
         let counters = self.counters();
         let mut summary = Map::new();
         summary.insert("trace_id".to_string(), Value::String(self.trace_id.clone()));
-        summary.insert("root_task_id".to_string(), Value::String(self.root_task_id.clone()));
+        summary.insert(
+            "root_task_id".to_string(),
+            Value::String(self.root_task_id.clone()),
+        );
         summary.insert(
             "final_status".to_string(),
             Value::String(self.final_status.as_str().to_string()),
         );
-        summary.insert("event_count".to_string(), Value::from(self.events.len() as u64));
+        summary.insert(
+            "event_count".to_string(),
+            Value::from(self.events.len() as u64),
+        );
         summary.insert(
             "retrieval_requests".to_string(),
             Value::from(counters.retrieval_requests),
@@ -567,7 +573,7 @@ mod tests {
             record.name == "recursive_trace_event"
                 && record.attributes.get("event_type")
                     == Some(&serde_json::Value::String(
-                        "retrieval_completed".to_string()
+                        "retrieval_completed".to_string(),
                     ))
                 && record.attributes.get("hits") == Some(&serde_json::Value::from(7))
         }));

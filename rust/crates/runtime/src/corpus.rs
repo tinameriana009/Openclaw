@@ -205,7 +205,12 @@ impl CorpusManifest {
             ),
             (
                 "documents".to_string(),
-                JsonValue::Array(self.documents.iter().map(CorpusDocument::to_json_value).collect()),
+                JsonValue::Array(
+                    self.documents
+                        .iter()
+                        .map(CorpusDocument::to_json_value)
+                        .collect(),
+                ),
             ),
         ]))
     }
@@ -263,7 +268,9 @@ impl CorpusKind {
             "docs" => Ok(Self::Docs),
             "notes" => Ok(Self::Notes),
             "mixed" => Ok(Self::Mixed),
-            other => Err(CorpusError::Format(format!("unsupported corpus kind {other}"))),
+            other => Err(CorpusError::Format(format!(
+                "unsupported corpus kind {other}"
+            ))),
         }
     }
 }
@@ -283,7 +290,9 @@ impl CorpusBackend {
             "lexical" => Ok(Self::Lexical),
             "hybrid" => Ok(Self::Hybrid),
             "semantic" => Ok(Self::Semantic),
-            other => Err(CorpusError::Format(format!("unsupported corpus backend {other}"))),
+            other => Err(CorpusError::Format(format!(
+                "unsupported corpus backend {other}"
+            ))),
         }
     }
 }
@@ -310,7 +319,13 @@ impl CorpusDocument {
             ),
             (
                 "headings".to_string(),
-                JsonValue::Array(self.headings.iter().cloned().map(JsonValue::String).collect()),
+                JsonValue::Array(
+                    self.headings
+                        .iter()
+                        .cloned()
+                        .map(JsonValue::String)
+                        .collect(),
+                ),
             ),
             (
                 "bytes".to_string(),
@@ -358,7 +373,10 @@ impl CorpusChunk {
                 "documentId".to_string(),
                 JsonValue::String(self.document_id.clone()),
             ),
-            ("ordinal".to_string(), JsonValue::Number(i64::from(self.ordinal))),
+            (
+                "ordinal".to_string(),
+                JsonValue::Number(i64::from(self.ordinal)),
+            ),
             (
                 "startOffset".to_string(),
                 JsonValue::Number(i64::from(self.start_offset)),
@@ -371,7 +389,10 @@ impl CorpusChunk {
                 "textPreview".to_string(),
                 JsonValue::String(self.text_preview.clone()),
             ),
-            ("metadata".to_string(), JsonValue::Object(self.metadata.clone())),
+            (
+                "metadata".to_string(),
+                JsonValue::Object(self.metadata.clone()),
+            ),
         ]))
     }
 
@@ -382,9 +403,8 @@ impl CorpusChunk {
         Ok(Self {
             chunk_id: expect_string(object, "chunkId")?.to_string(),
             document_id: expect_string(object, "documentId")?.to_string(),
-            ordinal: u32::try_from(expect_u64(object, "ordinal")?).map_err(|_| {
-                CorpusError::Format("ordinal is out of range for u32".to_string())
-            })?,
+            ordinal: u32::try_from(expect_u64(object, "ordinal")?)
+                .map_err(|_| CorpusError::Format("ordinal is out of range for u32".to_string()))?,
             start_offset: u32::try_from(expect_u64(object, "startOffset")?).map_err(|_| {
                 CorpusError::Format("startOffset is out of range for u32".to_string())
             })?,
@@ -407,14 +427,19 @@ pub fn attach_corpus(
     options: CorpusAttachOptions,
 ) -> Result<CorpusManifest, CorpusError> {
     if roots.is_empty() {
-        return Err(CorpusError::Format("at least one corpus root is required".to_string()));
+        return Err(CorpusError::Format(
+            "at least one corpus root is required".to_string(),
+        ));
     }
     let mut documents = Vec::new();
     let mut estimated_bytes = 0_u64;
 
     for root in roots {
         let canonical_root = fs::canonicalize(root).map_err(|error| {
-            CorpusError::Format(format!("failed to resolve corpus root {}: {error}", root.display()))
+            CorpusError::Format(format!(
+                "failed to resolve corpus root {}: {error}",
+                root.display()
+            ))
         })?;
         collect_documents(
             &canonical_root,
@@ -432,7 +457,10 @@ pub fn attach_corpus(
         .unwrap_or_else(|| stable_corpus_id(roots));
     let manifest = CorpusManifest {
         corpus_id: corpus_id.clone(),
-        roots: roots.iter().map(|path| path.display().to_string()).collect(),
+        roots: roots
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect(),
         kind: infer_corpus_kind(&documents),
         backend: CorpusBackend::Lexical,
         document_count: u32::try_from(documents.len()).unwrap_or(u32::MAX),
@@ -531,7 +559,9 @@ pub fn slice_corpus(
             }
         }
     }
-    Err(CorpusError::Format("matching corpus slice not found".to_string()))
+    Err(CorpusError::Format(
+        "matching corpus slice not found".to_string(),
+    ))
 }
 
 pub fn search_corpus(
@@ -645,10 +675,18 @@ fn collect_documents(
             if should_skip_dir(&path) {
                 continue;
             }
-            collect_documents(root, &path, chunk_bytes, max_file_bytes, documents, estimated_bytes)?;
+            collect_documents(
+                root,
+                &path,
+                chunk_bytes,
+                max_file_bytes,
+                documents,
+                estimated_bytes,
+            )?;
             continue;
         }
-        if !metadata.is_file() || metadata.len() > max_file_bytes || !is_supported_text_path(&path) {
+        if !metadata.is_file() || metadata.len() > max_file_bytes || !is_supported_text_path(&path)
+        {
             continue;
         }
         let raw = match fs::read(&path) {
@@ -665,7 +703,11 @@ fn collect_documents(
         if text.trim().is_empty() {
             continue;
         }
-        let relative = path.strip_prefix(root).unwrap_or(&path).display().to_string();
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
         let document_id = CorpusManifest::stable_document_id(&relative);
         let headings = collect_headings(&text);
         let chunks = chunk_document(&document_id, &text, chunk_bytes, headings.first().cloned());
@@ -710,7 +752,11 @@ fn is_supported_text_path(path: &Path) -> bool {
 }
 
 fn media_type_for_path(path: &Path) -> String {
-    match path.extension().and_then(|ext| ext.to_str()).map(|v| v.to_ascii_lowercase()) {
+    match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|v| v.to_ascii_lowercase())
+    {
         Some(ext) if matches!(ext.as_str(), "md" | "markdown") => "text/markdown".to_string(),
         Some(ext) if ext == "json" => "application/json".to_string(),
         _ => "text/plain".to_string(),
@@ -719,23 +765,25 @@ fn media_type_for_path(path: &Path) -> String {
 
 fn language_for_path(path: &Path) -> Option<String> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
-    Some(match ext.as_str() {
-        "rs" => "rust",
-        "md" | "markdown" => "markdown",
-        "txt" => "text",
-        "toml" => "toml",
-        "json" => "json",
-        "yaml" | "yml" => "yaml",
-        "js" => "javascript",
-        "ts" | "tsx" => "typescript",
-        "py" => "python",
-        "java" => "java",
-        "c" | "cc" | "cpp" | "h" | "hpp" => "cpp",
-        "go" => "go",
-        "sh" => "shell",
-        _ => return None,
-    }
-    .to_string())
+    Some(
+        match ext.as_str() {
+            "rs" => "rust",
+            "md" | "markdown" => "markdown",
+            "txt" => "text",
+            "toml" => "toml",
+            "json" => "json",
+            "yaml" | "yml" => "yaml",
+            "js" => "javascript",
+            "ts" | "tsx" => "typescript",
+            "py" => "python",
+            "java" => "java",
+            "c" | "cc" | "cpp" | "h" | "hpp" => "cpp",
+            "go" => "go",
+            "sh" => "shell",
+            _ => return None,
+        }
+        .to_string(),
+    )
 }
 
 fn collect_headings(text: &str) -> Vec<String> {
@@ -823,7 +871,14 @@ fn make_preview(text: &str, max_chars: usize) -> String {
     if compact.chars().count() <= max_chars {
         compact
     } else {
-        format!("{}…", compact.chars().take(max_chars).collect::<String>().trim_end())
+        format!(
+            "{}…",
+            compact
+                .chars()
+                .take(max_chars)
+                .collect::<String>()
+                .trim_end()
+        )
     }
 }
 
@@ -858,7 +913,8 @@ fn count_occurrences(haystack: &str, needle: &str) -> usize {
 }
 
 fn sanitize_id_component(value: &str) -> String {
-    value.chars()
+    value
+        .chars()
         .map(|ch| match ch {
             'a'..='z' | 'A'..='Z' | '0'..='9' => ch,
             _ => '_',
@@ -893,7 +949,9 @@ fn optional_string<'a>(
     match object.get(key) {
         Some(JsonValue::Null) | None => Ok(None),
         Some(JsonValue::String(value)) => Ok(Some(value)),
-        Some(_) => Err(CorpusError::Format(format!("field {key} must be a string or null"))),
+        Some(_) => Err(CorpusError::Format(format!(
+            "field {key} must be a string or null"
+        ))),
     }
 }
 
@@ -906,13 +964,18 @@ fn expect_u64(object: &BTreeMap<String, JsonValue>, key: &str) -> Result<u64, Co
         .map_err(|_| CorpusError::Format(format!("numeric field {key} is out of range")))
 }
 
-fn optional_u64(object: &BTreeMap<String, JsonValue>, key: &str) -> Result<Option<u64>, CorpusError> {
+fn optional_u64(
+    object: &BTreeMap<String, JsonValue>,
+    key: &str,
+) -> Result<Option<u64>, CorpusError> {
     match object.get(key) {
         Some(JsonValue::Null) | None => Ok(None),
         Some(JsonValue::Number(value)) => u64::try_from(*value)
             .map(Some)
             .map_err(|_| CorpusError::Format(format!("numeric field {key} is out of range"))),
-        Some(_) => Err(CorpusError::Format(format!("field {key} must be a number or null"))),
+        Some(_) => Err(CorpusError::Format(format!(
+            "field {key} must be a number or null"
+        ))),
     }
 }
 
@@ -965,7 +1028,10 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         std::env::temp_dir().join(format!("corpus-{name}-{nanos}"))
     }
 
@@ -1000,8 +1066,14 @@ mod tests {
                     end_offset: 200,
                     text_preview: "# Intro Hello world".to_string(),
                     metadata: BTreeMap::from([
-                        ("heading".to_string(), JsonValue::String("Intro".to_string())),
-                        ("text".to_string(), JsonValue::String("# Intro\nHello world".to_string())),
+                        (
+                            "heading".to_string(),
+                            JsonValue::String("Intro".to_string()),
+                        ),
+                        (
+                            "text".to_string(),
+                            JsonValue::String("# Intro\nHello world".to_string()),
+                        ),
                     ]),
                 }],
             }],
@@ -1046,7 +1118,9 @@ mod tests {
             .expect("attach corpus");
         assert_eq!(manifest.backend, CorpusBackend::Lexical);
         assert!(manifest.document_count >= 2);
-        assert!(default_corpus_store_dir(&cwd).join(format!("{}.json", manifest.corpus_id)).exists());
+        assert!(default_corpus_store_dir(&cwd)
+            .join(format!("{}.json", manifest.corpus_id))
+            .exists());
 
         let inspect = inspect_corpus(&cwd, &manifest.corpus_id).expect("inspect");
         assert_eq!(inspect.corpus_id, manifest.corpus_id);
@@ -1055,7 +1129,10 @@ mod tests {
         let result = search_corpus(&cwd, &manifest.corpus_id, "lexical search guide", 5, None)
             .expect("search");
         assert!(!result.hits.is_empty());
-        assert!(result.hits[0].preview.to_ascii_lowercase().contains("lexical"));
+        assert!(result.hits[0]
+            .preview
+            .to_ascii_lowercase()
+            .contains("lexical"));
 
         let hit = &result.hits[0];
         let slice = slice_corpus(&cwd, &manifest.corpus_id, Some(&hit.chunk_id), None, None)
@@ -1077,6 +1154,9 @@ mod tests {
         let chunks_b = chunk_document(&doc_id, text, 20, None);
         assert_eq!(chunks_a, chunks_b);
         assert!(chunks_a.len() >= 2);
-        assert_eq!(chunks_a[0].metadata.get("heading"), Some(&JsonValue::String("Title".to_string())));
+        assert_eq!(
+            chunks_a[0].metadata.get("heading"),
+            Some(&JsonValue::String("Title".to_string()))
+        );
     }
 }

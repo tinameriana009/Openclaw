@@ -252,7 +252,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         name: "corpus",
         aliases: &[],
         summary: "Inspect, attach, or search local corpora",
-        argument_hint: Some("[attach <path>|search <query>|slice <chunk-id>|inspect <corpus-id>]") ,
+        argument_hint: Some("[attach <path>|search <query>|slice <chunk-id>|inspect <corpus-id>]"),
         resume_supported: true,
     },
 ];
@@ -874,7 +874,9 @@ fn slash_command_category(name: &str) -> &'static str {
         | "version" | "trace" => "Session & visibility",
         "compact" | "clear" | "config" | "memory" | "init" | "diff" | "commit" | "pr" | "issue"
         | "export" | "plugin" => "Workspace & git",
-        "agents" | "skills" | "teleport" | "debug-tool-call" | "mcp" | "corpus" => "Discovery & debugging",
+        "agents" | "skills" | "teleport" | "debug-tool-call" | "mcp" | "corpus" => {
+            "Discovery & debugging"
+        }
         "bughunter" | "ultraplan" => "Analysis & automation",
         _ => "Other",
     }
@@ -1258,8 +1260,10 @@ pub fn handle_trace_slash_command(args: Option<&str>, cwd: &Path) -> std::io::Re
             match parts.as_slice() {
                 ["export", trace_file] => {
                     let source = resolve_trace_path(cwd, trace_file);
-                    let trace = TraceLedger::read_from_path(&source).map_err(std::io::Error::other)?;
-                    let destination = export_trace(&trace, &cwd.join("trace-exports")).map_err(std::io::Error::other)?;
+                    let trace =
+                        TraceLedger::read_from_path(&source).map_err(std::io::Error::other)?;
+                    let destination = export_trace(&trace, &cwd.join("trace-exports"))
+                        .map_err(std::io::Error::other)?;
                     Ok(format!(
                         "Trace\n  Action           export\n  Source           {}\n  Destination      {}",
                         source.display(),
@@ -1268,7 +1272,8 @@ pub fn handle_trace_slash_command(args: Option<&str>, cwd: &Path) -> std::io::Re
                 }
                 ["export", trace_file, destination] => {
                     let source = resolve_trace_path(cwd, trace_file);
-                    let trace = TraceLedger::read_from_path(&source).map_err(std::io::Error::other)?;
+                    let trace =
+                        TraceLedger::read_from_path(&source).map_err(std::io::Error::other)?;
                     let destination = export_trace(&trace, &resolve_trace_path(cwd, destination))
                         .map_err(std::io::Error::other)?;
                     Ok(format!(
@@ -2211,8 +2216,10 @@ fn resolve_trace_path(cwd: &Path, input: &str) -> PathBuf {
 fn render_trace_usage(unexpected: Option<&str>) -> String {
     let mut lines = vec![
         "Trace".to_string(),
-        "  Usage            /trace [summary <trace-file>|export <trace-file> [destination]]".to_string(),
-        "  Direct CLI       claw trace [summary <trace-file>|export <trace-file> [destination]]".to_string(),
+        "  Usage            /trace [summary <trace-file>|export <trace-file> [destination]]"
+            .to_string(),
+        "  Direct CLI       claw trace [summary <trace-file>|export <trace-file> [destination]]"
+            .to_string(),
         "  Inputs           Trace ledger JSON files produced by the recursive runtime".to_string(),
     ];
     if let Some(args) = unexpected {
@@ -2371,9 +2378,9 @@ mod tests {
         handle_plugins_slash_command, handle_slash_command, handle_trace_slash_command,
         load_agents_from_roots, load_skills_from_roots, render_agents_report,
         render_plugins_report, render_skills_report, render_slash_command_help,
-        render_slash_command_help_detail, resume_supported_slash_commands,
-        slash_command_specs, suggest_slash_commands, validate_slash_command_input,
-        DefinitionSource, SkillOrigin, SkillRoot, SlashCommand,
+        render_slash_command_help_detail, resume_supported_slash_commands, slash_command_specs,
+        suggest_slash_commands, validate_slash_command_input, DefinitionSource, SkillOrigin,
+        SkillRoot, SlashCommand,
     };
     use plugins::{PluginKind, PluginManager, PluginManagerConfig, PluginMetadata, PluginSummary};
     use runtime::{
@@ -2810,7 +2817,9 @@ mod tests {
         assert!(help.contains("aliases: /plugins, /marketplace"));
         assert!(help.contains("/agents [list|help]"));
         assert!(help.contains("/skills [list|install <path>|help]"));
-        assert!(help.contains("/corpus [attach <path>|search <query>|slice <chunk-id>|inspect <corpus-id>]"));
+        assert!(help.contains(
+            "/corpus [attach <path>|search <query>|slice <chunk-id>|inspect <corpus-id>]"
+        ));
         assert_eq!(slash_command_specs().len(), 29);
         assert_eq!(resume_supported_slash_commands().len(), 17);
     }
@@ -3195,7 +3204,9 @@ mod tests {
 
         let usage = handle_trace_slash_command(Some("inspect trace.json"), &cwd)
             .expect("unexpected args should return usage");
-        assert!(usage.contains("Usage            /trace [summary <trace-file>|export <trace-file> [destination]]"));
+        assert!(usage.contains(
+            "Usage            /trace [summary <trace-file>|export <trace-file> [destination]]"
+        ));
 
         let _ = fs::remove_dir_all(cwd);
     }

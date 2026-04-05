@@ -3129,6 +3129,8 @@ fn render_repl_help() -> String {
         "  Auto-save            .claw/sessions/<session-id>.jsonl".to_string(),
         "  Resume latest        /resume latest".to_string(),
         "  Browse sessions      /session list".to_string(),
+        "  --profile PROFILE    Set fast, balanced, deep, or research execution budgets".to_string(),
+        "  Profile note         Balanced enables recursive trace capture by default".to_string(),
         String::new(),
         render_slash_command_help(),
     ]

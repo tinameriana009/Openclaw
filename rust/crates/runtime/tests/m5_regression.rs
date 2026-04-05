@@ -3,8 +3,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use runtime::{
-    Citation, ConfidenceLevel, ConfidenceNote, EvidenceProvenance, ExecutionProfile,
-    FinalAnswer, TraceLedger,
+    Citation, ConfidenceLevel, ConfidenceNote, EvidenceProvenance, ExecutionProfile, FinalAnswer,
+    TraceLedger,
 };
 use telemetry::{MemoryTelemetrySink, SessionTracer, TelemetryEvent};
 

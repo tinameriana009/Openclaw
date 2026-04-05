@@ -5066,18 +5066,11 @@ printf 'pwsh:%s' "$1"
         let original_dir = std::env::current_dir().expect("cwd");
         std::env::set_current_dir(&root).expect("set cwd");
 
-        let manifest = attach_corpus(
-            &root,
-            &[docs.clone()],
-            CorpusAttachOptions::default(),
-        )
-        .expect("attach corpus");
+        let manifest = attach_corpus(&root, &[docs.clone()], CorpusAttachOptions::default())
+            .expect("attach corpus");
 
-        let inspect = execute_tool(
-            "CorpusInspect",
-            &json!({ "corpus_id": manifest.corpus_id }),
-        )
-        .expect("inspect should succeed");
+        let inspect = execute_tool("CorpusInspect", &json!({ "corpus_id": manifest.corpus_id }))
+            .expect("inspect should succeed");
         let inspect_output: serde_json::Value = serde_json::from_str(&inspect).expect("json");
         assert_eq!(inspect_output["document_count"], 1);
 
@@ -5087,8 +5080,14 @@ printf 'pwsh:%s' "$1"
         )
         .expect("search should succeed");
         let search_output: serde_json::Value = serde_json::from_str(&search).expect("json");
-        let hit = search_output["hits"][0]["chunk_id"].as_str().expect("chunk id").to_string();
-        assert!(search_output["hits"][0]["preview"].as_str().expect("preview").contains("lexical"));
+        let hit = search_output["hits"][0]["chunk_id"]
+            .as_str()
+            .expect("chunk id")
+            .to_string();
+        assert!(search_output["hits"][0]["preview"]
+            .as_str()
+            .expect("preview")
+            .contains("lexical"));
 
         let slice = execute_tool(
             "CorpusSlice",
@@ -5096,7 +5095,10 @@ printf 'pwsh:%s' "$1"
         )
         .expect("slice should succeed");
         let slice_output: serde_json::Value = serde_json::from_str(&slice).expect("json");
-        assert!(slice_output["text"].as_str().expect("text").contains("chunk body text"));
+        assert!(slice_output["text"]
+            .as_str()
+            .expect("text")
+            .contains("chunk body text"));
 
         std::env::set_current_dir(&original_dir).expect("restore cwd");
         let _ = fs::remove_dir_all(root);

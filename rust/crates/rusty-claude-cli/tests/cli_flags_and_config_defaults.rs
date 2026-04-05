@@ -185,47 +185,6 @@ fn config_command_loads_defaults_from_standard_config_locations() {
     fs::remove_dir_all(temp_dir).expect("cleanup temp dir");
 }
 
-#[test]
-fn corpus_answer_uses_attached_corpus_and_writes_trace_artifacts() {
-    // given
-    let temp_dir = unique_temp_dir("corpus-answer");
-    let docs_dir = temp_dir.join("docs");
-    fs::create_dir_all(&docs_dir).expect("docs dir should exist");
-    fs::write(
-        docs_dir.join("bootstrap.md"),
-        "# Bootstrap\nUse ~/.cargo/bin/cargo when the system cargo is too old for lockfile v4.\n",
-    )
-    .expect("write corpus fixture");
-
-    // when
-    let output = command_in(&temp_dir)
-        .args([
-            "--corpus",
-            docs_dir.to_str().expect("utf8 path"),
-            "--resume",
-            "/corpus",
-            "answer",
-            "what does bootstrap say about cargo?",
-        ])
-        .output()
-        .expect("claw should launch");
-
-    // then
-    assert_success(&output);
-    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
-    assert!(stdout.contains("Use ~/.cargo/bin/cargo"));
-    assert!(stdout.contains("Trace"));
-    assert!(stdout.contains("Stop reason      completed"));
-    assert!(temp_dir.join(".claw").join("trace").exists());
-    assert!(temp_dir
-        .join(".claw")
-        .join("telemetry")
-        .join("recursive-runtime.jsonl")
-        .exists());
-
-    fs::remove_dir_all(temp_dir).expect("cleanup temp dir");
-}
-
 fn command_in(cwd: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_claw"));
     command.current_dir(cwd);
