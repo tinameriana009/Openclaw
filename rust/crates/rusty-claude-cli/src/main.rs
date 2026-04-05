@@ -1612,6 +1612,7 @@ fn execute_provider_backed_corpus_answer(
             .iter()
             .map(|slice| format!("{} ({})", slice.path, slice.chunk_id))
             .collect(),
+        web_evidence: Vec::new(),
         prompt_tokens: response.usage.input_tokens,
         completion_tokens: response.usage.output_tokens,
         cost_usd: response.usage.estimated_cost_usd(model).total_cost_usd(),
@@ -1642,6 +1643,7 @@ fn render_extractive_corpus_answer(
             .iter()
             .map(|slice| slice.chunk_id.clone())
             .collect(),
+        web_evidence: Vec::new(),
         prompt_tokens: u32::try_from(request.prompt.len()).unwrap_or(u32::MAX),
         completion_tokens: 0,
         cost_usd: 0.0,
@@ -7395,6 +7397,10 @@ mod corpus_answer_tests {
                 metadata: BTreeMap::new(),
             }],
             budget: RuntimeBudget::default(),
+            web_policy: runtime::WebPolicy {
+                mode: runtime::WebAccessMode::Off,
+                max_fetches: Some(0),
+            },
         }
     }
 
