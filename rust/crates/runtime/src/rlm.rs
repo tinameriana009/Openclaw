@@ -988,7 +988,7 @@ mod tests {
                 "task-1",
                 "trace aggregation export",
                 RuntimeBudget {
-                    max_depth: Some(1),
+                    max_depth: Some(2),
                     max_iterations: Some(2),
                     max_subcalls: Some(1),
                     max_runtime_ms: Some(30_000),
