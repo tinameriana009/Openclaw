@@ -1779,7 +1779,7 @@ fn render_extractive_corpus_answer(
     }
     if let Some(reason) = reason {
         answer = format!(
-            "Fallback: using an extractive subquery answer because provider-backed execution is unavailable ({reason}; model={model}).\n{answer}"
+            "Fallback: using an extractive local-only subquery answer because provider-backed execution is unavailable ({reason}; model={model}).\n{answer}"
         );
     }
     runtime::ChildSubqueryOutput {

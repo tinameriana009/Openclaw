@@ -24,6 +24,12 @@ pub struct ProviderChildExecutor {
     web_evidence_collector: WebEvidenceCollector,
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+struct RecursiveWebContext {
+    evidence: Vec<EvidenceRecord>,
+    note: Option<String>,
+}
+
 impl ProviderChildExecutor {
     pub fn new(
         client: ProviderClient,
@@ -53,6 +59,7 @@ impl ChildSubqueryExecutor for ProviderChildExecutor {
         &self,
         request: &ChildSubqueryRequest,
     ) -> Result<ChildSubqueryOutput, RecursiveRuntimeError> {
+        let web_context = collect_recursive_web_context(request, &*self.web_evidence_collector);
         let response = self
             .runtime
             .block_on(async {
@@ -60,8 +67,11 @@ impl ChildSubqueryExecutor for ProviderChildExecutor {
                     .send_message(&MessageRequest {
                         model: self.model.clone(),
                         max_tokens: max_tokens_for_model(&self.model),
-                        messages: vec![InputMessage::user_text(request.prompt.clone())],
-                        system: Some(build_corpus_subquery_system_prompt(request)),
+                        messages: vec![InputMessage::user_text(build_provider_child_prompt(
+                            request,
+                            &web_context,
+                        ))],
+                        system: Some(build_corpus_subquery_system_prompt(request, &web_context)),
                         tools: None,
                         tool_choice: None,
                         stream: false,
@@ -70,12 +80,7 @@ impl ChildSubqueryExecutor for ProviderChildExecutor {
             })
             .map_err(map_provider_api_error_to_recursive_error)?;
 
-        build_provider_child_output(
-            &self.model,
-            request,
-            response,
-            &*self.web_evidence_collector,
-        )
+        build_provider_child_output(&self.model, request, response, web_context)
     }
 }
 
@@ -106,8 +111,11 @@ fn map_provider_api_error_to_recursive_error(error: ApiError) -> RecursiveRuntim
     })
 }
 
-fn build_corpus_subquery_system_prompt(request: &ChildSubqueryRequest) -> String {
-    let mut prompt = "You are a grounded corpus subquery worker. Answer the task using only the provided corpus slices. If the slices are insufficient, say what is missing briefly. Do not invent sources. Keep the answer concise and directly useful.".to_string();
+fn build_corpus_subquery_system_prompt(
+    request: &ChildSubqueryRequest,
+    web_context: &RecursiveWebContext,
+) -> String {
+    let mut prompt = "You are a grounded corpus subquery worker. Answer the task using the provided corpus slices first. If separately supplied web evidence is present, you may use it only as external confirmation or freshness context. Be explicit about what comes from local corpus slices versus fetched web evidence. If the available evidence is insufficient, say what is missing briefly. Do not invent sources. Keep the answer concise and directly useful.".to_string();
     match request.web_policy.mode {
         WebAccessMode::Off => {
             prompt.push_str(" Web research is disabled for this subquery, so keep the answer strictly local to the provided slices and do not imply any external verification.");
@@ -116,23 +124,76 @@ fn build_corpus_subquery_system_prompt(request: &ChildSubqueryRequest) -> String
             prompt.push_str(" External web research would require explicit approval for this subquery. Stay grounded in the provided slices; if fresh or external evidence is needed, say that approval is required before using the web.");
         }
         WebAccessMode::On => {
-            if request.web_research_query.is_some() {
-                prompt.push_str(" Limited web evidence may be attached separately for this subquery when the runtime has already decided escalation is warranted. Keep your answer explicit about what comes from the provided slices versus any externally fetched confirmation.");
+            if !web_context.evidence.is_empty() {
+                prompt.push_str(" Limited web evidence is attached below because the runtime approved escalation for this subquery. Use it carefully, cite it as external evidence, and avoid overstating confidence if the fetched material is thin.");
+            } else if request.web_research_query.is_some() {
+                prompt.push_str(" Web escalation was approved for this subquery, but no fetched web evidence is attached. Stay honest about that and avoid implying successful external verification.");
             } else {
                 prompt.push_str(" Web access is enabled in principle, but this subquery was not flagged for external fetches. Stay grounded in the provided slices and do not imply web verification.");
             }
         }
     }
+    if let Some(note) = web_context.note.as_deref() {
+        prompt.push_str(" Runtime note: ");
+        prompt.push_str(note);
+    }
     prompt
+}
+
+fn build_provider_child_prompt(
+    request: &ChildSubqueryRequest,
+    web_context: &RecursiveWebContext,
+) -> String {
+    let mut prompt = request.prompt.clone();
+    if !web_context.evidence.is_empty() {
+        let rendered = web_context
+            .evidence
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
+                format!(
+                    "[W{}] {}\nURL: {}\nSnippet: {}",
+                    index + 1,
+                    item.title,
+                    item.locator,
+                    item.snippet
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        prompt.push_str("\n\nAttached web evidence approved by the runtime:\n");
+        prompt.push_str(&rendered);
+    }
+    if let Some(note) = web_context.note.as_deref() {
+        prompt.push_str("\n\nWeb execution note: ");
+        prompt.push_str(note);
+    }
+    prompt
+}
+
+fn collect_recursive_web_context(
+    request: &ChildSubqueryRequest,
+    web_evidence_collector: &dyn Fn(
+        &ChildSubqueryRequest,
+    ) -> Result<Vec<EvidenceRecord>, RecursiveRuntimeError>,
+) -> RecursiveWebContext {
+    match web_evidence_collector(request) {
+        Ok(evidence) => RecursiveWebContext {
+            evidence,
+            note: None,
+        },
+        Err(error) => RecursiveWebContext {
+            evidence: Vec::new(),
+            note: Some(format_provider_execution_fallback_reason(&error)),
+        },
+    }
 }
 
 fn build_provider_child_output(
     model: &str,
     request: &ChildSubqueryRequest,
     response: MessageResponse,
-    web_evidence_collector: &dyn Fn(
-        &ChildSubqueryRequest,
-    ) -> Result<Vec<EvidenceRecord>, RecursiveRuntimeError>,
+    web_context: RecursiveWebContext,
 ) -> Result<ChildSubqueryOutput, RecursiveRuntimeError> {
     let answer = extract_provider_answer_text(&response);
     if answer.trim().is_empty() {
@@ -150,7 +211,7 @@ fn build_provider_child_output(
             .iter()
             .map(|slice| format!("{} ({})", slice.path, slice.chunk_id))
             .collect(),
-        web_evidence: web_evidence_collector(request)?,
+        web_evidence: web_context.evidence,
         prompt_tokens: response.usage.input_tokens,
         completion_tokens: response.usage.output_tokens,
         cost_usd: response.usage.estimated_cost_usd(model).total_cost_usd(),
@@ -232,17 +293,44 @@ mod tests {
 
     #[test]
     fn system_prompt_reflects_web_policy() {
-        let off = build_corpus_subquery_system_prompt(&sample_request(WebAccessMode::Off, None));
+        let off = build_corpus_subquery_system_prompt(
+            &sample_request(WebAccessMode::Off, None),
+            &RecursiveWebContext::default(),
+        );
         assert!(off.contains("Web research is disabled"));
 
-        let ask = build_corpus_subquery_system_prompt(&sample_request(WebAccessMode::Ask, None));
+        let ask = build_corpus_subquery_system_prompt(
+            &sample_request(WebAccessMode::Ask, None),
+            &RecursiveWebContext::default(),
+        );
         assert!(ask.contains("would require explicit approval"));
 
-        let on = build_corpus_subquery_system_prompt(&sample_request(
-            WebAccessMode::On,
-            Some("latest release"),
-        ));
-        assert!(on.contains("may be attached separately"));
+        let on = build_corpus_subquery_system_prompt(
+            &sample_request(WebAccessMode::On, Some("latest release")),
+            &RecursiveWebContext::default(),
+        );
+        assert!(on.contains("no fetched web evidence is attached"));
+    }
+
+    #[test]
+    fn system_prompt_mentions_attached_web_evidence_and_note() {
+        let prompt = build_corpus_subquery_system_prompt(
+            &sample_request(WebAccessMode::On, Some("latest release")),
+            &RecursiveWebContext {
+                evidence: vec![runtime::EvidenceRecord::from_web_input(
+                    runtime::WebEvidenceInput {
+                        id: "w1".to_string(),
+                        title: "Release note".to_string(),
+                        url: "https://example.test/release".to_string(),
+                        snippet: "Fresh release note".to_string(),
+                        fetched_at_ms: None,
+                    },
+                )],
+                note: Some("provider execution failed: collector degraded".to_string()),
+            },
+        );
+        assert!(prompt.contains("Limited web evidence is attached below"));
+        assert!(prompt.contains("Runtime note: provider execution failed: collector degraded"));
     }
 
     #[test]
@@ -252,7 +340,7 @@ mod tests {
             "claude-sonnet-4-6",
             &request,
             response_with_text("Grounded answer"),
-            &|_| Ok(Vec::new()),
+            RecursiveWebContext::default(),
         )
         .expect("provider output should build");
 
@@ -271,7 +359,7 @@ mod tests {
             "claude-sonnet-4-6",
             &request,
             response_with_text("   \n  "),
-            &|_| Ok(Vec::new()),
+            RecursiveWebContext::default(),
         )
         .expect_err("empty provider answers should fail");
 
@@ -281,22 +369,72 @@ mod tests {
     }
 
     #[test]
-    fn provider_child_output_propagates_web_evidence_errors() {
+    fn collect_recursive_web_context_soft_fails() {
         let request = sample_request(WebAccessMode::On, Some("freshness"));
-        let error = build_provider_child_output(
+        let web_context = collect_recursive_web_context(&request, &|_| {
+            Err(RecursiveRuntimeError::ChildExecution(
+                "collector failed".to_string(),
+            ))
+        });
+
+        assert!(web_context.evidence.is_empty());
+        assert_eq!(
+            web_context.note.as_deref(),
+            Some("provider execution failed: collector failed")
+        );
+    }
+
+    #[test]
+    fn provider_child_output_keeps_prefetched_web_evidence() {
+        let request = sample_request(WebAccessMode::On, Some("freshness"));
+        let output = build_provider_child_output(
             "claude-sonnet-4-6",
             &request,
             response_with_text("Grounded answer"),
-            &|_| {
-                Err(RecursiveRuntimeError::ChildExecution(
-                    "collector failed".to_string(),
-                ))
+            RecursiveWebContext {
+                evidence: vec![runtime::EvidenceRecord::from_web_input(
+                    runtime::WebEvidenceInput {
+                        id: "w1".to_string(),
+                        title: "Release note".to_string(),
+                        url: "https://example.test/release".to_string(),
+                        snippet: "Fresh release note".to_string(),
+                        fetched_at_ms: None,
+                    },
+                )],
+                note: None,
             },
         )
-        .expect_err("collector errors should surface");
+        .expect("provider output should build");
 
+        assert_eq!(output.web_evidence.len(), 1);
+        assert_eq!(
+            output.web_evidence[0].locator,
+            "https://example.test/release"
+        );
+    }
+
+    #[test]
+    fn provider_child_prompt_includes_attached_web_evidence_and_note() {
+        let prompt = build_provider_child_prompt(
+            &sample_request(WebAccessMode::On, Some("freshness")),
+            &RecursiveWebContext {
+                evidence: vec![runtime::EvidenceRecord::from_web_input(
+                    runtime::WebEvidenceInput {
+                        id: "w1".to_string(),
+                        title: "Release note".to_string(),
+                        url: "https://example.test/release".to_string(),
+                        snippet: "Fresh release note".to_string(),
+                        fetched_at_ms: None,
+                    },
+                )],
+                note: Some("provider execution failed: collector degraded".to_string()),
+            },
+        );
+
+        assert!(prompt.contains("Attached web evidence approved by the runtime"));
+        assert!(prompt.contains("[W1] Release note"));
         assert!(
-            matches!(error, RecursiveRuntimeError::ChildExecution(message) if message == "collector failed")
+            prompt.contains("Web execution note: provider execution failed: collector degraded")
         );
     }
 
