@@ -10,13 +10,16 @@ The format is intentionally lightweight and loosely follows Keep a Changelog.
 
 ### Added
 - Explicit release-hygiene guidance for clean-tree checks, branch/remote posture, and final verification before tagging.
+- `rust/scripts/release-verify.sh` to run the exact locked release verification sequence with an upfront Rust toolchain sanity check.
 
 ### Changed
 - Top-level repository docs now tell operators to verify the canonical publishing remote with `git remote -v` instead of assuming a stale GitHub URL.
+- Rust bootstrap/readme/release docs now point to the release verification helper first, with the manual locked command sequence kept inline.
 
 ### Fixed
 - Rust workspace formatting so the documented `cargo fmt --all --check` release gate passes again.
 - A stray bullet formatting typo in `NEXT_ACTIONS.md`.
+- Blender demo packaging output under `docs/examples/blender-scene-cleanup-demo/dist/` no longer leaves a noisy untracked release artifact in `git status`.
 
 ### Removed
 - None yet.

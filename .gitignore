@@ -15,3 +15,6 @@ rust/.claude/
 rust/.clawd-agents/
 rust/.clawd-todos.json
 rust/.sandbox-home/
+
+# Demo packaging outputs
+/docs/examples/blender-scene-cleanup-demo/dist/

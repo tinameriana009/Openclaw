@@ -130,6 +130,14 @@ Run this before claiming a machine is ready:
 
 ```bash
 cd rust
+./scripts/release-verify.sh
+```
+
+If you want the expanded manual sequence instead of the helper script:
+
+```bash
+cd rust
+cargo build --workspace --locked
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked
 cargo test --workspace --locked

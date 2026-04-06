@@ -62,6 +62,17 @@ If your shell still resolves the distro Cargo first, use `~/.cargo/bin/cargo` ex
 
 ### Build + verify
 
+Preferred:
+
+```bash
+cd rust
+./scripts/release-verify.sh
+```
+
+That helper checks the active Rust toolchain first, then runs the locked workspace verification sequence.
+
+Manual equivalent:
+
 ```bash
 cd rust
 cargo build --workspace --locked

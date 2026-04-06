@@ -21,12 +21,23 @@ Confirm all of the following before you cut a tag or write release notes:
 
 ### Build / verification
 
+Preferred one-shot path:
+
 ```bash
 cd rust
+./scripts/release-verify.sh
+```
+
+That script fails fast if the active `cargo`/`rustc` do not match `rust-toolchain.toml`, then runs the exact locked verification sequence below.
+
+Manual equivalent:
+
+```bash
+cd rust
+cargo build --workspace --locked
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked
 cargo test --workspace --locked
-cargo build --workspace --locked
 ./target/debug/claw --help
 ./target/debug/claw status
 ```
@@ -47,6 +58,7 @@ Confirm:
 - trace files are written when expected
 - telemetry file is written when expected
 - corpus attach/search/inspect flow still works
+- demo/validation helpers do not leave a surprising dirty tree (generated demo zips are ignored or cleaned)
 
 ## Release notes template
 

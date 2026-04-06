@@ -78,10 +78,8 @@ The most current implementation surface is the **Rust workspace** under [`rust/`
 - **Pinned Rust toolchain:** [`rust/rust-toolchain.toml`](rust/rust-toolchain.toml) (`1.94.1` with `clippy` and `rustfmt`)
 - **Expected verification flow:**
   1. `cd rust`
-  2. `cargo build --workspace --locked`
-  3. `cargo fmt --all --check`
-  4. `cargo clippy --workspace --all-targets --locked`
-  5. `cargo test --workspace --locked`
+  2. `./scripts/release-verify.sh`
+  3. If you need the manual expansion, run: `cargo build --workspace --locked`, `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked`, `cargo test --workspace --locked`
 
 If you are reviewing the repository remotely, treat the Rust workspace as the source of truth for build/test health.
 
