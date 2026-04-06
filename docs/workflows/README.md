@@ -54,3 +54,9 @@ For any substantial task:
 Prompt templates live in [`../prompts/`](../prompts/).
 
 Starter example briefs live in [`../examples/`](../examples/).
+
+If you want one especially concrete operator path, start with the **scene cleanup demo kit**:
+
+- [`../examples/blender-scene-cleanup-demo/README.md`](../examples/blender-scene-cleanup-demo/README.md)
+- [`../examples/blender-scene-cleanup-demo/brief.md`](../examples/blender-scene-cleanup-demo/brief.md)
+- [`../examples/blender-scene-cleanup-demo/manual-test-checklist.md`](../examples/blender-scene-cleanup-demo/manual-test-checklist.md)

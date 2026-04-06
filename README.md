@@ -63,7 +63,7 @@ The most current implementation surface is the **Rust workspace** under [`rust/`
 
 - GitHub: <https://github.com/tinameriana009/Openclaw>
 - Main operator docs: [`rust/README.md`](rust/README.md)
-- Workflow recipes and prompt templates: [`docs/workflows/README.md`](docs/workflows/README.md)
+- Workflow recipes, prompt templates, and the Blender scene cleanup demo kit: [`docs/workflows/README.md`](docs/workflows/README.md), [`docs/examples/blender-scene-cleanup-demo/README.md`](docs/examples/blender-scene-cleanup-demo/README.md)
 - First-run/bootstrap notes: [`rust/BOOTSTRAP.md`](rust/BOOTSTRAP.md)
 - Release checklist: [`rust/RELEASE.md`](rust/RELEASE.md)
 - Changelog: [`rust/CHANGELOG.md`](rust/CHANGELOG.md)

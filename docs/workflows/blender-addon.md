@@ -18,16 +18,23 @@ Attach one or more local roots such as:
 - local Blender API notes or copied docs
 - example add-ons you own or are allowed to inspect
 - project notes, issue lists, or design docs
+- the included demo kit at [`../examples/blender-scene-cleanup-demo/`](../examples/blender-scene-cleanup-demo/)
 
 Example:
 
 ```bash
 cd rust
 ./target/debug/claw --profile balanced \
-  --corpus ../docs \
-  --corpus ../examples \
-  prompt "Plan a Blender add-on for batch material cleanup"
+  --corpus ../docs/examples/blender-scene-cleanup-demo \
+  --corpus ../docs/prompts \
+  prompt "Use the attached Blender demo corpus to explain the add-on layout, the user workflow, and the next implementation slice."
 ```
+
+If you want a concrete starting point instead of a blank prompt, begin with:
+
+- [`../examples/blender-scene-cleanup-demo/brief.md`](../examples/blender-scene-cleanup-demo/brief.md)
+- [`../examples/blender-scene-cleanup-demo/manual-test-checklist.md`](../examples/blender-scene-cleanup-demo/manual-test-checklist.md)
+- [`../examples/blender-scene-cleanup-demo/addon/scene_cleanup_helper/`](../examples/blender-scene-cleanup-demo/addon/scene_cleanup_helper/)
 
 ## Recommended flow
 
@@ -97,6 +104,18 @@ After code generation, still do the real validation yourself:
 - test operators against sample scenes
 - check panel visibility and property persistence
 - verify packaging metadata and version compatibility
+
+The repo now includes a realistic manual checklist at [`../examples/blender-scene-cleanup-demo/manual-test-checklist.md`](../examples/blender-scene-cleanup-demo/manual-test-checklist.md).
+
+### 6) Run the lightweight coherence check
+
+Before claiming the workflow is in good shape, run the static validation that ships with this repo:
+
+```bash
+python3 tests/validate_blender_demo.py
+```
+
+This does **not** run Blender. It only verifies that the demo corpus exists, the illustrative add-on package compiles as Python, and the workflow docs point to the right assets.
 
 ## Suggested corpus contents
 
