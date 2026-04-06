@@ -7,6 +7,7 @@ archive/
 .claude/settings.local.json
 .claude/sessions/
 .claude.json
+.port_sessions/
 
 # Rust workspace local artifacts
 rust/target/

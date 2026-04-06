@@ -26,8 +26,8 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use api::{
     resolve_startup_auth_source, AnthropicClient, ApiError, AuthSource, ContentBlockDelta,
     InputContentBlock, InputMessage, MessageRequest, MessageResponse, OutputContentBlock,
-    PromptCache, ProviderClient, StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition,
-    ToolResultContentBlock,
+    PromptCache, ProviderChildExecutor, ProviderClient, StreamEvent as ApiStreamEvent, ToolChoice,
+    ToolDefinition, ToolResultContentBlock, WebEvidenceCollector,
 };
 
 use commands::{
@@ -1449,8 +1449,7 @@ struct CorpusAnswerExecutor {
 }
 
 struct ProviderCorpusAnswerBackend {
-    runtime: tokio::runtime::Runtime,
-    client: ProviderClient,
+    executor: ProviderChildExecutor,
     model: String,
 }
 
@@ -1485,28 +1484,20 @@ impl runtime::ChildSubqueryExecutor for CorpusAnswerExecutor {
     ) -> Result<runtime::ChildSubqueryOutput, runtime::RecursiveRuntimeError> {
         match &self.backend {
             CorpusAnswerBackend::Provider(provider) => {
-                provider.execute(request).or_else(|reason| {
-                    Ok(render_extractive_corpus_answer(
-                        request,
-                        Some(&reason),
-                        &provider.model,
-                    ))
-                })
+                runtime::ChildSubqueryExecutor::execute(&provider.executor, request).or_else(
+                    |error| {
+                        Ok(render_extractive_corpus_answer(
+                            request,
+                            Some(&format_provider_execution_fallback_reason(&error)),
+                            &provider.model,
+                        ))
+                    },
+                )
             }
             CorpusAnswerBackend::ExtractiveFallback { reason, model } => Ok(
                 render_extractive_corpus_answer(request, Some(reason), model),
             ),
         }
-    }
-}
-
-impl ProviderCorpusAnswerBackend {
-    fn execute(
-        &self,
-        request: &runtime::ChildSubqueryRequest,
-    ) -> Result<runtime::ChildSubqueryOutput, String> {
-        execute_provider_backed_corpus_answer(&self.runtime, &self.client, &self.model, request)
-            .map_err(|error| format_provider_execution_fallback_reason(&error))
     }
 }
 
@@ -1618,128 +1609,12 @@ fn build_corpus_answer_backend(
         ProviderClient::from_model_with_anthropic_auth(model, resolve_cli_auth_source().ok())
             .map_err(|error| format_backend_init_reason(model, &error))?
             .with_prompt_cache(PromptCache::new(&format!("{session_id}-corpus-answer")));
-    let runtime = tokio::runtime::Runtime::new().map_err(|error| {
-        format!("provider runtime initialization failed for model={model}: {error}")
-    })?;
+    let web_evidence_collector: WebEvidenceCollector = Arc::new(collect_minimal_web_evidence);
+    let executor = ProviderChildExecutor::new(client, model, web_evidence_collector)?;
     Ok(CorpusAnswerBackend::Provider(ProviderCorpusAnswerBackend {
-        runtime,
-        client,
+        executor,
         model: model.to_string(),
     }))
-}
-
-fn format_provider_execution_fallback_reason(error: &runtime::RecursiveRuntimeError) -> String {
-    match error {
-        runtime::RecursiveRuntimeError::ChildExecution(message) => {
-            format!("provider execution failed: {message}")
-        }
-        other => format!("provider execution failed: {other}"),
-    }
-}
-
-fn execute_provider_backed_corpus_answer(
-    runtime: &tokio::runtime::Runtime,
-    client: &ProviderClient,
-    model: &str,
-    request: &runtime::ChildSubqueryRequest,
-) -> Result<runtime::ChildSubqueryOutput, runtime::RecursiveRuntimeError> {
-    let response = runtime
-        .block_on(async {
-            client
-                .send_message(&MessageRequest {
-                    model: model.to_string(),
-                    max_tokens: max_tokens_for_model(model),
-                    messages: vec![InputMessage::user_text(request.prompt.clone())],
-                    system: Some(build_corpus_subquery_system_prompt(request)),
-                    tools: None,
-                    tool_choice: None,
-                    stream: false,
-                })
-                .await
-        })
-        .map_err(map_provider_api_error_to_recursive_error)?;
-
-    build_provider_child_output(model, request, response)
-}
-
-fn map_provider_api_error_to_recursive_error(error: ApiError) -> runtime::RecursiveRuntimeError {
-    runtime::RecursiveRuntimeError::ChildExecution(match error {
-        ApiError::MissingCredentials { provider, env_vars } => format!(
-            "missing {provider} credentials during child execution; set {}",
-            env_vars.join(" or ")
-        ),
-        ApiError::ExpiredOAuthToken => {
-            "saved OAuth token expired during child execution; re-authenticate and retry"
-                .to_string()
-        }
-        ApiError::Auth(message) => {
-            format!("provider auth failed during child execution: {message}")
-        }
-        other => other.to_string(),
-    })
-}
-
-fn build_corpus_subquery_system_prompt(request: &runtime::ChildSubqueryRequest) -> String {
-    let mut prompt = "You are a grounded corpus subquery worker. Answer the task using only the provided corpus slices. If the slices are insufficient, say what is missing briefly. Do not invent sources. Keep the answer concise and directly useful.".to_string();
-    match request.web_policy.mode {
-        runtime::WebAccessMode::Off => {
-            prompt.push_str(" Web research is disabled for this subquery, so keep the answer strictly local to the provided slices and do not imply any external verification.");
-        }
-        runtime::WebAccessMode::Ask => {
-            prompt.push_str(" External web research would require explicit approval for this subquery. Stay grounded in the provided slices; if fresh or external evidence is needed, say that approval is required before using the web.");
-        }
-        runtime::WebAccessMode::On => {
-            if request.web_research_query.is_some() {
-                prompt.push_str(" Limited web evidence may be attached separately for this subquery when the runtime has already decided escalation is warranted. Keep your answer explicit about what comes from the provided slices versus any externally fetched confirmation.");
-            } else {
-                prompt.push_str(" Web access is enabled in principle, but this subquery was not flagged for external fetches. Stay grounded in the provided slices and do not imply web verification.");
-            }
-        }
-    }
-    prompt
-}
-
-fn build_provider_child_output(
-    model: &str,
-    request: &runtime::ChildSubqueryRequest,
-    response: MessageResponse,
-) -> Result<runtime::ChildSubqueryOutput, runtime::RecursiveRuntimeError> {
-    let answer = extract_provider_answer_text(&response);
-    if answer.trim().is_empty() {
-        return Err(runtime::RecursiveRuntimeError::ChildExecution(format!(
-            "provider returned an empty child answer (request_id={})",
-            response.request_id.as_deref().unwrap_or("unknown")
-        )));
-    }
-
-    let web_evidence = collect_minimal_web_evidence(request)?;
-
-    Ok(runtime::ChildSubqueryOutput {
-        subquery_id: request.subquery_id.clone(),
-        answer,
-        citations: request
-            .slices
-            .iter()
-            .map(|slice| format!("{} ({})", slice.path, slice.chunk_id))
-            .collect(),
-        web_evidence,
-        prompt_tokens: response.usage.input_tokens,
-        completion_tokens: response.usage.output_tokens,
-        cost_usd: response.usage.estimated_cost_usd(model).total_cost_usd(),
-    })
-}
-
-fn extract_provider_answer_text(response: &MessageResponse) -> String {
-    response
-        .content
-        .iter()
-        .filter_map(|block| match block {
-            OutputContentBlock::Text { text } => Some(text.trim()),
-            _ => None,
-        })
-        .filter(|text: &&str| !text.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n")
 }
 
 fn collect_minimal_web_evidence(
@@ -1778,11 +1653,95 @@ fn collect_minimal_web_evidence(
         .collect())
 }
 
+fn format_provider_execution_fallback_reason(error: &runtime::RecursiveRuntimeError) -> String {
+    match error {
+        runtime::RecursiveRuntimeError::ChildExecution(message) => {
+            format!("provider execution failed: {message}")
+        }
+        other => format!("provider execution failed: {other}"),
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct RecursiveWebContext {
+    evidence: Vec<runtime::EvidenceRecord>,
+    note: Option<String>,
+}
+
+fn collect_recursive_web_context(request: &runtime::ChildSubqueryRequest) -> RecursiveWebContext {
+    match collect_minimal_web_evidence(request) {
+        Ok(evidence) => RecursiveWebContext {
+            evidence,
+            note: None,
+        },
+        Err(error) => RecursiveWebContext {
+            evidence: Vec::new(),
+            note: Some(error.to_string()),
+        },
+    }
+}
+
+fn build_corpus_subquery_system_prompt(
+    request: &runtime::ChildSubqueryRequest,
+    web_context: &RecursiveWebContext,
+) -> String {
+    let mut prompt = "You are a grounded corpus subquery worker. Answer the task using the provided corpus slices first. If separately supplied web evidence is present, you may use it only as external confirmation or freshness context. Be explicit about what comes from local corpus slices versus fetched web evidence. If the available evidence is insufficient, say what is missing briefly. Do not invent sources. Keep the answer concise and directly useful.".to_string();
+    match request.web_policy.mode {
+        runtime::WebAccessMode::Off => {
+            prompt.push_str(" Web research is disabled for this subquery, so keep the answer strictly local to the provided slices and do not imply any external verification.");
+        }
+        runtime::WebAccessMode::Ask => {
+            prompt.push_str(" External web research would require explicit approval for this subquery. Stay grounded in the provided slices; if fresh or external evidence is needed, say that approval is required before using the web.");
+        }
+        runtime::WebAccessMode::On => {
+            if !web_context.evidence.is_empty() {
+                prompt.push_str(" Limited web evidence is attached below because the runtime approved escalation for this subquery. Use it carefully, cite it as external evidence, and avoid overstating confidence if the fetched material is thin.");
+            } else if request.web_research_query.is_some() {
+                prompt.push_str(" Web escalation was approved for this subquery, but no fetched web evidence is attached. Stay honest about that and avoid implying successful external verification.");
+            } else {
+                prompt.push_str(" Web access is enabled in principle, but this subquery was not flagged for external fetches. Stay grounded in the provided slices and do not imply web verification.");
+            }
+        }
+    }
+    if let Some(note) = web_context.note.as_deref() {
+        prompt.push_str(" Runtime note: ");
+        prompt.push_str(note);
+    }
+    prompt
+}
+
+fn render_recursive_web_context(web_context: &RecursiveWebContext) -> Option<String> {
+    let mut sections = Vec::new();
+    if !web_context.evidence.is_empty() {
+        sections.push(format!(
+            "Web evidence:\n{}",
+            web_context
+                .evidence
+                .iter()
+                .enumerate()
+                .map(|(index, item)| format!(
+                    "- [W{}] {} — {}\n  {}",
+                    index + 1,
+                    item.title,
+                    item.locator,
+                    item.snippet
+                ))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    if let Some(note) = web_context.note.as_deref() {
+        sections.push(format!("Web execution note: {note}"));
+    }
+    (!sections.is_empty()).then(|| sections.join("\n"))
+}
+
 fn render_extractive_corpus_answer(
     request: &runtime::ChildSubqueryRequest,
     reason: Option<&str>,
     model: &str,
 ) -> runtime::ChildSubqueryOutput {
+    let web_context = collect_recursive_web_context(request);
     let mut answer = request
         .slices
         .iter()
@@ -1804,16 +1763,23 @@ fn render_extractive_corpus_answer(
         runtime::WebAccessMode::Ask => Some(
             "Web research would require approval for this subquery; response remains local-only until approved.",
         ),
-        runtime::WebAccessMode::On => Some(
-            "Web escalation was permitted for this subquery, but no direct web fetcher is available in this runtime path; external facts remain unverified.",
-        ),
+        runtime::WebAccessMode::On => {
+            if web_context.evidence.is_empty() {
+                Some("Web escalation was permitted for this subquery, but no external evidence was successfully attached; external facts remain unverified.")
+            } else {
+                Some("Web escalation was permitted for this subquery; any attached web evidence is presented separately from local corpus slices.")
+            }
+        }
     };
     if let Some(note) = web_policy_note {
         answer = format!("{note}\n{answer}");
     }
+    if let Some(rendered_web) = render_recursive_web_context(&web_context) {
+        answer = format!("{answer}\n\n{rendered_web}");
+    }
     if let Some(reason) = reason {
         answer = format!(
-            "Fallback: using an extractive local-only subquery answer because provider-backed execution is unavailable ({reason}; model={model}).\n{answer}"
+            "Fallback: using an extractive subquery answer because provider-backed execution is unavailable ({reason}; model={model}).\n{answer}"
         );
     }
     runtime::ChildSubqueryOutput {
@@ -1824,7 +1790,7 @@ fn render_extractive_corpus_answer(
             .iter()
             .map(|slice| slice.chunk_id.clone())
             .collect(),
-        web_evidence: collect_minimal_web_evidence(request).unwrap_or_default(),
+        web_evidence: web_context.evidence,
         prompt_tokens: u32::try_from(request.prompt.len()).unwrap_or(u32::MAX),
         completion_tokens: 0,
         cost_usd: 0.0,
@@ -7599,9 +7565,8 @@ UU conflicted.rs",
 #[cfg(test)]
 mod corpus_answer_tests {
     use super::{
-        build_corpus_subquery_system_prompt, build_provider_child_output,
-        collect_minimal_web_evidence, extract_provider_answer_text, format_backend_init_reason,
-        render_extractive_corpus_answer, resolve_corpus_answer_model,
+        collect_minimal_web_evidence, format_backend_init_reason, render_extractive_corpus_answer,
+        resolve_corpus_answer_model,
     };
     use api::{ApiError, MessageResponse, OutputContentBlock, Usage};
     use runtime::{ChildSubqueryRequest, RecursiveContextSlice, RuntimeBudget};
@@ -7735,22 +7700,6 @@ mod corpus_answer_tests {
     }
 
     #[test]
-    fn system_prompt_reflects_web_policy_mode() {
-        let mut ask_request = sample_request();
-        ask_request.web_policy.mode = runtime::WebAccessMode::Ask;
-        let ask_prompt = build_corpus_subquery_system_prompt(&ask_request);
-        assert!(ask_prompt.contains("require explicit approval"));
-
-        let mut on_request = sample_request();
-        on_request.web_policy.mode = runtime::WebAccessMode::On;
-        let on_prompt = build_corpus_subquery_system_prompt(&on_request);
-        assert!(on_prompt.contains("not flagged for external fetches"));
-
-        let off_prompt = build_corpus_subquery_system_prompt(&sample_request());
-        assert!(off_prompt.contains("Web research is disabled"));
-    }
-
-    #[test]
     fn backend_init_reason_surfaces_missing_credentials_cleanly() {
         let reason = format_backend_init_reason(
             "claude-sonnet-4-6",
@@ -7781,69 +7730,25 @@ mod corpus_answer_tests {
     }
 
     #[test]
-    fn provider_answer_text_ignores_non_text_blocks_and_joins_text() {
-        let response = MessageResponse {
-            id: "msg_123".to_string(),
-            kind: "message".to_string(),
-            role: "assistant".to_string(),
-            content: vec![
-                OutputContentBlock::Thinking {
-                    thinking: "internal".to_string(),
-                    signature: None,
-                },
-                OutputContentBlock::Text {
-                    text: "First grounded finding.".to_string(),
-                },
-                OutputContentBlock::Text {
-                    text: "Second grounded finding.".to_string(),
-                },
-            ],
-            model: "claude-sonnet-4-6".to_string(),
-            stop_reason: Some("end_turn".to_string()),
-            stop_sequence: None,
-            usage: Usage {
-                input_tokens: 10,
-                cache_creation_input_tokens: 0,
-                cache_read_input_tokens: 0,
-                output_tokens: 12,
-            },
-            request_id: Some("req_123".to_string()),
-        };
+    fn extractive_fallback_includes_attached_web_evidence_when_available() {
+        let _lock = env_lock();
+        let base_url = spawn_web_fixture_server();
+        std::env::set_var("CLAWD_WEB_SEARCH_BASE_URL", &base_url);
 
-        assert_eq!(
-            extract_provider_answer_text(&response),
-            "First grounded finding.\n\nSecond grounded finding."
+        let mut request = sample_request();
+        request.web_policy.mode = runtime::WebAccessMode::On;
+        request.web_policy.max_fetches = Some(1);
+        request.web_research_query = Some("latest fixture release".to_string());
+
+        let output = render_extractive_corpus_answer(
+            &request,
+            Some("missing provider auth"),
+            "claude-sonnet-4-6",
         );
-    }
-
-    #[test]
-    fn provider_child_output_errors_on_empty_text_with_request_id() {
-        let response = MessageResponse {
-            id: "msg_empty".to_string(),
-            kind: "message".to_string(),
-            role: "assistant".to_string(),
-            content: vec![OutputContentBlock::Thinking {
-                thinking: "internal".to_string(),
-                signature: None,
-            }],
-            model: "claude-sonnet-4-6".to_string(),
-            stop_reason: Some("end_turn".to_string()),
-            stop_sequence: None,
-            usage: Usage {
-                input_tokens: 10,
-                cache_creation_input_tokens: 0,
-                cache_read_input_tokens: 0,
-                output_tokens: 0,
-            },
-            request_id: Some("req_empty".to_string()),
-        };
-
-        let error = build_provider_child_output("claude-sonnet-4-6", &sample_request(), response)
-            .expect_err("empty provider output should error");
-        assert!(error
-            .to_string()
-            .contains("provider returned an empty child answer"));
-        assert!(error.to_string().contains("req_empty"));
+        assert!(output.answer.contains("Web evidence:"));
+        assert!(output.answer.contains("Example result"));
+        assert_eq!(output.web_evidence.len(), 1);
+        std::env::remove_var("CLAWD_WEB_SEARCH_BASE_URL");
     }
 }
 

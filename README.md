@@ -71,114 +71,74 @@ The most current implementation surface is the **Rust workspace** under [`rust/`
 
 ---
 
-## Porting Status
+## Stable branch and CI posture
 
-The main source tree is now Python-first.
+- **Stable branch:** `main`
+- **Primary CI:** `.github/workflows/rust-ci.yml`
+- **Pinned Rust toolchain:** [`rust/rust-toolchain.toml`](rust/rust-toolchain.toml) (`1.94.1` with `clippy` and `rustfmt`)
+- **Expected verification flow:**
+  1. `cd rust`
+  2. `cargo build --workspace --locked`
+  3. `cargo fmt --all --check`
+  4. `cargo clippy --workspace --all-targets --locked`
+  5. `cargo test --workspace --locked`
 
-- `src/` contains the active Python porting workspace
-- `tests/` verifies the current Python workspace
-- the exposed snapshot is no longer part of the tracked repository state
+If you are reviewing the repository remotely, treat the Rust workspace as the source of truth for build/test health.
 
-The current Python workspace is not yet a complete one-to-one replacement for the original system, but the primary implementation surface is now Python.
-
-## Why this rewrite exists
-
-I originally studied the exposed codebase to understand its harness, tool wiring, and agent workflow. After spending more time with the legal and ethical questions—and after reading the essay linked below—I did not want the exposed snapshot itself to remain the main tracked source tree.
-
-This repository now focuses on Python porting work instead.
-
-## Repository Layout
+## Repository layout
 
 ```text
 .
-├── src/                                # Python porting workspace
-│   ├── __init__.py
-│   ├── commands.py
-│   ├── main.py
-│   ├── models.py
-│   ├── port_manifest.py
-│   ├── query_engine.py
-│   ├── task.py
-│   └── tools.py
-├── tests/                              # Python verification
-├── assets/omx/                         # OmX workflow screenshots
-├── 2026-03-09-is-legal-the-same-as-legitimate-ai-reimplementation-and-the-erosion-of-copyleft.md
+├── rust/                               # primary runnable harness + CI target
+├── docs/                               # workflow recipes, prompts, examples
+├── src/                                # secondary Python parity/porting workspace
+├── tests/                              # Python-side verification for the porting workspace
+├── assets/                             # images and supporting assets
+├── FINAL_STATUS.md                     # honest maturity snapshot
+├── NEXT_ACTIONS.md                     # prioritized follow-up work
 └── README.md
 ```
 
-## Python Workspace Overview
+## Python workspace status
 
-The new Python `src/` tree currently provides:
+The Python tree under `src/` remains in the repository as parity/porting work and reference material, but it is **not** the primary production-readiness surface right now.
 
-- **`port_manifest.py`** — summarizes the current Python workspace structure
-- **`models.py`** — dataclasses for subsystems, modules, and backlog state
-- **`commands.py`** — Python-side command port metadata
-- **`tools.py`** — Python-side tool port metadata
-- **`query_engine.py`** — renders a Python porting summary from the active workspace
-- **`main.py`** — a CLI entrypoint for manifest and summary output
+Use it for historical comparison, parity exploration, and supplemental experimentation. Use `rust/` for the current harness, release posture, and CI expectations.
 
-## Quickstart
+## Remote reviewer quickstart
 
-Render the Python porting summary:
+If you just want to verify the current stable path on `main`:
 
 ```bash
-python3 -m src.main summary
+git clone https://github.com/tinameriana009/Openclaw.git
+cd Openclaw/rust
+cargo build --workspace --locked
+cargo test --workspace --locked
 ```
 
-Print the current Python workspace manifest:
+Then read:
 
-```bash
-python3 -m src.main manifest
-```
+- [`rust/README.md`](rust/README.md)
+- [`rust/RELEASE.md`](rust/RELEASE.md)
+- [`FINAL_STATUS.md`](FINAL_STATUS.md)
+- [`NEXT_ACTIONS.md`](NEXT_ACTIONS.md)
 
-List the current Python modules:
+## Development notes
 
-```bash
-python3 -m src.main subsystems --limit 16
-```
-
-Run verification:
-
-```bash
-python3 -m unittest discover -s tests -v
-```
-
-Run the parity audit against the local ignored archive (when present):
-
-```bash
-python3 -m src.main parity-audit
-```
-
-Inspect mirrored command/tool inventories:
-
-```bash
-python3 -m src.main commands --limit 10
-python3 -m src.main tools --limit 10
-```
-
-## Current Parity Checkpoint
-
-The port now mirrors the archived root-entry file surface, top-level subsystem names, and command/tool inventories much more closely than before. However, it is **not yet** a full runtime-equivalent replacement for the original TypeScript system; the Python tree still contains fewer executable runtime slices than the archived source.
-
-
-## Development Notes
-
-This repository has been heavily AI-assisted during exploration, refactoring, validation, and documentation work. The important thing for operators is the current state of the tree:
+This repository has been heavily AI-assisted during exploration, refactoring, validation, and documentation work. The important practical distinction is:
 
 - the **Rust workspace** under `rust/` is the main active harness surface
-- the **Python porting workspace** under `src/` remains part of the repository history and parity exploration
-- current docs are being updated to reflect the real runnable system rather than the older backstory-heavy presentation
+- the **Python workspace** under `src/` is retained, but secondary
+- the root docs should describe the runnable system honestly and point operators to the Rust path first
 
-## Community / Ownership
+## Community / ownership
 
 If you fork or continue this work, update the docs and repository metadata to match your own hosting and workflow.
 
 Current repository home:
 - <https://github.com/tinameriana009/Openclaw>
 
-## Ownership / Affiliation Disclaimer
-
-## Ownership / Affiliation Disclaimer
+## Ownership / affiliation disclaimer
 
 - This repository does **not** claim ownership of the original Claude Code source material.
 - This repository is **not affiliated with, endorsed by, or maintained by Anthropic**.
