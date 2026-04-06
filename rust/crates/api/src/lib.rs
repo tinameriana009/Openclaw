@@ -7,6 +7,7 @@ mod sse;
 mod types;
 
 pub use child::{
+    build_provider_child_executor, format_provider_child_init_reason,
     format_provider_execution_fallback_reason, ProviderChildExecutor, WebEvidenceCollector,
 };
 pub use client::{
