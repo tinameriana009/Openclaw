@@ -176,6 +176,36 @@ pub(super) fn effective_child_web_policy(
     }
 }
 
+pub(super) fn child_output_signature(output: &ChildSubqueryOutput) -> String {
+    let normalized_answer = output
+        .answer
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut citations = output.citations.clone();
+    citations.sort();
+    let mut web_ids = output
+        .web_evidence
+        .iter()
+        .map(|record| record.id.clone())
+        .collect::<Vec<_>>();
+    web_ids.sort();
+    format!(
+        "answer={normalized_answer}|citations={}|web={}",
+        citations.join(","),
+        web_ids.join(",")
+    )
+}
+
+pub(super) fn should_stop_for_convergence(child_outputs: &[ChildSubqueryOutput]) -> bool {
+    let Some((last, prior)) = child_outputs.split_last() else {
+        return false;
+    };
+    prior
+        .last()
+        .is_some_and(|previous| child_output_signature(previous) == child_output_signature(last))
+}
+
 pub(super) fn web_policy_label(mode: WebAccessMode) -> &'static str {
     match mode {
         WebAccessMode::Off => "off",

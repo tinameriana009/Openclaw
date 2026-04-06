@@ -18,8 +18,9 @@ pub use finalization::{export_trace, render_trace_summary};
 use finalization::{finalize_empty_stop, finalize_failed_run, finalize_successful_run};
 use helpers::{
     build_child_prompt, build_iteration_query, effective_child_web_policy, escalation_reason_label,
-    map_chunk, mode_label, next_iteration_stop_reason, now_ms, push_trace_event, slice_text,
-    task_mentions_freshness, task_requests_web, web_access_decision_label, web_policy_label,
+    map_chunk, mode_label, next_iteration_stop_reason, now_ms, push_trace_event,
+    should_stop_for_convergence, slice_text, task_mentions_freshness, task_requests_web,
+    web_access_decision_label, web_policy_label,
 };
 use telemetry::SessionTracer;
 pub use types::*;
@@ -325,7 +326,7 @@ where
                     stop_reason = if child_outputs.is_empty() {
                         RecursiveStopReason::NoChildCapacity
                     } else {
-                        RecursiveStopReason::Completed
+                        RecursiveStopReason::NoNewContext
                     };
                     break;
                 }
@@ -456,6 +457,11 @@ where
             seen_chunk_ids.extend(artifacts.selected_chunk_ids);
             last_escalation = Some(artifacts.escalation);
             child_outputs.push(child_output);
+
+            if should_stop_for_convergence(&child_outputs) {
+                stop_reason = RecursiveStopReason::Converged;
+                break;
+            }
 
             if let Some(reason) = state
                 .budget
@@ -868,7 +874,7 @@ mod tests {
     }
 
     #[test]
-    fn iterative_run_consumes_multiple_rounds_until_novel_context_is_exhausted() {
+    fn iterative_run_stops_when_novel_context_is_exhausted() {
         let corpus = sample_corpus();
         let runtime = RecursiveConversationRuntime::new(&corpus, StubExecutor);
 
@@ -888,10 +894,7 @@ mod tests {
             )
             .expect("iterative run should succeed");
 
-        assert!(matches!(
-            result.stop_reason.as_str(),
-            "completed" | "no_new_context"
-        ));
+        assert_eq!(result.stop_reason, RecursiveStopReason::NoNewContext);
         assert_eq!(result.child_outputs.len(), 2);
         assert_eq!(result.usage.iterations, 2);
         assert_eq!(result.usage.subcalls, 2);
@@ -899,6 +902,33 @@ mod tests {
         let counters = result.trace.counters();
         assert_eq!(counters.retrieval_requests, 3);
         assert_eq!(counters.subqueries_completed, 2);
+    }
+
+    #[test]
+    fn repeated_child_results_are_treated_as_convergence() {
+        let corpus = sample_corpus();
+        let runtime = RecursiveConversationRuntime::new(&corpus, ConvergingExecutor);
+
+        let result = runtime
+            .run(
+                "session-1",
+                "task-converged",
+                "trace aggregation export hidden",
+                RuntimeBudget {
+                    max_depth: Some(2),
+                    max_iterations: Some(4),
+                    max_subcalls: Some(4),
+                    max_runtime_ms: Some(30_000),
+                    ..RuntimeBudget::default()
+                },
+                None,
+            )
+            .expect("run should stop on convergence");
+
+        assert_eq!(result.stop_reason, RecursiveStopReason::Converged);
+        assert_eq!(result.child_outputs.len(), 2);
+        assert_eq!(result.usage.iterations, 2);
+        assert_eq!(result.usage.subcalls, 2);
     }
 
     #[test]
@@ -1077,6 +1107,25 @@ mod tests {
         }
     }
 
+    struct ConvergingExecutor;
+
+    impl ChildSubqueryExecutor for ConvergingExecutor {
+        fn execute(
+            &self,
+            request: &ChildSubqueryRequest,
+        ) -> Result<ChildSubqueryOutput, RecursiveRuntimeError> {
+            Ok(ChildSubqueryOutput {
+                subquery_id: request.subquery_id.clone(),
+                answer: "stable answer".to_string(),
+                citations: vec!["stable-citation".to_string()],
+                web_evidence: Vec::new(),
+                prompt_tokens: 15,
+                completion_tokens: 5,
+                cost_usd: 0.0,
+            })
+        }
+    }
+
     struct WebStubExecutor;
 
     impl ChildSubqueryExecutor for WebStubExecutor {
@@ -1173,9 +1222,7 @@ mod tests {
 
         println!("FINAL ANSWER:\n{}", result.final_answer);
         assert!(result.final_answer.contains("Web sources"));
-        assert!(result
-            .final_answer
-            .contains("[W1] Example release notes"));
+        assert!(result.final_answer.contains("[W1] Example release notes"));
         assert!(result
             .trace
             .events
