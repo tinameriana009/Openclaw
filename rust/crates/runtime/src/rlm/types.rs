@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::budget::{BudgetStopReason, RuntimeBudget, RuntimeBudgetUsage};
 use crate::corpus::{CorpusManifest, RetrievalResult};
@@ -137,6 +138,7 @@ pub struct ChildSubqueryOutput {
     pub answer: String,
     pub citations: Vec<String>,
     pub web_evidence: Vec<EvidenceRecord>,
+    pub web_execution_note: Option<String>,
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub cost_usd: f64,
@@ -159,6 +161,59 @@ pub trait ChildSubqueryExecutor {
         &self,
         request: &ChildSubqueryRequest,
     ) -> Result<ChildSubqueryOutput, RecursiveRuntimeError>;
+}
+
+pub type ChildExecutionFallbackFormatter =
+    Arc<dyn Fn(&RecursiveRuntimeError) -> String + Send + Sync>;
+pub type ChildExecutionFallbackRenderer =
+    Arc<dyn Fn(&ChildSubqueryRequest, &str) -> ChildSubqueryOutput + Send + Sync>;
+
+pub struct FallbackChildSubqueryExecutor<E> {
+    primary: E,
+    model: String,
+    unavailable_reason: Arc<dyn Fn() -> Option<String> + Send + Sync>,
+    error_formatter: ChildExecutionFallbackFormatter,
+    fallback_renderer: ChildExecutionFallbackRenderer,
+}
+
+impl<E> FallbackChildSubqueryExecutor<E> {
+    #[must_use]
+    pub fn new(
+        primary: E,
+        model: impl Into<String>,
+        unavailable_reason: Arc<dyn Fn() -> Option<String> + Send + Sync>,
+        error_formatter: ChildExecutionFallbackFormatter,
+        fallback_renderer: ChildExecutionFallbackRenderer,
+    ) -> Self {
+        Self {
+            primary,
+            model: model.into(),
+            unavailable_reason,
+            error_formatter,
+            fallback_renderer,
+        }
+    }
+
+    #[must_use]
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+}
+
+impl<E> ChildSubqueryExecutor for FallbackChildSubqueryExecutor<E>
+where
+    E: ChildSubqueryExecutor,
+{
+    fn execute(
+        &self,
+        request: &ChildSubqueryRequest,
+    ) -> Result<ChildSubqueryOutput, RecursiveRuntimeError> {
+        self.primary.execute(request).or_else(|error| {
+            let reason =
+                (self.unavailable_reason)().unwrap_or_else(|| (self.error_formatter)(&error));
+            Ok((self.fallback_renderer)(request, &reason))
+        })
+    }
 }
 
 pub trait ChildOutputAggregator {

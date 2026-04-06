@@ -87,6 +87,14 @@ fn format_recursive_answer(
             escalation_reason_label(escalation.reason)
         ));
     }
+    for note in child_outputs
+        .iter()
+        .filter_map(|output| output.web_execution_note.as_deref())
+    {
+        if !gaps.iter().any(|existing| existing == note) {
+            gaps.push(note.to_string());
+        }
+    }
     let confidence = ConfidenceNote {
         level: if local_summary.total_hits >= 3 {
             ConfidenceLevel::High

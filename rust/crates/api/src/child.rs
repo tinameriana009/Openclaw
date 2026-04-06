@@ -322,6 +322,8 @@ fn build_provider_child_output(
         answer.push_str(note);
     }
 
+    let web_execution_note = web_context.note.clone();
+
     Ok(ChildSubqueryOutput {
         subquery_id: request.subquery_id.clone(),
         answer,
@@ -331,6 +333,7 @@ fn build_provider_child_output(
             .map(|slice| format!("{} ({})", slice.path, slice.chunk_id))
             .collect(),
         web_evidence: web_context.evidence,
+        web_execution_note,
         prompt_tokens: response.usage.input_tokens,
         completion_tokens: response.usage.output_tokens,
         cost_usd: response.usage.estimated_cost_usd(model).total_cost_usd(),
@@ -390,6 +393,10 @@ pub fn render_extractive_child_answer(
             "Fallback: using an extractive local-only subquery answer because provider-backed execution is unavailable ({reason}; model={model}).\n{answer}"
         );
     }
+    let web_execution_note = web_context
+        .note
+        .clone()
+        .or_else(|| web_policy_note.map(str::to_string));
     ChildSubqueryOutput {
         subquery_id: request.subquery_id.clone(),
         answer,
@@ -399,6 +406,7 @@ pub fn render_extractive_child_answer(
             .map(|slice| slice.chunk_id.clone())
             .collect(),
         web_evidence: web_context.evidence,
+        web_execution_note,
         prompt_tokens: u32::try_from(request.prompt.len()).unwrap_or(u32::MAX),
         completion_tokens: 0,
         cost_usd: 0.0,

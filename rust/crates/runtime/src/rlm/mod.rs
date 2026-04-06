@@ -8,9 +8,9 @@ use std::path::Path;
 use crate::budget::{BudgetSliceRequest, RuntimeBudget, RuntimeBudgetUsage};
 use crate::corpus::{search_corpus_manifest, CorpusManifest, RetrievalHit, RetrievalResult};
 use crate::hybrid::{
-    evaluate_web_escalation, is_local_evidence_weak, summarize_local_evidence,
-    web_evidence_trace_event, EscalationHeuristicInput, EscalationReason, WebAccessDecision,
-    WebAccessMode, WebPolicy,
+    evaluate_web_escalation, is_local_evidence_weak, local_evidence_trace_event,
+    summarize_local_evidence, web_evidence_trace_event, EscalationHeuristicInput, EscalationReason,
+    WebAccessDecision, WebAccessMode, WebPolicy,
 };
 use crate::json::JsonValue;
 use crate::trace::{TraceEventType, TraceFinalStatus, TraceLedger};
@@ -422,6 +422,34 @@ where
                                 && web_evidence_count == 0,
                         ),
                     ),
+                    (
+                        "webQuery".to_string(),
+                        request
+                            .web_research_query
+                            .clone()
+                            .map(JsonValue::String)
+                            .unwrap_or(JsonValue::Null),
+                    ),
+                    (
+                        "webExecutionNote".to_string(),
+                        child_output
+                            .web_execution_note
+                            .clone()
+                            .map(JsonValue::String)
+                            .unwrap_or(JsonValue::Null),
+                    ),
+                    (
+                        "webEscalationDecision".to_string(),
+                        JsonValue::String(
+                            web_access_decision_label(artifacts.escalation.decision).to_string(),
+                        ),
+                    ),
+                    (
+                        "webEscalationReason".to_string(),
+                        JsonValue::String(
+                            escalation_reason_label(artifacts.escalation.reason).to_string(),
+                        ),
+                    ),
                 ]),
             );
 
@@ -509,21 +537,13 @@ where
             ]),
         );
         let retrieval = self.corpus_search(&query, 6);
-        push_trace_event(
-            trace,
-            TraceEventType::RetrievalCompleted,
-            BTreeMap::from([
-                ("query".to_string(), JsonValue::String(query)),
-                (
-                    "iteration".to_string(),
-                    JsonValue::Number(i64::from(iteration)),
-                ),
-                (
-                    "hitCount".to_string(),
-                    JsonValue::Number(i64::try_from(retrieval.hits.len()).unwrap_or(i64::MAX)),
-                ),
-            ]),
+        let sequence = u32::try_from(trace.events.len() + 1).unwrap_or(u32::MAX);
+        let mut retrieval_event = local_evidence_trace_event(sequence, now_ms(), &retrieval);
+        retrieval_event.data.insert(
+            "iteration".to_string(),
+            JsonValue::Number(i64::from(iteration)),
         );
+        trace.events.push(retrieval_event);
 
         let selected_chunk_ids = select_diverse_chunk_ids(&retrieval.hits, seen_chunk_ids, 3);
         if selected_chunk_ids.is_empty() {
@@ -634,6 +654,7 @@ mod tests {
                     .map(|slice| slice.chunk_id.clone())
                     .collect(),
                 web_evidence: Vec::new(),
+                web_execution_note: None,
                 prompt_tokens: 120,
                 completion_tokens: 40,
                 cost_usd: 0.02,
@@ -662,6 +683,7 @@ mod tests {
                 answer: "first child succeeded".to_string(),
                 citations: vec![request.slices[0].chunk_id.clone()],
                 web_evidence: Vec::new(),
+                web_execution_note: None,
                 prompt_tokens: 80,
                 completion_tokens: 20,
                 cost_usd: 0.01,
@@ -1135,6 +1157,11 @@ mod tests {
                     .map(|slice| slice.chunk_id.clone())
                     .collect(),
                 web_evidence: Vec::new(),
+                web_execution_note: Some(format!(
+                    "captured executor ran with web mode {} and query {:?}",
+                    web_policy_label(request.web_policy.mode),
+                    request.web_research_query
+                )),
                 prompt_tokens: 20,
                 completion_tokens: 10,
                 cost_usd: 0.0,
@@ -1154,6 +1181,7 @@ mod tests {
                 answer: "stable answer".to_string(),
                 citations: vec!["stable-citation".to_string()],
                 web_evidence: Vec::new(),
+                web_execution_note: None,
                 prompt_tokens: 15,
                 completion_tokens: 5,
                 cost_usd: 0.0,
@@ -1182,6 +1210,7 @@ mod tests {
                     score: None,
                     metadata: BTreeMap::new(),
                 }],
+                web_execution_note: Some("attached bounded external evidence".to_string()),
                 prompt_tokens: 10,
                 completion_tokens: 5,
                 cost_usd: 0.0,
@@ -1229,6 +1258,12 @@ mod tests {
             .events
             .iter()
             .any(|event| event.event_type == TraceEventType::WebEscalationStarted));
+        assert!(result.trace.events.iter().any(|event| {
+            event.event_type == TraceEventType::RetrievalCompleted
+                && event.data.get("evidenceKind")
+                    == Some(&JsonValue::String("local".to_string()))
+                && matches!(event.data.get("records"), Some(JsonValue::Array(records)) if !records.is_empty())
+        }));
     }
 
     #[test]
@@ -1258,10 +1293,18 @@ mod tests {
         assert!(result
             .final_answer
             .contains("no web evidence was attached by the child executor"));
+        assert!(result
+            .final_answer
+            .contains("captured executor ran with web mode on"));
         assert!(result.trace.events.iter().any(|event| {
             event.event_type == TraceEventType::SubqueryCompleted
                 && event.data.get("webEvidenceCount") == Some(&JsonValue::Number(0))
                 && event.data.get("webCollectionDegraded") == Some(&JsonValue::Bool(true))
+                && event.data.get("webQuery")
+                    == Some(&JsonValue::String(
+                        "search the web for the latest hidden behavior".to_string()
+                    ))
+                && matches!(event.data.get("webExecutionNote"), Some(JsonValue::String(note)) if note.contains("captured executor ran with web mode on"))
         }));
     }
 
@@ -1319,5 +1362,91 @@ mod tests {
         assert_eq!(result.stop_reason, RecursiveStopReason::DepthCap);
         assert!(result.child_outputs.is_empty());
         assert_eq!(result.trace.final_status, TraceFinalStatus::BudgetExceeded);
+    }
+
+    #[test]
+    fn fallback_child_executor_uses_unavailable_reason_when_present() {
+        let request = ChildSubqueryRequest {
+            subquery_id: "subq-fallback".to_string(),
+            prompt: "summarize".to_string(),
+            slices: Vec::new(),
+            budget: RuntimeBudget::default(),
+            web_policy: WebPolicy {
+                mode: WebAccessMode::Off,
+                max_fetches: Some(0),
+            },
+            web_research_query: None,
+        };
+        let executor = FallbackChildSubqueryExecutor::new(
+            AlwaysFailExecutor,
+            "claude-sonnet-4-6",
+            std::sync::Arc::new(|| Some("backend unavailable".to_string())),
+            std::sync::Arc::new(|error| format!("formatted: {error}")),
+            std::sync::Arc::new(|request, reason| ChildSubqueryOutput {
+                subquery_id: request.subquery_id.clone(),
+                answer: format!("fallback via {reason}"),
+                citations: Vec::new(),
+                web_evidence: Vec::new(),
+                web_execution_note: None,
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                cost_usd: 0.0,
+            }),
+        );
+
+        let output = executor
+            .execute(&request)
+            .expect("fallback wrapper should recover");
+        assert_eq!(executor.model(), "claude-sonnet-4-6");
+        assert_eq!(output.answer, "fallback via backend unavailable");
+    }
+
+    #[test]
+    fn fallback_child_executor_formats_runtime_error_when_backend_reason_absent() {
+        let request = ChildSubqueryRequest {
+            subquery_id: "subq-fallback".to_string(),
+            prompt: "summarize".to_string(),
+            slices: Vec::new(),
+            budget: RuntimeBudget::default(),
+            web_policy: WebPolicy {
+                mode: WebAccessMode::Off,
+                max_fetches: Some(0),
+            },
+            web_research_query: None,
+        };
+        let executor = FallbackChildSubqueryExecutor::new(
+            AlwaysFailExecutor,
+            "claude-sonnet-4-6",
+            std::sync::Arc::new(|| None),
+            std::sync::Arc::new(|error| format!("formatted: {error}")),
+            std::sync::Arc::new(|request, reason| ChildSubqueryOutput {
+                subquery_id: request.subquery_id.clone(),
+                answer: reason.to_string(),
+                citations: Vec::new(),
+                web_evidence: Vec::new(),
+                web_execution_note: None,
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                cost_usd: 0.0,
+            }),
+        );
+
+        let output = executor
+            .execute(&request)
+            .expect("fallback wrapper should recover");
+        assert_eq!(output.answer, "formatted: child blew up");
+    }
+
+    struct AlwaysFailExecutor;
+
+    impl ChildSubqueryExecutor for AlwaysFailExecutor {
+        fn execute(
+            &self,
+            _request: &ChildSubqueryRequest,
+        ) -> Result<ChildSubqueryOutput, RecursiveRuntimeError> {
+            Err(RecursiveRuntimeError::ChildExecution(
+                "child blew up".to_string(),
+            ))
+        }
     }
 }

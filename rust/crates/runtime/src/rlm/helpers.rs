@@ -191,9 +191,10 @@ pub(super) fn child_output_signature(output: &ChildSubqueryOutput) -> String {
         .collect::<Vec<_>>();
     web_ids.sort();
     format!(
-        "answer={normalized_answer}|citations={}|web={}",
+        "answer={normalized_answer}|citations={}|web={}|web_note={}",
         citations.join(","),
-        web_ids.join(",")
+        web_ids.join(","),
+        output.web_execution_note.as_deref().unwrap_or("")
     )
 }
 

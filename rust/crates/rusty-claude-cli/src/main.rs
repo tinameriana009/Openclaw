@@ -1447,7 +1447,7 @@ fn run_corpus_command(
 }
 
 struct CorpusAnswerExecutor {
-    backend: ProviderChildBackend,
+    backend: runtime::FallbackChildSubqueryExecutor<ProviderChildBackend>,
 }
 
 impl CorpusAnswerExecutor {
@@ -1457,10 +1457,24 @@ impl CorpusAnswerExecutor {
         active_model: Option<&str>,
     ) -> Self {
         let resolved_model = resolve_corpus_answer_model(cwd, active_model);
+        let backend =
+            build_corpus_answer_backend(session_id.unwrap_or("corpus-cli"), &resolved_model);
+        let model = backend.model().to_string();
+        let unavailable_reason = backend.unavailable_reason().map(ToOwned::to_owned);
         Self {
-            backend: build_corpus_answer_backend(
-                session_id.unwrap_or("corpus-cli"),
-                &resolved_model,
+            backend: runtime::FallbackChildSubqueryExecutor::new(
+                backend,
+                model.clone(),
+                Arc::new(move || unavailable_reason.clone()),
+                Arc::new(format_provider_execution_fallback_reason),
+                Arc::new(move |request, reason| {
+                    render_extractive_child_answer(
+                        request,
+                        Some(reason),
+                        &model,
+                        &collect_minimal_web_evidence,
+                    )
+                }),
             ),
         }
     }
@@ -1471,19 +1485,7 @@ impl runtime::ChildSubqueryExecutor for CorpusAnswerExecutor {
         &self,
         request: &runtime::ChildSubqueryRequest,
     ) -> Result<runtime::ChildSubqueryOutput, runtime::RecursiveRuntimeError> {
-        runtime::ChildSubqueryExecutor::execute(&self.backend, request).or_else(|error| {
-            let fallback_reason = self
-                .backend
-                .unavailable_reason()
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| format_provider_execution_fallback_reason(&error));
-            Ok(render_extractive_child_answer(
-                request,
-                Some(&fallback_reason),
-                self.backend.model(),
-                &collect_minimal_web_evidence,
-            ))
-        })
+        self.backend.execute(request)
     }
 }
 

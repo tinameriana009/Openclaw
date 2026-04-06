@@ -104,11 +104,12 @@ pub use remote::{
     DEFAULT_SESSION_TOKEN_PATH, DEFAULT_SYSTEM_CA_BUNDLE, NO_PROXY_HOSTS, UPSTREAM_PROXY_ENV_KEYS,
 };
 pub use rlm::{
-    export_trace, render_trace_summary, ChildOutputAggregator, ChildSubqueryExecutor,
-    ChildSubqueryOutput, ChildSubqueryRequest, DefaultChildOutputAggregator, RecursiveContextSlice,
-    RecursiveConversationRuntime, RecursiveCorpusPeekResult, RecursiveExecutionMode,
-    RecursiveExecutionResult, RecursiveIterationState, RecursiveRuntimeError,
-    RecursiveRuntimeState, RecursiveStopReason,
+    export_trace, render_trace_summary, ChildExecutionFallbackFormatter,
+    ChildExecutionFallbackRenderer, ChildOutputAggregator, ChildSubqueryExecutor,
+    ChildSubqueryOutput, ChildSubqueryRequest, DefaultChildOutputAggregator,
+    FallbackChildSubqueryExecutor, RecursiveContextSlice, RecursiveConversationRuntime,
+    RecursiveCorpusPeekResult, RecursiveExecutionMode, RecursiveExecutionResult,
+    RecursiveIterationState, RecursiveRuntimeError, RecursiveRuntimeState, RecursiveStopReason,
 };
 pub use sandbox::{
     build_linux_sandbox_command, detect_container_environment, detect_container_environment_from,
