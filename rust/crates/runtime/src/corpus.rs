@@ -1159,4 +1159,63 @@ mod tests {
             Some(&JsonValue::String("Title".to_string()))
         );
     }
+
+    #[test]
+    fn attach_skips_unsupported_binary_and_oversized_files() {
+        let cwd = temp_dir("workspace-skip-files");
+        let root = cwd.join("docs");
+        fs::create_dir_all(&root).expect("mkdir");
+        fs::write(root.join("guide.md"), "useful lexical content\n").expect("write markdown");
+        fs::write(root.join("binary.md"), b"abc\0def").expect("write binary markdown");
+        fs::write(root.join("image.png"), b"png").expect("write unsupported file");
+        fs::write(root.join("large.txt"), "x".repeat(64)).expect("write oversized text");
+
+        let manifest = attach_corpus(
+            &cwd,
+            &[root.clone()],
+            CorpusAttachOptions {
+                max_file_bytes: 32,
+                ..CorpusAttachOptions::default()
+            },
+        )
+        .expect("attach corpus");
+
+        let paths = manifest
+            .documents
+            .iter()
+            .map(|doc| doc.path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(paths, vec!["guide.md"]);
+        assert_eq!(manifest.document_count, 1);
+        assert_eq!(manifest.chunk_count, 1);
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_prefers_exact_phrase_match_over_partial_keyword_overlap() {
+        let cwd = temp_dir("workspace-ranking");
+        let root = cwd.join("docs");
+        fs::create_dir_all(&root).expect("mkdir");
+        fs::write(
+            root.join("exact.md"),
+            "# Guide\nlexical search guide\nmore filler text\n",
+        )
+        .expect("write exact");
+        fs::write(
+            root.join("partial.md"),
+            "# Guide\nlexical topics\nsearch notes\nguide appendix\n",
+        )
+        .expect("write partial");
+
+        let manifest = attach_corpus(&cwd, &[root.clone()], CorpusAttachOptions::default())
+            .expect("attach corpus");
+        let result = search_corpus(&cwd, &manifest.corpus_id, "lexical search guide", 5, None)
+            .expect("search");
+
+        assert_eq!(result.hits[0].path, "exact.md");
+        assert!(result.hits.iter().any(|hit| hit.path == "partial.md"));
+
+        let _ = fs::remove_dir_all(cwd);
+    }
 }
