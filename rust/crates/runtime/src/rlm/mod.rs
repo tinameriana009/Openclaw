@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::budget::{BudgetSliceRequest, RuntimeBudget, RuntimeBudgetUsage};
-use crate::corpus::{CorpusManifest, RetrievalHit, RetrievalResult};
+use crate::corpus::{search_corpus_manifest, CorpusManifest, RetrievalHit, RetrievalResult};
 use crate::hybrid::{
     evaluate_web_escalation, is_local_evidence_weak, summarize_local_evidence,
     web_evidence_trace_event, EscalationHeuristicInput, EscalationReason, WebAccessDecision,
@@ -19,7 +19,7 @@ use finalization::{finalize_empty_stop, finalize_failed_run, finalize_successful
 use helpers::{
     build_child_prompt, build_iteration_query, effective_child_web_policy, escalation_reason_label,
     map_chunk, mode_label, next_iteration_stop_reason, now_ms, push_trace_event,
-    should_stop_for_convergence, slice_text, task_mentions_freshness, task_requests_web,
+    should_stop_for_convergence, task_mentions_freshness, task_requests_web,
     web_access_decision_label, web_policy_label,
 };
 use telemetry::SessionTracer;
@@ -37,6 +37,38 @@ where
             aggregator: DefaultChildOutputAggregator,
         }
     }
+}
+
+fn select_diverse_chunk_ids(
+    hits: &[RetrievalHit],
+    seen_chunk_ids: &[String],
+    limit: usize,
+) -> Vec<String> {
+    let mut selected = Vec::new();
+    let mut selected_docs = std::collections::BTreeSet::new();
+
+    for hit in hits {
+        if selected.len() >= limit {
+            break;
+        }
+        if seen_chunk_ids.contains(&hit.chunk_id) || selected_docs.contains(&hit.document_id) {
+            continue;
+        }
+        selected_docs.insert(hit.document_id.clone());
+        selected.push(hit.chunk_id.clone());
+    }
+
+    for hit in hits {
+        if selected.len() >= limit {
+            break;
+        }
+        if seen_chunk_ids.contains(&hit.chunk_id) || selected.contains(&hit.chunk_id) {
+            continue;
+        }
+        selected.push(hit.chunk_id.clone());
+    }
+
+    selected
 }
 
 impl<'a, E, A> RecursiveConversationRuntime<'a, E, A>
@@ -87,73 +119,10 @@ where
 
     #[must_use]
     pub fn corpus_search(&self, query: &str, top_k: usize) -> RetrievalResult {
-        let lowered_terms = query
-            .split_whitespace()
-            .map(|term| term.to_ascii_lowercase())
-            .filter(|term| !term.is_empty())
-            .collect::<Vec<_>>();
         let started = now_ms();
-        let mut hits = Vec::new();
-
-        for document in &self.corpus.documents {
-            let lowered_path = document.path.to_ascii_lowercase();
-            let lowered_headings = document
-                .headings
-                .iter()
-                .map(|heading| heading.to_ascii_lowercase())
-                .collect::<Vec<_>>();
-            for chunk in &document.chunks {
-                let searchable_text = slice_text(&chunk.metadata, &chunk.text_preview);
-                let lowered_text = searchable_text.to_ascii_lowercase();
-                let mut score = 0.0_f64;
-                let mut reasons = Vec::new();
-                for term in &lowered_terms {
-                    if lowered_path.contains(term) {
-                        score += 3.0;
-                        reasons.push(format!("path:{term}"));
-                    }
-                    if lowered_headings
-                        .iter()
-                        .any(|heading| heading.contains(term))
-                    {
-                        score += 2.0;
-                        reasons.push(format!("heading:{term}"));
-                    }
-                    let content_hits = lowered_text.matches(term).count();
-                    if content_hits > 0 {
-                        score += content_hits as f64;
-                        reasons.push(format!("content:{term}x{content_hits}"));
-                    }
-                }
-                if score > 0.0 {
-                    hits.push(RetrievalHit {
-                        chunk_id: chunk.chunk_id.clone(),
-                        document_id: document.document_id.clone(),
-                        path: document.path.clone(),
-                        score,
-                        reason: reasons.join(","),
-                        preview: chunk.text_preview.clone(),
-                    });
-                }
-            }
-        }
-
-        hits.sort_by(|left, right| {
-            right
-                .score
-                .partial_cmp(&left.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| left.path.cmp(&right.path))
-                .then_with(|| left.chunk_id.cmp(&right.chunk_id))
-        });
-        hits.truncate(top_k);
-
-        RetrievalResult {
-            query: query.to_string(),
-            backend: self.corpus.backend,
-            elapsed_ms: now_ms().saturating_sub(started),
-            hits,
-        }
+        let mut result = search_corpus_manifest(self.corpus, query, top_k, None);
+        result.elapsed_ms = now_ms().saturating_sub(started);
+        result
     }
 
     pub fn select_slices(
@@ -543,13 +512,7 @@ where
             ]),
         );
 
-        let selected_chunk_ids = retrieval
-            .hits
-            .iter()
-            .map(|hit| hit.chunk_id.clone())
-            .filter(|chunk_id| !seen_chunk_ids.contains(chunk_id))
-            .take(3)
-            .collect::<Vec<_>>();
+        let selected_chunk_ids = select_diverse_chunk_ids(&retrieval.hits, seen_chunk_ids, 3);
         if selected_chunk_ids.is_empty() {
             return Ok(None);
         }
@@ -763,6 +726,43 @@ mod tests {
         std::env::temp_dir().join(format!("rlm-trace-{}", now_ms()))
     }
 
+    fn multi_doc_hits() -> Vec<RetrievalHit> {
+        vec![
+            RetrievalHit {
+                chunk_id: "chunk-a1".to_string(),
+                document_id: "doc-a".to_string(),
+                path: "docs/a.md".to_string(),
+                score: 12.0,
+                reason: "phrase:body".to_string(),
+                preview: "alpha".to_string(),
+            },
+            RetrievalHit {
+                chunk_id: "chunk-a2".to_string(),
+                document_id: "doc-a".to_string(),
+                path: "docs/a.md".to_string(),
+                score: 11.5,
+                reason: "coverage:3/3".to_string(),
+                preview: "alpha-2".to_string(),
+            },
+            RetrievalHit {
+                chunk_id: "chunk-b1".to_string(),
+                document_id: "doc-b".to_string(),
+                path: "docs/b.md".to_string(),
+                score: 10.0,
+                reason: "content:beta".to_string(),
+                preview: "beta".to_string(),
+            },
+            RetrievalHit {
+                chunk_id: "chunk-c1".to_string(),
+                document_id: "doc-c".to_string(),
+                path: "docs/c.md".to_string(),
+                score: 9.0,
+                reason: "content:gamma".to_string(),
+                preview: "gamma".to_string(),
+            },
+        ]
+    }
+
     #[test]
     fn mode_selection_prefers_rlm_when_depth_budget_and_corpus_exist() {
         let corpus = sample_corpus();
@@ -811,6 +811,16 @@ mod tests {
         assert_eq!(retrieval.hits.len(), 2);
         assert_eq!(retrieval.hits[0].chunk_id, expected_chunk_id);
         assert!(retrieval.hits[0].reason.contains("content:hiddenx1"));
+    }
+
+    #[test]
+    fn diverse_chunk_selection_prefers_distinct_documents_before_fill_in() {
+        let selected = select_diverse_chunk_ids(&multi_doc_hits(), &[], 3);
+        assert_eq!(selected, vec!["chunk-a1", "chunk-b1", "chunk-c1"]);
+
+        let selected_with_seen =
+            select_diverse_chunk_ids(&multi_doc_hits(), &["chunk-a1".to_string()], 3);
+        assert_eq!(selected_with_seen, vec!["chunk-a2", "chunk-b1", "chunk-c1"]);
     }
 
     #[test]

@@ -47,9 +47,9 @@ pub use conversation::{
 };
 pub use corpus::{
     attach_corpus, default_corpus_store_dir, inspect_corpus, list_corpora, load_corpus,
-    search_corpus, slice_corpus, CorpusAttachOptions, CorpusBackend, CorpusChunk, CorpusDocument,
-    CorpusDocumentSummary, CorpusError, CorpusInspectResult, CorpusKind, CorpusManifest,
-    CorpusSlice, RetrievalHit, RetrievalResult,
+    search_corpus, search_corpus_manifest, slice_corpus, CorpusAttachOptions, CorpusBackend,
+    CorpusChunk, CorpusDocument, CorpusDocumentSummary, CorpusError, CorpusInspectResult,
+    CorpusKind, CorpusManifest, CorpusSlice, RetrievalHit, RetrievalResult,
 };
 pub use file_ops::{
     edit_file, glob_search, grep_search, read_file, write_file, EditFileOutput, GlobSearchOutput,

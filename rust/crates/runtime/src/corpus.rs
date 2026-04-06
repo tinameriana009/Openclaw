@@ -573,16 +573,30 @@ pub fn search_corpus(
 ) -> Result<RetrievalResult, CorpusError> {
     let started = std::time::Instant::now();
     let manifest = load_corpus(cwd, corpus_id)?;
+    let mut result = search_corpus_manifest(&manifest, query, top_k, path_filter);
+    result.elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    Ok(result)
+}
+
+#[must_use]
+pub fn search_corpus_manifest(
+    manifest: &CorpusManifest,
+    query: &str,
+    top_k: usize,
+    path_filter: Option<&str>,
+) -> RetrievalResult {
     let tokens = query_tokens(query);
     if tokens.is_empty() {
-        return Ok(RetrievalResult {
+        return RetrievalResult {
             query: query.to_string(),
             backend: manifest.backend,
             elapsed_ms: 0,
             hits: Vec::new(),
-        });
+        };
     }
 
+    let normalized_query = normalize_for_match(query);
+    let filename_query = filename_like_query(&tokens);
     let mut hits = Vec::new();
     for doc in &manifest.documents {
         if let Some(filter) = path_filter {
@@ -592,6 +606,14 @@ pub fn search_corpus(
         }
         let path_lower = doc.path.to_ascii_lowercase();
         let heading_text = doc.headings.join(" ").to_ascii_lowercase();
+        let normalized_path = normalize_for_match(&doc.path);
+        let normalized_headings = normalize_for_match(&doc.headings.join(" "));
+        let basename_lower = Path::new(&doc.path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let normalized_basename = normalize_for_match(&basename_lower).replace(' ', "");
         for chunk in &doc.chunks {
             let body = chunk
                 .metadata
@@ -599,36 +621,90 @@ pub fn search_corpus(
                 .and_then(JsonValue::as_str)
                 .unwrap_or_default()
                 .to_ascii_lowercase();
+            let preview_lower = chunk.text_preview.to_ascii_lowercase();
+            let normalized_body = normalize_for_match(&body);
             let mut score = 0.0_f64;
             let mut reasons = Vec::new();
+            let mut matched_tokens = 0usize;
+            let mut in_order = true;
+            let mut cursor = 0usize;
             for token in &tokens {
                 let body_hits = count_occurrences(&body, token);
+                let preview_hits = count_occurrences(&preview_lower, token);
+                let path_hit = path_lower.contains(token);
+                let heading_hit = heading_text.contains(token);
+                if body_hits > 0 || preview_hits > 0 || path_hit || heading_hit {
+                    matched_tokens += 1;
+                }
                 if body_hits > 0 {
                     score += body_hits as f64 * 2.0;
                     reasons.push(format!("content:{token}x{body_hits}"));
                 }
-                if path_lower.contains(token) {
+                if preview_hits > body_hits {
+                    let preview_only_hits = preview_hits - body_hits;
+                    score += preview_only_hits as f64 * 0.75;
+                    reasons.push(format!("preview:{token}x{preview_only_hits}"));
+                }
+                if path_hit {
                     score += 3.0;
                     reasons.push(format!("path:{token}"));
                 }
-                if heading_text.contains(token) {
+                if heading_hit {
                     score += 2.5;
                     reasons.push(format!("heading:{token}"));
                 }
-                if chunk.text_preview.to_ascii_lowercase().contains(token) {
-                    score += 1.0;
+                if let Some(found) =
+                    normalized_body[cursor.min(normalized_body.len())..].find(token)
+                {
+                    cursor = cursor.saturating_add(found + token.len());
+                } else {
+                    in_order = false;
                 }
             }
-            if score > 0.0 {
-                hits.push(RetrievalHit {
-                    chunk_id: chunk.chunk_id.clone(),
-                    document_id: doc.document_id.clone(),
-                    path: doc.path.clone(),
-                    score,
-                    reason: reasons.join(", "),
-                    preview: chunk.text_preview.clone(),
-                });
+            if matched_tokens == 0 {
+                continue;
             }
+            if matched_tokens == tokens.len() {
+                score += 4.0;
+                reasons.push(format!("coverage:{matched_tokens}/{}", tokens.len()));
+            } else {
+                score += matched_tokens as f64 / tokens.len() as f64;
+                reasons.push(format!("coverage:{matched_tokens}/{}", tokens.len()));
+            }
+            if tokens.len() > 1 && in_order {
+                score += 2.0;
+                reasons.push("ordered-terms".to_string());
+            }
+            if !normalized_query.is_empty() {
+                if normalized_body.contains(&normalized_query) {
+                    score += 6.0;
+                    reasons.push("phrase:body".to_string());
+                }
+                if normalized_headings.contains(&normalized_query) {
+                    score += 4.0;
+                    reasons.push("phrase:heading".to_string());
+                }
+                if normalized_path.contains(&normalized_query) {
+                    score += 5.0;
+                    reasons.push("phrase:path".to_string());
+                }
+            }
+            if let Some(filename_query) = filename_query.as_deref() {
+                if basename_lower.contains(filename_query)
+                    || normalized_basename.contains(filename_query)
+                {
+                    score += 3.5;
+                    reasons.push("filename-match".to_string());
+                }
+            }
+            hits.push(RetrievalHit {
+                chunk_id: chunk.chunk_id.clone(),
+                document_id: doc.document_id.clone(),
+                path: doc.path.clone(),
+                score,
+                reason: reasons.join(", "),
+                preview: chunk.text_preview.clone(),
+            });
         }
     }
 
@@ -642,12 +718,12 @@ pub fn search_corpus(
     });
     hits.truncate(top_k.max(1));
 
-    Ok(RetrievalResult {
+    RetrievalResult {
         query: query.to_string(),
         backend: manifest.backend,
-        elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        elapsed_ms: 0,
         hits,
-    })
+    }
 }
 
 fn stable_corpus_id(roots: &[PathBuf]) -> String {
@@ -910,6 +986,26 @@ fn query_tokens(query: &str) -> Vec<String> {
 
 fn count_occurrences(haystack: &str, needle: &str) -> usize {
     haystack.match_indices(needle).count()
+}
+
+fn normalize_for_match(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn filename_like_query(tokens: &[String]) -> Option<String> {
+    (tokens.len() >= 2).then(|| tokens.join(" ").replace(' ', ""))
 }
 
 fn sanitize_id_component(value: &str) -> String {
@@ -1214,7 +1310,35 @@ mod tests {
             .expect("search");
 
         assert_eq!(result.hits[0].path, "exact.md");
+        assert!(result.hits[0].reason.contains("phrase:body"));
         assert!(result.hits.iter().any(|hit| hit.path == "partial.md"));
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_rewards_filename_matches_for_symbol_split_queries() {
+        let cwd = temp_dir("workspace-filename-ranking");
+        let root = cwd.join("docs");
+        fs::create_dir_all(&root).expect("mkdir");
+        fs::write(
+            root.join("auth_callback.md"),
+            "# Notes\nThis file explains the redirect flow.\n",
+        )
+        .expect("write filename match");
+        fs::write(
+            root.join("redirect.md"),
+            "# Notes\nauth details and callback steps are described separately here\n",
+        )
+        .expect("write content-only match");
+
+        let manifest = attach_corpus(&cwd, &[root.clone()], CorpusAttachOptions::default())
+            .expect("attach corpus");
+        let result =
+            search_corpus(&cwd, &manifest.corpus_id, "auth callback", 5, None).expect("search");
+
+        assert_eq!(result.hits[0].path, "auth_callback.md");
+        assert!(result.hits[0].reason.contains("filename-match"));
 
         let _ = fs::remove_dir_all(cwd);
     }
