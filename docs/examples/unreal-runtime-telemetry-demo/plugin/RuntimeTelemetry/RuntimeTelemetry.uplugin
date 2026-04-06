@@ -1,0 +1,17 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.1.0",
+  "FriendlyName": "Runtime Telemetry",
+  "Description": "Minimal runtime telemetry demo plugin used as a grounded local corpus example.",
+  "Category": "Debugging",
+  "EnabledByDefault": false,
+  "CanContainContent": false,
+  "Modules": [
+    {
+      "Name": "RuntimeTelemetry",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    }
+  ]
+}

@@ -69,3 +69,10 @@ If you want one especially concrete operator path, start with one of these demo 
 - [`../examples/repo-analysis-demo/brief.md`](../examples/repo-analysis-demo/brief.md)
 - [`../examples/repo-analysis-demo/manual-validation-checklist.md`](../examples/repo-analysis-demo/manual-validation-checklist.md)
 - [`../examples/repo-analysis-demo/trace-review-checklist.md`](../examples/repo-analysis-demo/trace-review-checklist.md)
+
+### Unreal runtime telemetry demo kit
+
+- [`../examples/unreal-runtime-telemetry-demo/README.md`](../examples/unreal-runtime-telemetry-demo/README.md)
+- [`../examples/unreal-runtime-telemetry-demo/brief.md`](../examples/unreal-runtime-telemetry-demo/brief.md)
+- [`../examples/unreal-runtime-telemetry-demo/manual-validation-checklist.md`](../examples/unreal-runtime-telemetry-demo/manual-validation-checklist.md)
+- [`../examples/unreal-runtime-telemetry-demo/trace-review-checklist.md`](../examples/unreal-runtime-telemetry-demo/trace-review-checklist.md)

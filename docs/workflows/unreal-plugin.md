@@ -27,16 +27,24 @@ Attach local corpus roots such as:
 - copied engine integration notes
 - existing plugins in your organization
 - API notes or code examples you are allowed to use
+- the included demo kit at [`../examples/unreal-runtime-telemetry-demo/`](../examples/unreal-runtime-telemetry-demo/)
 
 Example:
 
 ```bash
 cd rust
 ./target/debug/claw --profile deep \
-  --corpus ../YourGame \
-  --corpus ../docs \
-  prompt "Plan an Unreal plugin for runtime telemetry export"
+  --corpus ../docs/examples/unreal-runtime-telemetry-demo \
+  --corpus ../docs/prompts \
+  prompt "Use the attached Unreal demo corpus to plan a runtime telemetry plugin and explain the operator validation loop"
 ```
+
+If you want a concrete starting point instead of a blank prompt, begin with:
+
+- [`../examples/unreal-runtime-telemetry-demo/brief.md`](../examples/unreal-runtime-telemetry-demo/brief.md)
+- [`../examples/unreal-runtime-telemetry-demo/expected-findings.md`](../examples/unreal-runtime-telemetry-demo/expected-findings.md)
+- [`../examples/unreal-runtime-telemetry-demo/manual-validation-checklist.md`](../examples/unreal-runtime-telemetry-demo/manual-validation-checklist.md)
+- [`../examples/unreal-runtime-telemetry-demo/plugin/RuntimeTelemetry/`](../examples/unreal-runtime-telemetry-demo/plugin/RuntimeTelemetry/)
 
 ## Recommended flow
 
@@ -93,7 +101,17 @@ If the repo already contains Unreal code, ask grounded analysis questions before
 - `Find similar module startup patterns in the attached corpus.`
 - `List existing Build.cs dependency patterns relevant to this plugin.`
 
-### 5) Inspect trace artifacts when decisions matter
+### 5) Run the lightweight coherence check first
+
+Before handing the demo kit to someone else or asking the model to extend it, confirm the local assets are wired correctly:
+
+```bash
+python3 tests/validate_unreal_demo.py
+```
+
+That only checks static coherence. It does **not** launch Unreal or compile the plugin.
+
+### 6) Inspect trace artifacts when decisions matter
 
 For multi-step recommendations:
 
@@ -111,6 +129,25 @@ For better answers, attach:
 - build errors or UnrealHeaderTool output logs
 - internal conventions docs
 - design notes describing runtime/editor boundaries
+
+## Manual validation loop
+
+A believable Unreal workflow has to end in a human-run engine loop, not a plausible text answer.
+
+After the model answers:
+
+1. compare the response against the anchors in [`../examples/unreal-runtime-telemetry-demo/expected-findings.md`](../examples/unreal-runtime-telemetry-demo/expected-findings.md)
+2. run through [`../examples/unreal-runtime-telemetry-demo/manual-validation-checklist.md`](../examples/unreal-runtime-telemetry-demo/manual-validation-checklist.md)
+3. inspect the saved trace using [`../examples/unreal-runtime-telemetry-demo/trace-review-checklist.md`](../examples/unreal-runtime-telemetry-demo/trace-review-checklist.md) when the answer sounds overconfident
+4. re-prompt with exact compile errors, reflection issues, or missing Blueprint nodes instead of vague follow-ups
+
+You can also run a lightweight static asset check for the demo kit itself:
+
+```bash
+python3 tests/validate_unreal_demo.py
+```
+
+That validates the docs/examples wiring, not the plugin's real engine behavior.
 
 ## Good follow-up prompts
 
