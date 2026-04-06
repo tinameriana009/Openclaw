@@ -45,6 +45,17 @@ In short: this repo is no longer just a parity snapshot. It is evolving into a m
 
 ---
 
+## Current Status
+
+- **Maturity:** strong alpha / early pre-production candidate
+- **Best current use:** grounded local technical tasks over repos/docs/corpora
+- **Not yet:** a fully production-ready universal agent platform
+
+If you want the detailed snapshot and the most honest summary of strengths/limits, see:
+- [`FINAL_STATUS.md`](FINAL_STATUS.md)
+- [`NEXT_ACTIONS.md`](NEXT_ACTIONS.md)
+- [`RELEASE_SUMMARY.md`](RELEASE_SUMMARY.md)
+
 ## Current Focus
 
 This repository is focused on a practical agent harness with:
