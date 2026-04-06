@@ -24,10 +24,12 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use api::{
-    resolve_startup_auth_source, AnthropicClient, ApiError, AuthSource, ContentBlockDelta,
-    InputContentBlock, InputMessage, MessageRequest, MessageResponse, OutputContentBlock,
-    PromptCache, ProviderChildExecutor, ProviderClient, StreamEvent as ApiStreamEvent, ToolChoice,
-    ToolDefinition, ToolResultContentBlock, WebEvidenceCollector,
+    build_provider_child_executor, format_provider_child_init_reason,
+    format_provider_execution_fallback_reason, resolve_startup_auth_source, AnthropicClient,
+    ApiError, AuthSource, ContentBlockDelta, InputContentBlock, InputMessage, MessageRequest,
+    MessageResponse, OutputContentBlock, PromptCache, ProviderChildExecutor, ProviderClient,
+    StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition, ToolResultContentBlock,
+    WebEvidenceCollector,
 };
 
 use commands::{
@@ -1583,34 +1585,17 @@ fn resolve_corpus_answer_model(cwd: &Path, active_model: Option<&str>) -> String
     .to_string()
 }
 
-fn format_backend_init_reason(model: &str, error: &ApiError) -> String {
-    match error {
-        ApiError::MissingCredentials { provider, env_vars } => format!(
-            "provider child executor unavailable for model={model}: missing {provider} credentials (set {})",
-            env_vars.join(" or ")
-        ),
-        ApiError::ExpiredOAuthToken => format!(
-            "provider child executor unavailable for model={model}: saved OAuth token is expired; re-authenticate before retrying"
-        ),
-        ApiError::Auth(message) => format!(
-            "provider child executor unavailable for model={model}: auth error: {message}"
-        ),
-        other => format!(
-            "provider child executor unavailable for model={model}: {other}"
-        ),
-    }
-}
-
 fn build_corpus_answer_backend(
     session_id: &str,
     model: &str,
 ) -> Result<CorpusAnswerBackend, String> {
-    let client =
-        ProviderClient::from_model_with_anthropic_auth(model, resolve_cli_auth_source().ok())
-            .map_err(|error| format_backend_init_reason(model, &error))?
-            .with_prompt_cache(PromptCache::new(&format!("{session_id}-corpus-answer")));
     let web_evidence_collector: WebEvidenceCollector = Arc::new(collect_minimal_web_evidence);
-    let executor = ProviderChildExecutor::new(client, model, web_evidence_collector)?;
+    let executor = build_provider_child_executor(
+        session_id,
+        model,
+        resolve_cli_auth_source().ok(),
+        web_evidence_collector,
+    )?;
     Ok(CorpusAnswerBackend::Provider(ProviderCorpusAnswerBackend {
         executor,
         model: model.to_string(),
@@ -1651,15 +1636,6 @@ fn collect_minimal_web_evidence(
             })
         })
         .collect())
-}
-
-fn format_provider_execution_fallback_reason(error: &runtime::RecursiveRuntimeError) -> String {
-    match error {
-        runtime::RecursiveRuntimeError::ChildExecution(message) => {
-            format!("provider execution failed: {message}")
-        }
-        other => format!("provider execution failed: {other}"),
-    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -7565,10 +7541,11 @@ UU conflicted.rs",
 #[cfg(test)]
 mod corpus_answer_tests {
     use super::{
-        collect_minimal_web_evidence, format_backend_init_reason, render_extractive_corpus_answer,
-        resolve_corpus_answer_model,
+        collect_minimal_web_evidence, render_extractive_corpus_answer, resolve_corpus_answer_model,
     };
-    use api::{ApiError, MessageResponse, OutputContentBlock, Usage};
+    use api::{
+        format_provider_child_init_reason, ApiError, MessageResponse, OutputContentBlock, Usage,
+    };
     use runtime::{ChildSubqueryRequest, RecursiveContextSlice, RuntimeBudget};
     use std::collections::BTreeMap;
     use std::fs;
@@ -7701,7 +7678,7 @@ mod corpus_answer_tests {
 
     #[test]
     fn backend_init_reason_surfaces_missing_credentials_cleanly() {
-        let reason = format_backend_init_reason(
+        let reason = format_provider_child_init_reason(
             "claude-sonnet-4-6",
             &ApiError::missing_credentials("Anthropic", &["ANTHROPIC_API_KEY"]),
         );
