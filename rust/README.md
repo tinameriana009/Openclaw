@@ -322,6 +322,17 @@ rust/
     └── tools/
 ```
 
+## Domain workflow recipes
+
+If you want concrete operator playbooks instead of raw command reference, see:
+
+- [`../docs/workflows/README.md`](../docs/workflows/README.md)
+- [`../docs/workflows/blender-addon.md`](../docs/workflows/blender-addon.md)
+- [`../docs/workflows/unreal-plugin.md`](../docs/workflows/unreal-plugin.md)
+- [`../docs/workflows/repo-analysis.md`](../docs/workflows/repo-analysis.md)
+
+Those recipes stay within the currently supported harness surface: profiles, local corpus attachment, grounded `/corpus answer ...` flows, sessions, and trace inspection.
+
 ## Minimal operator checklist
 
 Use this sequence for a new machine:
