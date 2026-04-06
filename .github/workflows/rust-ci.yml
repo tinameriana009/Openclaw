@@ -30,12 +30,13 @@ env:
 
 jobs:
   fmt:
-    name: cargo fmt
+    name: cargo fmt --check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.94.1
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
@@ -43,14 +44,31 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
 
-  test-rusty-claude-cli:
-    name: cargo test -p rusty-claude-cli
+  clippy:
+    name: cargo clippy --workspace --all-targets
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.94.1
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust -> target
-      - name: Run crate tests
-        run: cargo test -p rusty-claude-cli
+      - name: Lint workspace
+        run: cargo clippy --workspace --all-targets --locked
+
+  test:
+    name: cargo test --workspace
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.94.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+      - name: Run workspace tests
+        run: cargo test --workspace --locked

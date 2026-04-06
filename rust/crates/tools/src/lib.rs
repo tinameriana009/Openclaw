@@ -11,12 +11,11 @@ use api::{
 use plugins::PluginTool;
 use reqwest::blocking::Client;
 use runtime::{
-    attach_corpus, default_corpus_store_dir, edit_file, execute_bash, glob_search, grep_search,
-    inspect_corpus, list_corpora, load_system_prompt, read_file, search_corpus, slice_corpus,
-    write_file, ApiClient, ApiRequest, AssistantEvent, BashCommandInput, ContentBlock,
-    ConversationMessage, ConversationRuntime, CorpusAttachOptions, GrepSearchInput, MessageRole,
-    PermissionMode, PermissionPolicy, PromptCacheEvent, RuntimeError, Session, ToolError,
-    ToolExecutor,
+    edit_file, execute_bash, glob_search, grep_search, inspect_corpus, load_system_prompt,
+    read_file, search_corpus, slice_corpus, write_file, ApiClient, ApiRequest, AssistantEvent,
+    BashCommandInput, ContentBlock, ConversationMessage, ConversationRuntime, GrepSearchInput,
+    MessageRole, PermissionMode, PermissionPolicy, PromptCacheEvent, RuntimeError, Session,
+    ToolError, ToolExecutor,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

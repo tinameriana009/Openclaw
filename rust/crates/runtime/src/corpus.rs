@@ -887,7 +887,7 @@ fn infer_corpus_kind(documents: &[CorpusDocument]) -> CorpusKind {
     let mut saw_code = false;
     for doc in documents {
         match doc.language.as_deref() {
-            Some("markdown") | Some("text") => saw_markdown = true,
+            Some("markdown" | "text") => saw_markdown = true,
             Some(_) => saw_code = true,
             None => {}
         }

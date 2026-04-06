@@ -252,7 +252,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         name: "corpus",
         aliases: &[],
         summary: "Inspect, attach, or search local corpora",
-        argument_hint: Some("[attach <path>|search <query>|slice <chunk-id>|inspect <corpus-id>]"),
+        argument_hint: Some("[attach <path>|search [<corpus-id> ::] <query>|answer [<corpus-id> ::] <query>|slice [<corpus-id> ::] <chunk-id>|inspect <corpus-id>]"),
         resume_supported: true,
     },
 ];
@@ -1746,7 +1746,7 @@ fn load_agents_from_roots(
         let mut root_agents = Vec::new();
         for entry in fs::read_dir(root)? {
             let entry = entry?;
-            if entry.path().extension().map_or(true, |ext| ext != "toml") {
+            if entry.path().extension().is_none_or(|ext| ext != "toml") {
                 continue;
             }
             let contents = fs::read_to_string(entry.path())?;
@@ -2818,7 +2818,7 @@ mod tests {
         assert!(help.contains("/agents [list|help]"));
         assert!(help.contains("/skills [list|install <path>|help]"));
         assert!(help.contains(
-            "/corpus [attach <path>|search <query>|slice <chunk-id>|inspect <corpus-id>]"
+            "/corpus [attach <path>|search [<corpus-id> ::] <query>|answer [<corpus-id> ::] <query>|slice [<corpus-id> ::] <chunk-id>|inspect <corpus-id>]"
         ));
         assert_eq!(slash_command_specs().len(), 29);
         assert_eq!(resume_supported_slash_commands().len(), 17);

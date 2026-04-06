@@ -2,6 +2,15 @@ __pycache__/
 archive/
 .omx/
 .clawd-agents/
-# Claude Code local artifacts
+
+# Claude / OpenClaw local artifacts
 .claude/settings.local.json
 .claude/sessions/
+.claude.json
+
+# Rust workspace local artifacts
+rust/target/
+rust/.claude/
+rust/.clawd-agents/
+rust/.clawd-todos.json
+rust/.sandbox-home/
