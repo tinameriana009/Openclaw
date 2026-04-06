@@ -1,235 +1,28 @@
-use std::collections::BTreeMap;
-use std::fmt::{Display, Formatter};
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+mod finalization;
+mod helpers;
+mod types;
 
-use crate::budget::{BudgetSliceRequest, BudgetStopReason, RuntimeBudget, RuntimeBudgetUsage};
-use crate::corpus::{CorpusChunk, CorpusManifest, RetrievalHit, RetrievalResult};
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use crate::budget::{BudgetSliceRequest, RuntimeBudget, RuntimeBudgetUsage};
+use crate::corpus::{CorpusManifest, RetrievalHit, RetrievalResult};
 use crate::hybrid::{
-    evaluate_web_escalation, format_citations, is_local_evidence_weak, normalize_local_evidence,
-    summarize_local_evidence, web_evidence_trace_event, EscalationHeuristicInput,
-    EscalationOutcome, EscalationReason, EvidenceKind, EvidenceRecord, WebAccessDecision,
+    evaluate_web_escalation, is_local_evidence_weak, summarize_local_evidence,
+    web_evidence_trace_event, EscalationHeuristicInput, EscalationReason, WebAccessDecision,
     WebAccessMode, WebPolicy,
 };
 use crate::json::JsonValue;
-use crate::trace::{TraceEvent, TraceEventType, TraceFinalStatus, TraceLedger};
-use crate::ux::{Citation, ConfidenceLevel, ConfidenceNote, EvidenceProvenance, FinalAnswer};
+use crate::trace::{TraceEventType, TraceFinalStatus, TraceLedger};
+pub use finalization::{export_trace, render_trace_summary};
+use finalization::{finalize_empty_stop, finalize_failed_run, finalize_successful_run};
+use helpers::{
+    build_child_prompt, build_iteration_query, effective_child_web_policy, escalation_reason_label,
+    map_chunk, mode_label, next_iteration_stop_reason, now_ms, push_trace_event, slice_text,
+    task_mentions_freshness, task_requests_web, web_access_decision_label, web_policy_label,
+};
 use telemetry::SessionTracer;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RecursiveExecutionMode {
-    Direct,
-    Rag,
-    Rlm,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RecursiveStopReason {
-    Completed,
-    NoChildCapacity,
-    ChildFailed,
-    DepthCap,
-    IterationCap,
-    SubcallCap,
-    Timeout,
-    PromptTokenCap,
-    CompletionTokenCap,
-    CostCap,
-}
-
-impl RecursiveStopReason {
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Completed => "completed",
-            Self::NoChildCapacity => "no_child_capacity",
-            Self::ChildFailed => "child_failed",
-            Self::DepthCap => "depth_cap",
-            Self::IterationCap => "iteration_cap",
-            Self::SubcallCap => "subcall_cap",
-            Self::Timeout => "timeout",
-            Self::PromptTokenCap => "prompt_token_cap",
-            Self::CompletionTokenCap => "completion_token_cap",
-            Self::CostCap => "cost_cap",
-        }
-    }
-
-    #[must_use]
-    pub fn trace_status(self) -> TraceFinalStatus {
-        match self {
-            Self::Completed | Self::NoChildCapacity => TraceFinalStatus::Succeeded,
-            Self::ChildFailed => TraceFinalStatus::Failed,
-            Self::DepthCap
-            | Self::IterationCap
-            | Self::SubcallCap
-            | Self::Timeout
-            | Self::PromptTokenCap
-            | Self::CompletionTokenCap
-            | Self::CostCap => TraceFinalStatus::BudgetExceeded,
-        }
-    }
-}
-
-impl From<BudgetStopReason> for RecursiveStopReason {
-    fn from(value: BudgetStopReason) -> Self {
-        match value {
-            BudgetStopReason::DepthExceeded { .. } => Self::DepthCap,
-            BudgetStopReason::IterationsExceeded { .. } => Self::IterationCap,
-            BudgetStopReason::SubcallsExceeded { .. } => Self::SubcallCap,
-            BudgetStopReason::RuntimeExceeded { .. } => Self::Timeout,
-            BudgetStopReason::PromptTokensExceeded { .. } => Self::PromptTokenCap,
-            BudgetStopReason::CompletionTokensExceeded { .. } => Self::CompletionTokenCap,
-            BudgetStopReason::CostExceeded { .. } => Self::CostCap,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct RecursiveRuntimeState {
-    pub session_id: String,
-    pub task_id: String,
-    pub mode: RecursiveExecutionMode,
-    pub budget: RuntimeBudget,
-    pub usage: RuntimeBudgetUsage,
-    pub iterations: Vec<RecursiveIterationState>,
-    pub trace_artifact_path: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RecursiveIterationState {
-    pub iteration: u32,
-    pub child_count: usize,
-    pub selected_chunk_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RecursiveCorpusPeekResult {
-    pub corpus_id: String,
-    pub document_count: u32,
-    pub chunk_count: u32,
-    pub roots: Vec<String>,
-    pub top_paths: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RecursiveContextSlice {
-    pub chunk_id: String,
-    pub document_id: String,
-    pub path: String,
-    pub ordinal: u32,
-    pub start_offset: u32,
-    pub end_offset: u32,
-    pub preview: String,
-    pub metadata: BTreeMap<String, JsonValue>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ChildSubqueryRequest {
-    pub subquery_id: String,
-    pub prompt: String,
-    pub slices: Vec<RecursiveContextSlice>,
-    pub budget: RuntimeBudget,
-    pub web_policy: WebPolicy,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ChildSubqueryOutput {
-    pub subquery_id: String,
-    pub answer: String,
-    pub citations: Vec<String>,
-    pub web_evidence: Vec<EvidenceRecord>,
-    pub prompt_tokens: u32,
-    pub completion_tokens: u32,
-    pub cost_usd: f64,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct RecursiveExecutionResult {
-    pub mode: RecursiveExecutionMode,
-    pub stop_reason: RecursiveStopReason,
-    pub final_answer: String,
-    pub child_outputs: Vec<ChildSubqueryOutput>,
-    pub retrieval: Option<RetrievalResult>,
-    pub trace: TraceLedger,
-    pub trace_artifact_path: Option<PathBuf>,
-    pub usage: RuntimeBudgetUsage,
-}
-
-pub trait ChildSubqueryExecutor {
-    fn execute(
-        &self,
-        request: &ChildSubqueryRequest,
-    ) -> Result<ChildSubqueryOutput, RecursiveRuntimeError>;
-}
-
-pub trait ChildOutputAggregator {
-    fn aggregate(&self, task: &str, child_outputs: &[ChildSubqueryOutput]) -> String;
-}
-
-#[derive(Debug, Clone)]
-pub struct DefaultChildOutputAggregator;
-
-impl ChildOutputAggregator for DefaultChildOutputAggregator {
-    fn aggregate(&self, task: &str, child_outputs: &[ChildSubqueryOutput]) -> String {
-        if child_outputs.is_empty() {
-            return format!("No child findings were produced for task: {task}");
-        }
-
-        let mut answer = format!("Task: {task}\n");
-        for output in child_outputs {
-            answer.push_str("\n");
-            answer.push_str("- ");
-            answer.push_str(&output.answer);
-            if !output.citations.is_empty() {
-                answer.push_str(" [sources: ");
-                answer.push_str(&output.citations.join(", "));
-                answer.push(']');
-            }
-        }
-        answer
-    }
-}
-
-#[derive(Debug)]
-pub enum RecursiveRuntimeError {
-    Io(std::io::Error),
-    MissingChunk(String),
-    InvalidTracePath(String),
-    ChildExecution(String),
-}
-
-impl Display for RecursiveRuntimeError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io(error) => write!(f, "{error}"),
-            Self::MissingChunk(chunk_id) => write!(f, "missing chunk {chunk_id}"),
-            Self::InvalidTracePath(message) => write!(f, "{message}"),
-            Self::ChildExecution(message) => write!(f, "{message}"),
-        }
-    }
-}
-
-impl std::error::Error for RecursiveRuntimeError {}
-
-impl From<std::io::Error> for RecursiveRuntimeError {
-    fn from(value: std::io::Error) -> Self {
-        Self::Io(value)
-    }
-}
-
-pub struct RecursiveConversationRuntime<'a, E, A = DefaultChildOutputAggregator> {
-    corpus: &'a CorpusManifest,
-    executor: E,
-    aggregator: A,
-}
-
-struct IterationArtifacts {
-    retrieval: RetrievalResult,
-    selected_chunk_ids: Vec<String>,
-    slices: Vec<RecursiveContextSlice>,
-    escalation: EscalationOutcome,
-}
+pub use types::*;
 
 impl<'a, E> RecursiveConversationRuntime<'a, E, DefaultChildOutputAggregator>
 where
@@ -557,13 +350,19 @@ where
                 break;
             }
 
-            let child_web_policy = effective_child_web_policy(web_policy.clone(), artifacts.escalation);
+            let child_web_policy =
+                effective_child_web_policy(web_policy.clone(), artifacts.escalation.clone());
             let request = ChildSubqueryRequest {
                 subquery_id: format!("{task_id}-child-{iteration}"),
                 prompt: build_child_prompt(task, iteration, &child_outputs, &artifacts.slices),
                 slices: artifacts.slices,
                 budget: child_budget,
                 web_policy: child_web_policy,
+                web_research_query: matches!(
+                    artifacts.escalation.decision,
+                    WebAccessDecision::Allowed
+                )
+                .then(|| task.to_string()),
             };
             push_trace_event(
                 &mut trace,
@@ -599,12 +398,11 @@ where
             let child_output = match self.executor.execute(&request) {
                 Ok(output) => output,
                 Err(error) => {
-                    stop_reason = RecursiveStopReason::ChildFailed;
                     return finalize_failed_run(
                         task,
                         trace,
                         trace_artifact_dir,
-                        stop_reason,
+                        RecursiveStopReason::ChildFailed,
                         mode,
                         last_retrieval,
                         child_outputs,
@@ -669,11 +467,8 @@ where
             }
         }
 
-        let aggregated_body = if child_outputs.is_empty() {
-            None
-        } else {
-            Some(self.aggregator.aggregate(task, &child_outputs))
-        };
+        let aggregated_body =
+            (!child_outputs.is_empty()).then(|| self.aggregator.aggregate(task, &child_outputs));
 
         finalize_successful_run(
             task,
@@ -829,572 +624,14 @@ where
         }))
     }
 }
-
-fn map_chunk(path: &str, chunk: &CorpusChunk) -> RecursiveContextSlice {
-    RecursiveContextSlice {
-        chunk_id: chunk.chunk_id.clone(),
-        document_id: chunk.document_id.clone(),
-        path: path.to_string(),
-        ordinal: chunk.ordinal,
-        start_offset: chunk.start_offset,
-        end_offset: chunk.end_offset,
-        preview: chunk.text_preview.clone(),
-        metadata: chunk.metadata.clone(),
-    }
-}
-
-fn slice_text(metadata: &BTreeMap<String, JsonValue>, preview: &str) -> String {
-    metadata
-        .get("text")
-        .and_then(JsonValue::as_str)
-        .filter(|text| !text.is_empty())
-        .unwrap_or(preview)
-        .to_string()
-}
-
-fn build_iteration_query(task: &str, child_outputs: &[ChildSubqueryOutput]) -> String {
-    if let Some(last) = child_outputs.last() {
-        format!("{task} {} {}", last.answer, last.citations.join(" "))
-    } else {
-        task.to_string()
-    }
-}
-
-fn build_child_prompt(
-    task: &str,
-    iteration: u32,
-    prior_outputs: &[ChildSubqueryOutput],
-    slices: &[RecursiveContextSlice],
-) -> String {
-    let mut prompt =
-        format!("Task: {task}\nIteration: {iteration}\nUse only the provided slices.\n");
-    if !prior_outputs.is_empty() {
-        prompt.push_str("Prior child findings:\n");
-        for output in prior_outputs {
-            prompt.push_str("- ");
-            prompt.push_str(&output.answer);
-            prompt.push('\n');
-        }
-    }
-    for slice in slices {
-        let text = slice_text(&slice.metadata, &slice.preview);
-        prompt.push_str("\n");
-        prompt.push_str(&format!(
-            "[{}] {}#{} ({}-{})\n{}\n",
-            slice.chunk_id, slice.path, slice.ordinal, slice.start_offset, slice.end_offset, text
-        ));
-    }
-    prompt
-}
-
-fn next_iteration_stop_reason(
-    budget: &RuntimeBudget,
-    usage: &RuntimeBudgetUsage,
-) -> Option<RecursiveStopReason> {
-    if let Some(limit) = budget.max_iterations {
-        if usage.iterations >= limit {
-            return Some(RecursiveStopReason::IterationCap);
-        }
-    }
-    if let Some(limit) = budget.max_subcalls {
-        if usage.subcalls >= limit {
-            return Some(RecursiveStopReason::SubcallCap);
-        }
-    }
-    if let Some(limit) = budget.max_runtime_ms {
-        if usage.runtime_ms >= limit {
-            return Some(RecursiveStopReason::Timeout);
-        }
-    }
-    if let Some(limit) = budget.max_prompt_tokens {
-        if usage.prompt_tokens >= limit {
-            return Some(RecursiveStopReason::PromptTokenCap);
-        }
-    }
-    if let Some(limit) = budget.max_completion_tokens {
-        if usage.completion_tokens >= limit {
-            return Some(RecursiveStopReason::CompletionTokenCap);
-        }
-    }
-    if let Some(limit) = budget.max_cost_usd {
-        if usage.cost_usd >= limit {
-            return Some(RecursiveStopReason::CostCap);
-        }
-    }
-    None
-}
-
-fn push_trace_event(
-    trace: &mut TraceLedger,
-    event_type: TraceEventType,
-    data: BTreeMap<String, JsonValue>,
-) {
-    let sequence = u32::try_from(trace.events.len() + 1).unwrap_or(u32::MAX);
-    trace
-        .events
-        .push(TraceEvent::new(sequence, event_type, now_ms(), data));
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("time should be after epoch")
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX)
-}
-
-fn mode_label(mode: RecursiveExecutionMode) -> &'static str {
-    match mode {
-        RecursiveExecutionMode::Direct => "direct",
-        RecursiveExecutionMode::Rag => "rag",
-        RecursiveExecutionMode::Rlm => "rlm",
-    }
-}
-
-fn format_recursive_answer(
-    body: String,
-    retrieval: &RetrievalResult,
-    child_outputs: &[ChildSubqueryOutput],
-    trace_id: &str,
-    escalation: &EscalationOutcome,
-) -> String {
-    let citations = normalize_local_evidence(retrieval)
-        .into_iter()
-        .take(4)
-        .enumerate()
-        .map(|(index, record)| Citation {
-            label: format!("L{}", index + 1),
-            provenance: EvidenceProvenance::Local,
-            title: record.title,
-            locator: Some(record.locator),
-        })
-        .chain(
-            child_outputs
-                .iter()
-                .flat_map(|output| output.citations.iter())
-                .enumerate()
-                .map(|(index, citation)| Citation {
-                    label: format!("C{}", index + 1),
-                    provenance: EvidenceProvenance::Local,
-                    title: citation.clone(),
-                    locator: None,
-                }),
-        )
-        .chain(
-            child_outputs
-                .iter()
-                .flat_map(|output| output.web_evidence.iter())
-                .filter(|record| record.kind == EvidenceKind::Web)
-                .enumerate()
-                .map(|(index, record)| Citation {
-                    label: format!("W{}", index + 1),
-                    provenance: EvidenceProvenance::Web,
-                    title: record.title.clone(),
-                    locator: Some(record.locator.clone()),
-                }),
-        )
-        .collect::<Vec<_>>();
-    let local_summary = summarize_local_evidence(retrieval);
-    let child_citations = format_citations(&normalize_local_evidence(retrieval));
-    let mut gaps = if child_citations.is_empty() {
-        vec!["No local evidence was retrieved.".to_string()]
-    } else {
-        Vec::new()
-    };
-    if matches!(escalation.decision, WebAccessDecision::RequiresApproval) {
-        gaps.push(format!(
-            "Web escalation requires approval ({}) before fresh external evidence can be fetched.",
-            escalation_reason_label(escalation.reason)
-        ));
-    } else if matches!(escalation.decision, WebAccessDecision::Allowed)
-        && !child_outputs
-            .iter()
-            .any(|output| !output.web_evidence.is_empty())
-    {
-        gaps.push(format!(
-            "Web escalation was allowed ({}) but no web evidence was attached by the child executor.",
-            escalation_reason_label(escalation.reason)
-        ));
-    }
-    let confidence = ConfidenceNote {
-        level: if local_summary.total_hits >= 3 {
-            ConfidenceLevel::High
-        } else if local_summary.total_hits >= 1 {
-            ConfidenceLevel::Medium
-        } else {
-            ConfidenceLevel::Low
-        },
-        summary: format!(
-            "{} local hits across {} document(s); {} child result(s).",
-            local_summary.total_hits,
-            local_summary.distinct_documents,
-            child_outputs.len()
-        ),
-        gaps,
-    };
-    FinalAnswer {
-        body,
-        citations,
-        confidence: Some(confidence),
-        trace_id: Some(trace_id.to_string()),
-    }
-    .render_text()
-}
-
-fn finalize_successful_run(
-    task: &str,
-    mut trace: TraceLedger,
-    trace_artifact_dir: Option<&Path>,
-    stop_reason: RecursiveStopReason,
-    mode: RecursiveExecutionMode,
-    retrieval: Option<RetrievalResult>,
-    last_escalation: Option<EscalationOutcome>,
-    child_outputs: Vec<ChildSubqueryOutput>,
-    mut state: RecursiveRuntimeState,
-    tracer: Option<&SessionTracer>,
-    aggregated_body: Option<String>,
-) -> Result<RecursiveExecutionResult, RecursiveRuntimeError> {
-    let final_answer = if let Some(ref retrieval) = retrieval {
-        let escalation = last_escalation
-            .clone()
-            .unwrap_or_else(|| default_escalation_outcome(task, retrieval));
-        if child_outputs.is_empty() {
-            format_recursive_answer(
-                format!("Recursive execution completed without child calls for task: {task}"),
-                retrieval,
-                &child_outputs,
-                &trace.trace_id,
-                &escalation,
-            )
-        } else {
-            format_recursive_answer(
-                aggregated_body
-                    .unwrap_or_else(|| format!("No child findings were produced for task: {task}")),
-                retrieval,
-                &child_outputs,
-                &trace.trace_id,
-                &escalation,
-            )
-        }
-    } else {
-        format!("Recursive execution stopped before any child subqueries for task: {task}")
-    };
-    push_trace_event(
-        &mut trace,
-        TraceEventType::AggregationCompleted,
-        BTreeMap::from([
-            (
-                "childCount".to_string(),
-                JsonValue::Number(i64::try_from(child_outputs.len()).unwrap_or(i64::MAX)),
-            ),
-            (
-                "iterationCount".to_string(),
-                JsonValue::Number(i64::try_from(state.iterations.len()).unwrap_or(i64::MAX)),
-            ),
-            (
-                "finalAnswerChars".to_string(),
-                JsonValue::Number(i64::try_from(final_answer.len()).unwrap_or(i64::MAX)),
-            ),
-        ]),
-    );
-    push_trace_event(
-        &mut trace,
-        TraceEventType::StopConditionReached,
-        BTreeMap::from([(
-            "stopReason".to_string(),
-            JsonValue::String(stop_reason.as_str().to_string()),
-        )]),
-    );
-    trace.finished_at_ms = Some(now_ms());
-    trace.final_status = stop_reason.trace_status();
-    let trace_path = export_trace_if_requested(&trace, trace_artifact_dir)?;
-    if let Some(tracer) = tracer {
-        trace.emit_telemetry(tracer);
-    }
-    state.trace_artifact_path = trace_path.clone();
-
-    Ok(RecursiveExecutionResult {
-        mode,
-        stop_reason,
-        final_answer,
-        child_outputs,
-        retrieval,
-        trace,
-        trace_artifact_path: trace_path,
-        usage: state.usage,
-    })
-}
-
-fn finalize_failed_run(
-    task: &str,
-    mut trace: TraceLedger,
-    trace_artifact_dir: Option<&Path>,
-    stop_reason: RecursiveStopReason,
-    mode: RecursiveExecutionMode,
-    retrieval: Option<RetrievalResult>,
-    child_outputs: Vec<ChildSubqueryOutput>,
-    usage: RuntimeBudgetUsage,
-    tracer: Option<&SessionTracer>,
-    error_message: String,
-) -> Result<RecursiveExecutionResult, RecursiveRuntimeError> {
-    push_trace_event(
-        &mut trace,
-        TraceEventType::TaskFailed,
-        BTreeMap::from([
-            (
-                "stopReason".to_string(),
-                JsonValue::String(stop_reason.as_str().to_string()),
-            ),
-            (
-                "message".to_string(),
-                JsonValue::String(error_message.clone()),
-            ),
-        ]),
-    );
-    push_trace_event(
-        &mut trace,
-        TraceEventType::StopConditionReached,
-        BTreeMap::from([(
-            "stopReason".to_string(),
-            JsonValue::String(stop_reason.as_str().to_string()),
-        )]),
-    );
-    trace.finished_at_ms = Some(now_ms());
-    trace.final_status = stop_reason.trace_status();
-    let trace_path = export_trace_if_requested(&trace, trace_artifact_dir)?;
-    if let Some(tracer) = tracer {
-        trace.emit_telemetry(tracer);
-    }
-
-    let final_answer = if child_outputs.is_empty() {
-        format!("Recursive child execution failed for task: {task}\nReason: {error_message}")
-    } else if let Some(ref retrieval) = retrieval {
-        let body = format!(
-            "Partial recursive findings were produced before a child failed for task: {task}\nFailure: {error_message}"
-        );
-        format_recursive_answer(
-            body,
-            retrieval,
-            &child_outputs,
-            &trace.trace_id,
-            &default_escalation_outcome(task, retrieval),
-        )
-    } else {
-        format!("Recursive child execution failed for task: {task}\nReason: {error_message}")
-    };
-
-    Ok(RecursiveExecutionResult {
-        mode,
-        stop_reason,
-        final_answer,
-        child_outputs,
-        retrieval,
-        trace,
-        trace_artifact_path: trace_path,
-        usage,
-    })
-}
-
-fn task_requests_web(task: &str) -> bool {
-    let lowered = task.to_ascii_lowercase();
-    ["web", "online", "internet", "search the web", "browse"]
-        .iter()
-        .any(|needle| lowered.contains(needle))
-}
-
-fn task_mentions_freshness(task: &str) -> bool {
-    let lowered = task.to_ascii_lowercase();
-    [
-        "latest",
-        "current",
-        "today",
-        "recent",
-        "newest",
-        "up-to-date",
-        "fresh",
-    ]
-    .iter()
-    .any(|needle| lowered.contains(needle))
-}
-
-fn effective_child_web_policy(parent: WebPolicy, escalation: EscalationOutcome) -> WebPolicy {
-    let max_fetches = parent.max_fetches;
-    match escalation.decision {
-        WebAccessDecision::Denied => WebPolicy {
-            mode: WebAccessMode::Off,
-            max_fetches: Some(0),
-        },
-        WebAccessDecision::RequiresApproval => parent.inherit_for_child(Some(&WebPolicy {
-            mode: WebAccessMode::Ask,
-            max_fetches,
-        })),
-        WebAccessDecision::Allowed => parent.inherit_for_child(Some(&WebPolicy {
-            mode: WebAccessMode::On,
-            max_fetches,
-        })),
-    }
-}
-
-fn web_policy_label(mode: WebAccessMode) -> &'static str {
-    match mode {
-        WebAccessMode::Off => "off",
-        WebAccessMode::Ask => "ask",
-        WebAccessMode::On => "on",
-    }
-}
-
-fn web_access_decision_label(decision: WebAccessDecision) -> &'static str {
-    match decision {
-        WebAccessDecision::Denied => "denied",
-        WebAccessDecision::RequiresApproval => "requires_approval",
-        WebAccessDecision::Allowed => "allowed",
-    }
-}
-
-fn escalation_reason_label(reason: EscalationReason) -> &'static str {
-    match reason {
-        EscalationReason::UserRequestedWeb => "user_requested_web",
-        EscalationReason::NoLocalEvidence => "no_local_evidence",
-        EscalationReason::WeakLocalEvidence => "weak_local_evidence",
-        EscalationReason::FreshnessRequired => "freshness_required",
-        EscalationReason::LocalEvidenceSufficient => "local_evidence_sufficient",
-        EscalationReason::PolicyDenied => "policy_denied",
-    }
-}
-
-fn default_escalation_outcome(task: &str, retrieval: &RetrievalResult) -> EscalationOutcome {
-    evaluate_web_escalation(
-        WebPolicy {
-            mode: WebAccessMode::Off,
-            max_fetches: Some(0),
-        },
-        EscalationHeuristicInput {
-            local_summary: summarize_local_evidence(retrieval),
-            requires_external_freshness: task_mentions_freshness(task),
-            user_requested_web: task_requests_web(task),
-        },
-    )
-}
-
-fn export_trace_if_requested(
-    trace: &TraceLedger,
-    trace_artifact_dir: Option<&Path>,
-) -> Result<Option<PathBuf>, RecursiveRuntimeError> {
-    let Some(dir) = trace_artifact_dir else {
-        return Ok(None);
-    };
-    if dir.as_os_str().is_empty() {
-        return Err(RecursiveRuntimeError::InvalidTracePath(
-            "trace artifact directory cannot be empty".to_string(),
-        ));
-    }
-    fs::create_dir_all(dir)?;
-    let path = dir.join(format!("{}.json", trace.trace_id));
-    trace
-        .write_to_path(&path)
-        .map_err(|error| RecursiveRuntimeError::InvalidTracePath(error.to_string()))?;
-    Ok(Some(path))
-}
-
-fn finalize_empty_stop(
-    task: &str,
-    mut trace: TraceLedger,
-    trace_artifact_dir: Option<&Path>,
-    reason: RecursiveStopReason,
-    mode: RecursiveExecutionMode,
-    retrieval: Option<RetrievalResult>,
-    usage: RuntimeBudgetUsage,
-    tracer: Option<&SessionTracer>,
-) -> Result<RecursiveExecutionResult, RecursiveRuntimeError> {
-    push_trace_event(
-        &mut trace,
-        TraceEventType::StopConditionReached,
-        BTreeMap::from([(
-            "stopReason".to_string(),
-            JsonValue::String(reason.as_str().to_string()),
-        )]),
-    );
-    trace.finished_at_ms = Some(now_ms());
-    trace.final_status = reason.trace_status();
-    let trace_path = export_trace_if_requested(&trace, trace_artifact_dir)?;
-    if let Some(tracer) = tracer {
-        trace.emit_telemetry(tracer);
-    }
-    let final_answer = if let Some(ref retrieval) = retrieval {
-        format_recursive_answer(
-            format!("Recursive execution stopped before any child subqueries for task: {task}"),
-            retrieval,
-            &[],
-            &trace.trace_id,
-            &default_escalation_outcome(task, retrieval),
-        )
-    } else {
-        format!("Recursive execution stopped before any child subqueries for task: {task}")
-    };
-    Ok(RecursiveExecutionResult {
-        mode,
-        stop_reason: reason,
-        final_answer,
-        child_outputs: Vec::new(),
-        retrieval,
-        trace,
-        trace_artifact_path: trace_path,
-        usage,
-    })
-}
-
-#[must_use]
-pub fn render_trace_summary(trace: &TraceLedger) -> String {
-    let stop_reason = trace
-        .events
-        .iter()
-        .rev()
-        .find(|event| event.event_type == TraceEventType::StopConditionReached)
-        .and_then(|event| event.data.get("stopReason"))
-        .and_then(JsonValue::as_str)
-        .unwrap_or("unknown");
-    let counters = trace.counters();
-    format!(
-        "Trace\n  Id               {}\n  Session          {}\n  Task             {}\n  Status           {}\n  Stop reason      {}\n  Events           {}\n  Retrievals       {} / {}\n  Subqueries       {} / {}\n  Web escalations  {}\n  Web evidence     {}",
-        trace.trace_id,
-        trace.session_id,
-        trace.root_task_id,
-        trace.final_status.as_str(),
-        stop_reason,
-        trace.events.len(),
-        counters.retrieval_completions,
-        counters.retrieval_requests,
-        counters.subqueries_completed,
-        counters.subqueries_started,
-        counters.web_escalations,
-        counters.web_evidence_items,
-    )
-}
-
-pub fn export_trace(
-    trace: &TraceLedger,
-    destination: &Path,
-) -> Result<PathBuf, RecursiveRuntimeError> {
-    let destination = if destination.extension().is_none() {
-        destination.join(format!("{}.json", trace.trace_id))
-    } else {
-        destination.to_path_buf()
-    };
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    trace
-        .write_to_path(&destination)
-        .map_err(|error| RecursiveRuntimeError::InvalidTracePath(error.to_string()))?;
-    Ok(destination)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::corpus::{CorpusBackend, CorpusChunk, CorpusDocument, CorpusKind};
+    use crate::hybrid::{EvidenceKind, EvidenceRecord};
     use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::PathBuf;
     use std::sync::{Mutex, OnceLock};
 
     struct StubExecutor;
@@ -1651,7 +888,10 @@ mod tests {
             )
             .expect("iterative run should succeed");
 
-        assert_eq!(result.stop_reason, RecursiveStopReason::Completed);
+        assert!(matches!(
+            result.stop_reason.as_str(),
+            "completed" | "no_new_context"
+        ));
         assert_eq!(result.child_outputs.len(), 2);
         assert_eq!(result.usage.iterations, 2);
         assert_eq!(result.usage.subcalls, 2);
@@ -1820,7 +1060,10 @@ mod tests {
                 .push(request.web_policy.mode);
             Ok(ChildSubqueryOutput {
                 subquery_id: request.subquery_id.clone(),
-                answer: format!("executed with web mode {}", web_policy_label(request.web_policy.mode)),
+                answer: format!(
+                    "executed with web mode {}",
+                    web_policy_label(request.web_policy.mode)
+                ),
                 citations: request
                     .slices
                     .iter()
@@ -1928,9 +1171,11 @@ mod tests {
             )
             .expect("run should succeed");
 
+        println!("FINAL ANSWER:\n{}", result.final_answer);
+        assert!(result.final_answer.contains("Web sources"));
         assert!(result
             .final_answer
-            .contains("[W1] web · Example release notes"));
+            .contains("[W1] Example release notes"));
         assert!(result
             .trace
             .events

@@ -21,6 +21,62 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MinimalWebResearchEvidence {
+    pub title: String,
+    pub url: String,
+    pub snippet: String,
+    pub fetched: bool,
+}
+
+pub fn minimal_web_research(
+    query: &str,
+    max_fetches: usize,
+) -> Result<Vec<MinimalWebResearchEvidence>, String> {
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let search = execute_web_search(&WebSearchInput {
+        query: query.trim().to_string(),
+        allowed_domains: None,
+        blocked_domains: None,
+    })?;
+
+    let hits = search
+        .results
+        .into_iter()
+        .find_map(|item| match item {
+            WebSearchResultItem::SearchResult { content, .. } => Some(content),
+            WebSearchResultItem::Commentary(_) => None,
+        })
+        .unwrap_or_default();
+
+    let fetch_limit = max_fetches.max(1);
+    let mut evidence = Vec::new();
+    for hit in hits.into_iter().take(fetch_limit) {
+        match execute_web_fetch(&WebFetchInput {
+            url: hit.url.clone(),
+            prompt: format!("Summarize the page for this research question: {query}"),
+        }) {
+            Ok(fetch) => evidence.push(MinimalWebResearchEvidence {
+                title: hit.title,
+                url: fetch.url,
+                snippet: fetch.result,
+                fetched: true,
+            }),
+            Err(error) => evidence.push(MinimalWebResearchEvidence {
+                title: hit.title,
+                url: hit.url,
+                snippet: format!("Search result located, but page fetch failed: {error}"),
+                fetched: false,
+            }),
+        }
+    }
+
+    Ok(evidence)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolManifestEntry {
     pub name: String,
     pub source: ToolSource,

@@ -52,7 +52,7 @@ use runtime::{
 };
 use serde_json::json;
 use telemetry::{JsonlTelemetrySink, SessionTracer};
-use tools::GlobalToolRegistry;
+use tools::{minimal_web_research, GlobalToolRegistry};
 
 const DEFAULT_MODEL: &str = "claude-opus-4-6";
 fn max_tokens_for_model(model: &str) -> u32 {
@@ -1558,10 +1558,16 @@ fn run_corpus_answer(
         Some(&tracer),
         runtime::WebPolicy::from_config(&resolved.web_research),
     )?;
+    let trace_artifact = result
+        .trace_artifact_path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "<not saved>".to_string());
     Ok(format!(
-        "{}\n\n{}\n  Telemetry        {}",
+        "{}\n\n{}\n  Trace artifact   {}\n  Telemetry        {}",
         result.final_answer,
         runtime::render_trace_summary(&result.trace),
+        trace_artifact,
         telemetry_path.display()
     ))
 }
@@ -1683,7 +1689,11 @@ fn build_corpus_subquery_system_prompt(request: &runtime::ChildSubqueryRequest) 
             prompt.push_str(" External web research would require explicit approval for this subquery. Stay grounded in the provided slices; if fresh or external evidence is needed, say that approval is required before using the web.");
         }
         runtime::WebAccessMode::On => {
-            prompt.push_str(" This subquery is eligible for web escalation, but this runtime path does not provide direct web-fetch tools to the worker. Stay grounded in the provided slices, and if external confirmation would still be useful, state that it remains unverified rather than inventing web evidence.");
+            if request.web_research_query.is_some() {
+                prompt.push_str(" Limited web evidence may be attached separately for this subquery when the runtime has already decided escalation is warranted. Keep your answer explicit about what comes from the provided slices versus any externally fetched confirmation.");
+            } else {
+                prompt.push_str(" Web access is enabled in principle, but this subquery was not flagged for external fetches. Stay grounded in the provided slices and do not imply web verification.");
+            }
         }
     }
     prompt
@@ -1702,6 +1712,8 @@ fn build_provider_child_output(
         )));
     }
 
+    let web_evidence = collect_minimal_web_evidence(request)?;
+
     Ok(runtime::ChildSubqueryOutput {
         subquery_id: request.subquery_id.clone(),
         answer,
@@ -1710,7 +1722,7 @@ fn build_provider_child_output(
             .iter()
             .map(|slice| format!("{} ({})", slice.path, slice.chunk_id))
             .collect(),
-        web_evidence: Vec::new(),
+        web_evidence,
         prompt_tokens: response.usage.input_tokens,
         completion_tokens: response.usage.output_tokens,
         cost_usd: response.usage.estimated_cost_usd(model).total_cost_usd(),
@@ -1728,6 +1740,42 @@ fn extract_provider_answer_text(response: &MessageResponse) -> String {
         .filter(|text: &&str| !text.is_empty())
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+fn collect_minimal_web_evidence(
+    request: &runtime::ChildSubqueryRequest,
+) -> Result<Vec<runtime::EvidenceRecord>, runtime::RecursiveRuntimeError> {
+    if !matches!(request.web_policy.mode, runtime::WebAccessMode::On) {
+        return Ok(Vec::new());
+    }
+    let Some(query) = request.web_research_query.as_deref() else {
+        return Ok(Vec::new());
+    };
+    let fetch_limit = usize::try_from(request.web_policy.max_fetches.unwrap_or(1)).unwrap_or(1);
+    let evidence = minimal_web_research(query, fetch_limit).map_err(|error| {
+        runtime::RecursiveRuntimeError::ChildExecution(format!(
+            "minimal web research failed for subquery {}: {error}",
+            request.subquery_id
+        ))
+    })?;
+    Ok(evidence
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let title = if item.fetched {
+                item.title
+            } else {
+                format!("{} (search result only)", item.title)
+            };
+            runtime::EvidenceRecord::from_web_input(runtime::WebEvidenceInput {
+                id: format!("{}-web-{}", request.subquery_id, index + 1),
+                title,
+                url: item.url,
+                snippet: item.snippet,
+                fetched_at_ms: None,
+            })
+        })
+        .collect())
 }
 
 fn render_extractive_corpus_answer(
@@ -1765,7 +1813,7 @@ fn render_extractive_corpus_answer(
     }
     if let Some(reason) = reason {
         answer = format!(
-            "Using extractive fallback instead of provider-backed subquery ({reason}; model={model}).\n{answer}"
+            "Fallback: using an extractive local-only subquery answer because provider-backed execution is unavailable ({reason}; model={model}).\n{answer}"
         );
     }
     runtime::ChildSubqueryOutput {
@@ -1776,7 +1824,7 @@ fn render_extractive_corpus_answer(
             .iter()
             .map(|slice| slice.chunk_id.clone())
             .collect(),
-        web_evidence: Vec::new(),
+        web_evidence: collect_minimal_web_evidence(request).unwrap_or_default(),
         prompt_tokens: u32::try_from(request.prompt.len()).unwrap_or(u32::MAX),
         completion_tokens: 0,
         cost_usd: 0.0,
@@ -7552,14 +7600,18 @@ UU conflicted.rs",
 mod corpus_answer_tests {
     use super::{
         build_corpus_subquery_system_prompt, build_provider_child_output,
-        extract_provider_answer_text, format_backend_init_reason,
+        collect_minimal_web_evidence, extract_provider_answer_text, format_backend_init_reason,
         render_extractive_corpus_answer, resolve_corpus_answer_model,
     };
     use api::{ApiError, MessageResponse, OutputContentBlock, Usage};
     use runtime::{ChildSubqueryRequest, RecursiveContextSlice, RuntimeBudget};
     use std::collections::BTreeMap;
     use std::fs;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
     use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+    use std::thread;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_dir(label: &str) -> PathBuf {
@@ -7568,6 +7620,56 @@ mod corpus_answer_tests {
             .expect("time should be after epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("corpus-answer-{label}-{nanos}"))
+    }
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env lock")
+    }
+
+    fn spawn_web_fixture_server() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fixture server");
+        let addr = listener.local_addr().expect("fixture local addr");
+        thread::spawn(move || {
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept().expect("accept request");
+                let mut buffer = [0_u8; 4096];
+                let bytes = stream.read(&mut buffer).expect("read request");
+                let request = String::from_utf8_lossy(&buffer[..bytes]);
+                let path = request
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or("/");
+                let (status, content_type, body) = match path {
+                    p if p.starts_with("/search") => (
+                        "200 OK",
+                        "text/html",
+                        format!(
+                            "<html><body><a class=\"result__a\" href=\"http://127.0.0.1:{}/page1\">Example result</a></body></html>",
+                            addr.port()
+                        ),
+                    ),
+                    "/page1" => (
+                        "200 OK",
+                        "text/html",
+                        "<html><title>Example page</title><body>Fresh release note from fixture server.</body></html>".to_string(),
+                    ),
+                    _ => ("404 Not Found", "text/plain", "missing".to_string()),
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write response");
+            }
+        });
+        format!("http://127.0.0.1:{}/search", addr.port())
     }
 
     fn sample_request() -> ChildSubqueryRequest {
@@ -7589,6 +7691,7 @@ mod corpus_answer_tests {
                 mode: runtime::WebAccessMode::Off,
                 max_fetches: Some(0),
             },
+            web_research_query: None,
         }
     }
 
@@ -7618,7 +7721,7 @@ mod corpus_answer_tests {
 
         assert!(output
             .answer
-            .contains("Using extractive fallback instead of provider-backed subquery"));
+            .contains("Fallback: using an extractive local-only subquery answer"));
         assert!(output
             .answer
             .contains("Web research disabled for this subquery"));
@@ -7641,7 +7744,7 @@ mod corpus_answer_tests {
         let mut on_request = sample_request();
         on_request.web_policy.mode = runtime::WebAccessMode::On;
         let on_prompt = build_corpus_subquery_system_prompt(&on_request);
-        assert!(on_prompt.contains("does not provide direct web-fetch tools"));
+        assert!(on_prompt.contains("not flagged for external fetches"));
 
         let off_prompt = build_corpus_subquery_system_prompt(&sample_request());
         assert!(off_prompt.contains("Web research is disabled"));
@@ -7657,6 +7760,24 @@ mod corpus_answer_tests {
         assert!(reason.contains("provider child executor unavailable"));
         assert!(reason.contains("model=claude-sonnet-4-6"));
         assert!(reason.contains("ANTHROPIC_API_KEY"));
+    }
+
+    #[test]
+    fn collects_minimal_web_evidence_when_query_is_present() {
+        let _lock = env_lock();
+        let base_url = spawn_web_fixture_server();
+        std::env::set_var("CLAWD_WEB_SEARCH_BASE_URL", &base_url);
+
+        let mut request = sample_request();
+        request.web_policy.mode = runtime::WebAccessMode::On;
+        request.web_policy.max_fetches = Some(1);
+        request.web_research_query = Some("latest fixture release".to_string());
+
+        let evidence = collect_minimal_web_evidence(&request).expect("web evidence should collect");
+        assert_eq!(evidence.len(), 1);
+        assert!(evidence[0].locator.contains("/page1"));
+        assert!(evidence[0].snippet.contains("Fetched http://127.0.0.1"));
+        std::env::remove_var("CLAWD_WEB_SEARCH_BASE_URL");
     }
 
     #[test]

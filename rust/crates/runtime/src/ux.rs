@@ -222,43 +222,54 @@ impl FinalAnswer {
         let mut sections = vec![self.body.trim().to_string()];
 
         if !self.citations.is_empty() {
-            let citations = self
+            let local_citations = self
                 .citations
                 .iter()
-                .map(|citation| {
-                    let locator_suffix = citation
-                        .locator
-                        .as_deref()
-                        .map(|locator| format!(" — {locator}"))
-                        .unwrap_or_default();
-                    format!(
-                        "- [{}] {} · {}{}",
-                        citation.label,
-                        citation.provenance.as_str(),
-                        citation.title,
-                        locator_suffix
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            sections.push(format!("Sources\n{citations}"));
+                .filter(|citation| citation.provenance == EvidenceProvenance::Local)
+                .map(render_citation)
+                .collect::<Vec<_>>();
+            let web_citations = self
+                .citations
+                .iter()
+                .filter(|citation| citation.provenance == EvidenceProvenance::Web)
+                .map(render_citation)
+                .collect::<Vec<_>>();
+            let provenance_summary = match (local_citations.is_empty(), web_citations.is_empty()) {
+                (false, true) => "local only",
+                (true, false) => "web only",
+                (false, false) => "local + web",
+                (true, true) => "unknown",
+            };
+            let mut evidence_lines = vec![
+                "Evidence".to_string(),
+                format!("  Provenance       {provenance_summary}"),
+            ];
+            if !local_citations.is_empty() {
+                evidence_lines.push("Local sources".to_string());
+                evidence_lines.extend(local_citations);
+            }
+            if !web_citations.is_empty() {
+                evidence_lines.push("Web sources".to_string());
+                evidence_lines.extend(web_citations);
+            }
+            sections.push(evidence_lines.join("\n"));
         }
 
         if let Some(confidence) = &self.confidence {
-            let mut confidence_lines = vec![format!(
-                "Confidence: {} — {}",
-                confidence.level.as_str(),
-                confidence.summary.trim()
-            )];
+            let mut confidence_lines = vec![
+                "Confidence".to_string(),
+                format!("  Level            {}", confidence.level.as_str()),
+                format!("  Summary          {}", confidence.summary.trim()),
+            ];
             if !confidence.gaps.is_empty() {
-                confidence_lines.push("Open questions:".to_string());
-                confidence_lines.extend(confidence.gaps.iter().map(|gap| format!("- {gap}")));
+                confidence_lines.push("  Remaining gaps".to_string());
+                confidence_lines.extend(confidence.gaps.iter().map(|gap| format!("  - {gap}")));
             }
             sections.push(confidence_lines.join("\n"));
         }
 
         if let Some(trace_id) = &self.trace_id {
-            sections.push(format!("Trace id: {trace_id}"));
+            sections.push(format!("Trace reference\n  Id               {trace_id}"));
         }
 
         sections
@@ -267,6 +278,18 @@ impl FinalAnswer {
             .collect::<Vec<_>>()
             .join("\n\n")
     }
+}
+
+fn render_citation(citation: &Citation) -> String {
+    let locator_suffix = citation
+        .locator
+        .as_deref()
+        .map(|locator| format!(" — {locator}"))
+        .unwrap_or_default();
+    format!(
+        "- [{}] {}{}",
+        citation.label, citation.title, locator_suffix
+    )
 }
 
 #[cfg(test)]
@@ -330,9 +353,13 @@ mod tests {
         };
 
         let rendered = answer.render_text();
-        assert!(rendered.contains("Sources"));
-        assert!(rendered.contains("[L1] local · runtime/src/config.rs"));
-        assert!(rendered.contains("Confidence: medium"));
-        assert!(rendered.contains("Trace id: trace-123"));
+        assert!(rendered.contains("Evidence"));
+        assert!(rendered.contains("Provenance       local + web"));
+        assert!(rendered.contains("Local sources"));
+        assert!(rendered.contains("[L1] runtime/src/config.rs"));
+        assert!(rendered.contains("Web sources"));
+        assert!(rendered.contains("[W1] Example spec"));
+        assert!(rendered.contains("Confidence\n  Level            medium"));
+        assert!(rendered.contains("Trace reference\n  Id               trace-123"));
     }
 }
