@@ -14,6 +14,35 @@
 > [!NOTE]
 > This repository is maintained at **tinameriana009/Openclaw**. The current local/alpha work is centered on the Rust harness under `rust/`.
 
+## What is better in this repository?
+
+Compared with the earlier parity baseline, this repository now includes substantial additional work:
+
+- **Local corpus RAG**
+  - attach, persist, inspect, search, and slice local corpora
+  - CLI and REPL corpus flows such as `--corpus` and `/corpus ...`
+- **Recursive runtime improvements**
+  - bounded recursive/iterative execution paths
+  - provider-backed child subquery flow for corpus answering
+  - stronger traceability for recursive runs
+- **Trace + telemetry**
+  - structured trace ledger export
+  - counters and telemetry-safe summaries
+  - better debugging of grounded multi-step flows
+- **Execution profiles**
+  - `fast`, `balanced`, `deep`, and `research`
+  - profile-aware RAG / RLM / web behavior
+- **Web-aware hybrid scaffolding**
+  - web policy, evidence normalization, escalation heuristics, and provenance support
+- **Operator-focused docs and bootstrap notes**
+  - current Rust operator guide in [`rust/README.md`](rust/README.md)
+  - first-run notes in [`rust/BOOTSTRAP.md`](rust/BOOTSTRAP.md)
+- **Fork-specific integration work**
+  - cross-milestone integration beyond the baseline parity snapshot
+  - practical hardening around CLI help, corpus flows, trace flows, and local usability
+
+In short: this repo is no longer just a parity snapshot. It is evolving into a more usable **custom-task agent harness** for grounded local work, recursive analysis, and future hybrid local+web workflows.
+
 ---
 
 ## Current Focus
