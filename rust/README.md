@@ -2,171 +2,287 @@
 
 This `rust/` tree is the current Rust harness implementation for `claw`.
 
-It already covers the core interactive CLI loop, tool execution, session persistence, config loading, corpus attachment/search, recursive runtime scaffolding, trace ledgers, and M5 UX/reporting polish. If you are trying to run or evaluate the parity work, start here rather than the legacy top-level repository story.
+If you want to install it, authenticate, attach a local corpus, run a task, and inspect traces without spelunking through source, start here.
 
 ## What ships today
 
-- Interactive REPL with slash commands, session autosave, resume, export, cost/status views
-- Non-interactive prompt mode (`claw prompt ...` or shorthand `claw "..."`)
-- Permission modes, allowed-tool filtering, and sandbox status inspection
-- Local corpus attach/search/slice/inspect flows
-- Recursive corpus answer path with trace + telemetry artifacts
-- Execution profiles (`fast`, `balanced`, `deep`, `research`) that change RAG/RLM/web budgets
-- Final-answer rendering with sources/confidence/trace id support
-- Regression tests for CLI flags, resume flows, final-answer fixtures, and trace fixtures
+The current CLI help and local smoke tests confirm these operator-facing surfaces:
+
+- Interactive REPL (`claw`)
+- Non-interactive prompt mode (`claw prompt ...` and `claw "..."`)
+- Status / sandbox inspection (`claw status`, `claw sandbox`)
+- OAuth login / logout (`claw login`, `claw logout`)
+- Session autosave and resume (`--resume`, `/session`, `/resume`)
+- Permission controls and allowed-tool filtering
+- Local corpus attachment plus `/corpus` search / inspect / slice flows
+- Execution profiles: `fast`, `balanced`, `deep`, `research`
+- Recursive trace inspection via `/trace ...` and saved trace ledgers under `.claw/trace/`
+
+## Fastest honest first run
+
+From a clean host:
+
+```bash
+cd rust
+cargo build --workspace --locked
+./target/debug/claw --help
+./target/debug/claw status
+```
+
+If that works, you have a runnable local install.
 
 ## Install / build
 
-### Toolchain gotcha
+### Toolchain requirement
 
-This workspace uses a modern lockfile/toolchain. On some Ubuntu hosts the packaged `cargo` is too old and fails with `Cargo.lock version 4 was not supported`.
+This workspace uses a modern Cargo lockfile and is pinned via [`rust-toolchain.toml`](rust-toolchain.toml).
+On older Ubuntu hosts, `/usr/bin/cargo` may be too old and fail with a lockfile-v4 error.
 
-If that happens, use `rustup` and set a default toolchain:
+If that happens:
 
 ```bash
 curl https://sh.rustup.rs -sSf | sh
 . "$HOME/.cargo/env"
-rustup default stable
+rustup toolchain install 1.94.1 --profile minimal --component clippy --component rustfmt
+cd rust
+rustup override set 1.94.1
 cargo --version
 rustc --version
 ```
 
-The recent successful audit in this repo used a current Rust toolchain installed via `rustup`, not the distro-packaged Cargo.
+If your shell still resolves the distro Cargo first, use `~/.cargo/bin/cargo` explicitly.
 
-### Build and test
-
-```bash
-cd rust
-cargo build --workspace
-cargo test --workspace
-```
-
-### Run the binary
+### Build + verify
 
 ```bash
 cd rust
-cargo run -p rusty-claude-cli -- --help
-cargo run -p rusty-claude-cli -- status
-cargo run -p rusty-claude-cli -- prompt "summarize this repo"
+cargo build --workspace --locked
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked
+cargo test --workspace --locked
 ```
 
-After `cargo build`, the binary is available at `rust/target/debug/claw`.
+After a successful build, the binary is:
+
+```bash
+./target/debug/claw
+```
 
 ## Authentication
 
-Use either an API key:
+Two supported paths:
+
+### 1) API key
 
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
 ```
 
-Or OAuth:
+### 2) OAuth login
 
 ```bash
-cargo run -p rusty-claude-cli -- login
+cd rust
+./target/debug/claw login
 ```
 
-## Quick usage
+Current observed behavior:
 
-### Interactive REPL
+- starts a local callback server on `http://localhost:4545/callback`
+- prints an OAuth authorize URL
+- tries to open a browser automatically
+- if no browser opener is available, you can open the printed URL manually
+
+Use logout to clear saved auth:
 
 ```bash
-cargo run -p rusty-claude-cli --
+./target/debug/claw logout
 ```
 
-### One-shot prompt
+## Operator quickstart
+
+### 1) Confirm local status
 
 ```bash
-cargo run -p rusty-claude-cli -- prompt "explain the session model"
-cargo run -p rusty-claude-cli -- "summarize the runtime crate"
+cd rust
+./target/debug/claw status
+./target/debug/claw sandbox
 ```
 
-### Model / permission / profile selection
+`status` is the best single-command smoke test for:
+
+- model selection
+- permission mode
+- active profile
+- workspace detection
+- git visibility
+- config / memory discovery
+
+### 2) Run a one-shot task
 
 ```bash
-cargo run -p rusty-claude-cli -- --model sonnet --permission-mode read-only status
-cargo run -p rusty-claude-cli -- --profile deep prompt "trace the recursive answer path"
+./target/debug/claw prompt "summarize this repo"
+./target/debug/claw "summarize crates/runtime/src/config.rs"
+./target/debug/claw --output-format json prompt "summarize src/main.rs"
 ```
 
-### JSON output for automation
+### 3) Start the REPL
 
 ```bash
-cargo run -p rusty-claude-cli -- --output-format json prompt "summarize src/main.rs"
+./target/debug/claw
 ```
 
-## Execution profiles
+Inside the REPL, start with:
 
-Profiles tune how much recursive/runtime machinery is enabled:
+```text
+/help
+/status
+```
+
+## Common flags
+
+These are the main flags exposed by `claw --help`:
+
+```bash
+./target/debug/claw --model claude-opus "summarize this repo"
+./target/debug/claw --permission-mode read-only status
+./target/debug/claw --dangerously-skip-permissions status
+./target/debug/claw --profile deep prompt "trace the recursive answer path"
+./target/debug/claw --allowedTools read,glob "summarize Cargo.toml"
+./target/debug/claw --output-format json prompt "show a machine-readable summary"
+```
+
+### Profiles
 
 | Profile | Intended use | Notes |
 |---|---|---|
-| `fast` | Cheap/local quick answers | RLM disabled, no trace capture |
-| `balanced` | Default everyday mode | Recursive path enabled, trace on |
-| `deep` | Heavier local investigation | More depth/subcalls, trace on |
-| `research` | Maximum recursive/web budget | Largest depth/fetch budget, trace on |
+| `fast` | Cheap/local quick answers | Lowest budget |
+| `balanced` | Default daily mode | Balanced enables recursive trace capture by default |
+| `deep` | Heavier local investigation | More depth / budget |
+| `research` | Most expensive local investigation | Largest recursive budget |
 
-Examples:
+## Corpus workflow
 
-```bash
-cargo run -p rusty-claude-cli -- --profile fast prompt "what files define config loading?"
-cargo run -p rusty-claude-cli -- --profile research prompt "map the corpus + trace pipeline"
-```
+The current operator story is:
 
-## Corpus flows
+1. attach one or more local corpus roots with `--corpus` or `/corpus attach`
+2. inspect/search them from the REPL
+3. run a grounded query
+4. inspect saved trace artifacts
 
-You can attach local files as a corpus up front, or use `/corpus` commands from inside the REPL.
-
-### Attach a corpus before running
+### Attach corpus roots up front
 
 ```bash
-cargo run -p rusty-claude-cli -- --corpus ./docs --corpus ./rust/crates/runtime status
+./target/debug/claw --corpus ./docs --corpus ./crates/runtime
+./target/debug/claw --corpus ./docs --profile research prompt "What changed in auth flow?"
 ```
 
-### Grounded prompt against attached corpora
-
-```bash
-cargo run -p rusty-claude-cli -- --corpus ./docs --profile research prompt "What does the auth flow do?"
-```
-
-### REPL corpus commands
+### Discover corpus commands in the REPL
 
 ```text
 /corpus
 /corpus attach ./docs
 /corpus search auth callback
-/corpus slice <chunk-id>
 /corpus inspect <corpus-id>
-/corpus answer summarize the trace format
+/corpus slice <chunk-id>
 ```
 
-`/corpus answer ...` is the most important discoverability path here: it runs the grounded recursive corpus flow and emits a trace summary + telemetry location in the result.
+The top-level help currently advertises this grounded path as the main corpus answer flow:
 
-## Trace / telemetry artifacts
+```text
+/corpus answer <query>
+```
 
-The recursive corpus answer path writes artifacts under the workspace `.claw/` directory:
+That is the discoverability path operators should try first when they want a grounded recursive answer over attached local material.
 
-- `.claw/trace/` — JSON trace ledgers
-- `.claw/telemetry/recursive-runtime.jsonl` — recursive runtime telemetry stream
-- `.claw/sessions/` — autosaved sessions
+## Sessions and resume
 
-Today, the main user-facing trace flow is:
+Sessions auto-save under:
 
-1. attach one or more corpora
-2. run `/corpus answer <query>` or a non-interactive prompt with `--corpus` and a trace-enabled profile
-3. inspect the rendered trace summary in stdout
-4. open the saved JSON ledger in `.claw/trace/`
+```text
+.claw/sessions/<session-id>.jsonl
+```
 
-Note: the `/trace` slash-command surface exists in the command registry, but REPL/resume handling is still only partially wired in this snapshot. The saved trace artifacts are the reliable path today.
-
-## Useful commands
+Useful commands:
 
 ```bash
-cargo run -p rusty-claude-cli -- --help
-cargo run -p rusty-claude-cli -- status
-cargo run -p rusty-claude-cli -- sandbox
-cargo run -p rusty-claude-cli -- --resume latest /status
-cargo run -p rusty-claude-cli -- --resume latest /diff /export notes.txt
+./target/debug/claw --resume latest
+./target/debug/claw --resume latest /status
+./target/debug/claw --resume latest /diff /export notes.txt
 ```
+
+Inside the REPL:
+
+```text
+/session list
+/resume latest
+```
+
+## Traces and artifacts
+
+For trace-enabled runs, inspect artifacts under:
+
+- `.claw/trace/` — recursive trace ledgers
+- `.claw/telemetry/recursive-runtime.jsonl` — recursive runtime telemetry
+- `.claw/sessions/` — autosaved sessions
+
+### Recommended trace flow
+
+1. run with a trace-capable profile such as `balanced`, `deep`, or `research`
+2. attach local corpus roots if you want grounded answers
+3. execute the task
+4. inspect stdout for the trace summary
+5. open the saved ledger in `.claw/trace/`
+
+The CLI help also exposes:
+
+```text
+/trace summary <trace-file>
+/trace export <trace-file> [destination]
+```
+
+## High-value slash commands
+
+Start here:
+
+```text
+/help
+/status
+/sandbox
+/diff
+/commit
+/agents
+/skills
+/corpus
+/trace
+```
+
+Other useful operator commands from the current help surface:
+
+```text
+/model [model]
+/permissions [read-only|workspace-write|danger-full-access]
+/config [env|hooks|model|plugins]
+/memory
+/session [list|switch <session-id>|fork [branch-name]]
+/export [file]
+/mcp [list|show <server>|help]
+```
+
+## Config + workspace notes
+
+- The CLI reports config discovery in `claw status`
+- `status` also reports workspace root, branch, dirty state, and memory-file loading
+- the current default permission mode is `workspace-write` unless config / env overrides it
+- use `--dangerously-skip-permissions` only when you intentionally want unrestricted execution for that run
+
+## Known operator gaps
+
+These are the important remaining rough edges from an operator point of view:
+
+- The install story is still source-first; there is no polished packaged release flow documented here yet.
+- The quickest reliable trace workflow is still “inspect `.claw/trace/` on disk”; the CLI trace UX is improving but the saved artifact path remains the safest one to depend on.
+- Corpus discoverability is much better than before, but the most advanced grounded-answer path should still be treated as an active harness surface rather than a finished product.
+- OAuth currently depends on a localhost callback and manual URL opening when no browser opener is available.
 
 ## Workspace layout
 
@@ -174,6 +290,7 @@ cargo run -p rusty-claude-cli -- --resume latest /diff /export notes.txt
 rust/
 ├── Cargo.toml
 ├── Cargo.lock
+├── rust-toolchain.toml
 └── crates/
     ├── api/
     ├── commands/
@@ -185,9 +302,18 @@ rust/
     └── tools/
 ```
 
-## Operator notes
+## Minimal operator checklist
 
-- Sessions autosave to `.claw/sessions/<session-id>.jsonl`
-- Config is loaded from the standard layered locations exercised by the CLI tests
-- `status` is the quickest smoke test for model/permission/profile/config discovery
-- `cargo test --workspace` already covers the main M5 fixture/regression surfaces; add more around traces/corpus UX before claiming full parity
+Use this sequence for a new machine:
+
+```bash
+cd rust
+cargo build --workspace --locked
+./target/debug/claw --help
+./target/debug/claw status
+export ANTHROPIC_API_KEY="sk-ant-..."   # or: ./target/debug/claw login
+./target/debug/claw --corpus ./docs --profile balanced prompt "What does the bootstrap flow do?"
+ls -R .claw/trace .claw/telemetry 2>/dev/null
+```
+
+If all of that works, you have the main install / auth / corpus / run / inspect loop working.
