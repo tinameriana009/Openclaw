@@ -24,9 +24,10 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use api::{
-    resolve_startup_auth_source, AnthropicClient, AuthSource, ContentBlockDelta, InputContentBlock,
-    InputMessage, MessageRequest, MessageResponse, OutputContentBlock, PromptCache, ProviderClient,
-    StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition, ToolResultContentBlock,
+    resolve_startup_auth_source, AnthropicClient, ApiError, AuthSource, ContentBlockDelta,
+    InputContentBlock, InputMessage, MessageRequest, MessageResponse, OutputContentBlock,
+    PromptCache, ProviderClient, StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition,
+    ToolResultContentBlock,
 };
 
 use commands::{
@@ -1354,6 +1355,42 @@ fn parse_git_status_metadata_for(
     (project_root, branch)
 }
 
+fn parse_corpus_targeted_arg(input: &str) -> (Option<&str>, &str) {
+    input
+        .split_once("::")
+        .map(|(corpus_id, remainder)| (Some(corpus_id.trim()), remainder.trim()))
+        .unwrap_or((None, input.trim()))
+}
+
+fn resolve_corpus_for_command(
+    cwd: &Path,
+    requested_corpus_id: Option<&str>,
+    command: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let corpora = list_corpora(cwd)?;
+    if corpora.is_empty() {
+        return Err("no corpora attached".into());
+    }
+    if let Some(corpus_id) = requested_corpus_id.filter(|value| !value.is_empty()) {
+        if corpora.iter().any(|corpus| corpus.corpus_id == corpus_id) {
+            return Ok(corpus_id.to_string());
+        }
+        return Err(format!("unknown corpus id {corpus_id}").into());
+    }
+    if corpora.len() == 1 {
+        return Ok(corpora[0].corpus_id.clone());
+    }
+    let corpus_ids = corpora
+        .iter()
+        .map(|corpus| corpus.corpus_id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(format!(
+        "multiple corpora attached; rerun as /corpus {command} <corpus-id> :: <value>\n  Corpus ids       {corpus_ids}"
+    )
+    .into())
+}
+
 fn run_corpus_command(
     args: Option<&str>,
     profile: ExecutionProfile,
@@ -1382,22 +1419,20 @@ fn run_corpus_command(
         ));
     }
     if let Some(query) = args.strip_prefix("search ") {
-        let corpus = list_corpora(&cwd)?
-            .into_iter()
-            .next()
-            .ok_or_else(|| "no corpora attached".to_string())?;
-        let result = search_corpus(&cwd, &corpus.corpus_id, query.trim(), 5, None)?;
+        let (requested_corpus_id, query) = parse_corpus_targeted_arg(query);
+        let corpus_id = resolve_corpus_for_command(&cwd, requested_corpus_id, "search")?;
+        let result = search_corpus(&cwd, &corpus_id, query, 5, None)?;
         return Ok(serde_json::to_string_pretty(&result)?);
     }
     if let Some(query) = args.strip_prefix("answer ") {
-        return run_corpus_answer(&cwd, query.trim(), profile, session_id, active_model);
+        let (requested_corpus_id, query) = parse_corpus_targeted_arg(query);
+        let corpus_id = resolve_corpus_for_command(&cwd, requested_corpus_id, "answer")?;
+        return run_corpus_answer(&cwd, &corpus_id, query, profile, session_id, active_model);
     }
     if let Some(chunk_id) = args.strip_prefix("slice ") {
-        let corpus = list_corpora(&cwd)?
-            .into_iter()
-            .next()
-            .ok_or_else(|| "no corpora attached".to_string())?;
-        let result = slice_corpus(&cwd, &corpus.corpus_id, Some(chunk_id.trim()), None, None)?;
+        let (requested_corpus_id, chunk_id) = parse_corpus_targeted_arg(chunk_id);
+        let corpus_id = resolve_corpus_for_command(&cwd, requested_corpus_id, "slice")?;
+        let result = slice_corpus(&cwd, &corpus_id, Some(chunk_id), None, None)?;
         return Ok(serde_json::to_string_pretty(&result)?);
     }
     if let Some(corpus_id) = args.strip_prefix("inspect ") {
@@ -1406,23 +1441,22 @@ fn run_corpus_command(
             corpus_id.trim(),
         )?)?);
     }
-    Err("unsupported /corpus usage; try /corpus, /corpus attach <path>, /corpus search <query>, /corpus answer <query>, /corpus inspect <id>, or /corpus slice <chunk-id>".into())
+    Err("unsupported /corpus usage; try /corpus, /corpus attach <path>, /corpus search [<corpus-id> ::] <query>, /corpus answer [<corpus-id> ::] <query>, /corpus inspect <id>, or /corpus slice [<corpus-id> ::] <chunk-id>".into())
 }
 
 struct CorpusAnswerExecutor {
     backend: CorpusAnswerBackend,
 }
 
+struct ProviderCorpusAnswerBackend {
+    runtime: tokio::runtime::Runtime,
+    client: ProviderClient,
+    model: String,
+}
+
 enum CorpusAnswerBackend {
-    Provider {
-        runtime: tokio::runtime::Runtime,
-        client: ProviderClient,
-        model: String,
-    },
-    ExtractiveFallback {
-        reason: String,
-        model: String,
-    },
+    Provider(ProviderCorpusAnswerBackend),
+    ExtractiveFallback { reason: String, model: String },
 }
 
 impl CorpusAnswerExecutor {
@@ -1450,19 +1484,15 @@ impl runtime::ChildSubqueryExecutor for CorpusAnswerExecutor {
         request: &runtime::ChildSubqueryRequest,
     ) -> Result<runtime::ChildSubqueryOutput, runtime::RecursiveRuntimeError> {
         match &self.backend {
-            CorpusAnswerBackend::Provider {
-                runtime,
-                client,
-                model,
-            } => execute_provider_backed_corpus_answer(runtime, client, model, request).or_else(
-                |error| {
+            CorpusAnswerBackend::Provider(provider) => {
+                provider.execute(request).or_else(|reason| {
                     Ok(render_extractive_corpus_answer(
                         request,
-                        Some(&format!("provider fallback: {error}")),
-                        model,
+                        Some(&reason),
+                        &provider.model,
                     ))
-                },
-            ),
+                })
+            }
             CorpusAnswerBackend::ExtractiveFallback { reason, model } => Ok(
                 render_extractive_corpus_answer(request, Some(reason), model),
             ),
@@ -1470,18 +1500,25 @@ impl runtime::ChildSubqueryExecutor for CorpusAnswerExecutor {
     }
 }
 
+impl ProviderCorpusAnswerBackend {
+    fn execute(
+        &self,
+        request: &runtime::ChildSubqueryRequest,
+    ) -> Result<runtime::ChildSubqueryOutput, String> {
+        execute_provider_backed_corpus_answer(&self.runtime, &self.client, &self.model, request)
+            .map_err(|error| format_provider_execution_fallback_reason(&error))
+    }
+}
+
 fn run_corpus_answer(
     cwd: &Path,
+    corpus_id: &str,
     query: &str,
     profile: ExecutionProfile,
     session_id: Option<&str>,
     active_model: Option<&str>,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let corpus = list_corpora(cwd)?
-        .into_iter()
-        .next()
-        .ok_or_else(|| "no corpora attached".to_string())?;
-    let manifest = load_corpus(cwd, &corpus.corpus_id)?;
+    let manifest = load_corpus(cwd, corpus_id)?;
     let resolved = profile.resolve();
     let telemetry_path = cwd
         .join(".claw")
@@ -1549,20 +1586,49 @@ fn resolve_corpus_answer_model(cwd: &Path, active_model: Option<&str>) -> String
     .to_string()
 }
 
+fn format_backend_init_reason(model: &str, error: &ApiError) -> String {
+    match error {
+        ApiError::MissingCredentials { provider, env_vars } => format!(
+            "provider child executor unavailable for model={model}: missing {provider} credentials (set {})",
+            env_vars.join(" or ")
+        ),
+        ApiError::ExpiredOAuthToken => format!(
+            "provider child executor unavailable for model={model}: saved OAuth token is expired; re-authenticate before retrying"
+        ),
+        ApiError::Auth(message) => format!(
+            "provider child executor unavailable for model={model}: auth error: {message}"
+        ),
+        other => format!(
+            "provider child executor unavailable for model={model}: {other}"
+        ),
+    }
+}
+
 fn build_corpus_answer_backend(
     session_id: &str,
     model: &str,
 ) -> Result<CorpusAnswerBackend, String> {
     let client =
         ProviderClient::from_model_with_anthropic_auth(model, resolve_cli_auth_source().ok())
-            .map_err(|error| error.to_string())?
+            .map_err(|error| format_backend_init_reason(model, &error))?
             .with_prompt_cache(PromptCache::new(&format!("{session_id}-corpus-answer")));
-    let runtime = tokio::runtime::Runtime::new().map_err(|error| error.to_string())?;
-    Ok(CorpusAnswerBackend::Provider {
+    let runtime = tokio::runtime::Runtime::new().map_err(|error| {
+        format!("provider runtime initialization failed for model={model}: {error}")
+    })?;
+    Ok(CorpusAnswerBackend::Provider(ProviderCorpusAnswerBackend {
         runtime,
         client,
         model: model.to_string(),
-    })
+    }))
+}
+
+fn format_provider_execution_fallback_reason(error: &runtime::RecursiveRuntimeError) -> String {
+    match error {
+        runtime::RecursiveRuntimeError::ChildExecution(message) => {
+            format!("provider execution failed: {message}")
+        }
+        other => format!("provider execution failed: {other}"),
+    }
 }
 
 fn execute_provider_backed_corpus_answer(
@@ -1571,37 +1637,55 @@ fn execute_provider_backed_corpus_answer(
     model: &str,
     request: &runtime::ChildSubqueryRequest,
 ) -> Result<runtime::ChildSubqueryOutput, runtime::RecursiveRuntimeError> {
-    let response = runtime.block_on(async {
-        client
-            .send_message(&MessageRequest {
-                model: model.to_string(),
-                max_tokens: max_tokens_for_model(model),
-                messages: vec![InputMessage::user_text(request.prompt.clone())],
-                system: Some(
-                    "You are a grounded corpus subquery worker. Answer the task using only the provided corpus slices. If the slices are insufficient, say what is missing briefly. Do not invent sources. Keep the answer concise and directly useful.".to_string(),
-                ),
-                tools: None,
-                tool_choice: None,
-                stream: false,
-            })
-            .await
-    })
-    .map_err(|error| runtime::RecursiveRuntimeError::ChildExecution(error.to_string()))?;
-
-    let answer = response
-        .content
-        .iter()
-        .filter_map(|block| match block {
-            OutputContentBlock::Text { text } => Some(text.trim()),
-            _ => None,
+    let response = runtime
+        .block_on(async {
+            client
+                .send_message(&MessageRequest {
+                    model: model.to_string(),
+                    max_tokens: max_tokens_for_model(model),
+                    messages: vec![InputMessage::user_text(request.prompt.clone())],
+                    system: Some(
+                        "You are a grounded corpus subquery worker. Answer the task using only the provided corpus slices. If the slices are insufficient, say what is missing briefly. Do not invent sources. Keep the answer concise and directly useful.".to_string(),
+                    ),
+                    tools: None,
+                    tool_choice: None,
+                    stream: false,
+                })
+                .await
         })
-        .filter(|text| !text.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n");
+        .map_err(map_provider_api_error_to_recursive_error)?;
+
+    build_provider_child_output(model, request, response)
+}
+
+fn map_provider_api_error_to_recursive_error(error: ApiError) -> runtime::RecursiveRuntimeError {
+    runtime::RecursiveRuntimeError::ChildExecution(match error {
+        ApiError::MissingCredentials { provider, env_vars } => format!(
+            "missing {provider} credentials during child execution; set {}",
+            env_vars.join(" or ")
+        ),
+        ApiError::ExpiredOAuthToken => {
+            "saved OAuth token expired during child execution; re-authenticate and retry"
+                .to_string()
+        }
+        ApiError::Auth(message) => {
+            format!("provider auth failed during child execution: {message}")
+        }
+        other => other.to_string(),
+    })
+}
+
+fn build_provider_child_output(
+    model: &str,
+    request: &runtime::ChildSubqueryRequest,
+    response: MessageResponse,
+) -> Result<runtime::ChildSubqueryOutput, runtime::RecursiveRuntimeError> {
+    let answer = extract_provider_answer_text(&response);
     if answer.trim().is_empty() {
-        return Err(runtime::RecursiveRuntimeError::ChildExecution(
-            "provider returned an empty child answer".to_string(),
-        ));
+        return Err(runtime::RecursiveRuntimeError::ChildExecution(format!(
+            "provider returned an empty child answer (request_id={})",
+            response.request_id.as_deref().unwrap_or("unknown")
+        )));
     }
 
     Ok(runtime::ChildSubqueryOutput {
@@ -1619,6 +1703,19 @@ fn execute_provider_backed_corpus_answer(
     })
 }
 
+fn extract_provider_answer_text(response: &MessageResponse) -> String {
+    response
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            OutputContentBlock::Text { text } => Some(text.trim()),
+            _ => None,
+        })
+        .filter(|text: &&str| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 fn render_extractive_corpus_answer(
     request: &runtime::ChildSubqueryRequest,
     reason: Option<&str>,
@@ -1627,7 +1724,15 @@ fn render_extractive_corpus_answer(
     let mut answer = request
         .slices
         .iter()
-        .map(|slice| format!("{}: {}", slice.path, slice.preview.trim()))
+        .map(|slice| {
+            let grounded_text = slice
+                .metadata
+                .get("text")
+                .and_then(|value| value.as_str())
+                .filter(|text: &&str| !text.trim().is_empty())
+                .unwrap_or(slice.preview.trim());
+            format!("{}: {}", slice.path, grounded_text.trim())
+        })
         .collect::<Vec<_>>()
         .join("\n");
     if let Some(reason) = reason {
@@ -3129,7 +3234,8 @@ fn render_repl_help() -> String {
         "  Auto-save            .claw/sessions/<session-id>.jsonl".to_string(),
         "  Resume latest        /resume latest".to_string(),
         "  Browse sessions      /session list".to_string(),
-        "  --profile PROFILE    Set fast, balanced, deep, or research execution budgets".to_string(),
+        "  --profile PROFILE    Set fast, balanced, deep, or research execution budgets"
+            .to_string(),
         "  Profile note         Balanced enables recursive trace capture by default".to_string(),
         String::new(),
         render_slash_command_help(),
@@ -5566,7 +5672,7 @@ mod tests {
         permission_policy, print_help_to, push_output_block, render_config_report,
         render_diff_report, render_memory_report, render_repl_help, render_resume_usage,
         resolve_model_alias, resolve_session_reference, response_to_events,
-        resume_supported_slash_commands, run_resume_command,
+        resume_supported_slash_commands, run_corpus_command, run_resume_command,
         slash_command_completion_candidates_with_sessions, status_context, validate_no_args,
         CliAction, CliOutputFormat, ExecutionProfile, GitWorkspaceSummary,
         InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, SlashCommand,
@@ -6251,9 +6357,10 @@ mod tests {
         assert!(help.contains("/init"));
         assert!(help.contains("--profile PROFILE"));
         assert!(help.contains("Balanced enables recursive trace capture by default"));
-        assert!(help.contains(
-            "/corpus [attach <path>|search <query>|slice <chunk-id>|inspect <corpus-id>]"
-        ));
+        assert!(help.contains("/corpus [attach <path>|search"));
+        assert!(help.contains("answer [<corpus-id> ::] <query>"));
+        assert!(help.contains("slice [<corpus-id> ::] <chunk-id>"));
+        assert!(help.contains("inspect <corpus-id>"));
         assert!(help.contains("/diff"));
         assert!(help.contains("/version"));
         assert!(help.contains("/export [file]"));
@@ -6311,6 +6418,52 @@ mod tests {
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
         std::env::remove_var("ANTHROPIC_API_KEY");
+    }
+
+    #[test]
+    fn corpus_command_requires_explicit_selection_when_multiple_corpora_exist() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        let docs_a = root.join("docs-a");
+        let docs_b = root.join("docs-b");
+        fs::create_dir_all(&docs_a).expect("docs a dir");
+        fs::create_dir_all(&docs_b).expect("docs b dir");
+        fs::write(docs_a.join("guide.md"), "alpha corpus material\n").expect("write docs a");
+        fs::write(docs_b.join("guide.md"), "beta corpus material\n").expect("write docs b");
+
+        let first =
+            runtime::attach_corpus(&root, &[docs_a], runtime::CorpusAttachOptions::default())
+                .expect("attach first corpus");
+        let second =
+            runtime::attach_corpus(&root, &[docs_b], runtime::CorpusAttachOptions::default())
+                .expect("attach second corpus");
+
+        let error = with_current_dir(&root, || {
+            run_corpus_command(
+                Some("search corpus material"),
+                ExecutionProfile::Balanced,
+                Some("session-test"),
+                None,
+            )
+            .expect_err("search should require an explicit corpus id")
+            .to_string()
+        });
+        assert!(error.contains("multiple corpora attached"));
+        assert!(error.contains(&first.corpus_id));
+        assert!(error.contains(&second.corpus_id));
+
+        let output = with_current_dir(&root, || {
+            run_corpus_command(
+                Some(&format!("search {} :: beta", second.corpus_id)),
+                ExecutionProfile::Balanced,
+                Some("session-test"),
+                None,
+            )
+            .expect("targeted search should succeed")
+        });
+        assert!(output.contains("beta corpus material"));
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
     }
 
     #[test]
@@ -7369,7 +7522,11 @@ UU conflicted.rs",
 
 #[cfg(test)]
 mod corpus_answer_tests {
-    use super::{render_extractive_corpus_answer, resolve_corpus_answer_model};
+    use super::{
+        build_provider_child_output, extract_provider_answer_text, format_backend_init_reason,
+        render_extractive_corpus_answer, resolve_corpus_answer_model,
+    };
+    use api::{ApiError, MessageResponse, OutputContentBlock, Usage};
     use runtime::{ChildSubqueryRequest, RecursiveContextSlice, RuntimeBudget};
     use std::collections::BTreeMap;
     use std::fs;
@@ -7434,9 +7591,90 @@ mod corpus_answer_tests {
             .answer
             .contains("Using extractive fallback instead of provider-backed subquery"));
         assert!(output.answer.contains("docs/spec.md"));
+        assert!(output
+            .answer
+            .contains("provider-backed subqueries should cite grounded slices"));
         assert_eq!(output.citations, vec!["chunk-1".to_string()]);
         assert_eq!(output.completion_tokens, 0);
         assert_eq!(output.cost_usd, 0.0);
+    }
+
+    #[test]
+    fn backend_init_reason_surfaces_missing_credentials_cleanly() {
+        let reason = format_backend_init_reason(
+            "claude-sonnet-4-6",
+            &ApiError::missing_credentials("Anthropic", &["ANTHROPIC_API_KEY"]),
+        );
+
+        assert!(reason.contains("provider child executor unavailable"));
+        assert!(reason.contains("model=claude-sonnet-4-6"));
+        assert!(reason.contains("ANTHROPIC_API_KEY"));
+    }
+
+    #[test]
+    fn provider_answer_text_ignores_non_text_blocks_and_joins_text() {
+        let response = MessageResponse {
+            id: "msg_123".to_string(),
+            kind: "message".to_string(),
+            role: "assistant".to_string(),
+            content: vec![
+                OutputContentBlock::Thinking {
+                    thinking: "internal".to_string(),
+                    signature: None,
+                },
+                OutputContentBlock::Text {
+                    text: "First grounded finding.".to_string(),
+                },
+                OutputContentBlock::Text {
+                    text: "Second grounded finding.".to_string(),
+                },
+            ],
+            model: "claude-sonnet-4-6".to_string(),
+            stop_reason: Some("end_turn".to_string()),
+            stop_sequence: None,
+            usage: Usage {
+                input_tokens: 10,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                output_tokens: 12,
+            },
+            request_id: Some("req_123".to_string()),
+        };
+
+        assert_eq!(
+            extract_provider_answer_text(&response),
+            "First grounded finding.\n\nSecond grounded finding."
+        );
+    }
+
+    #[test]
+    fn provider_child_output_errors_on_empty_text_with_request_id() {
+        let response = MessageResponse {
+            id: "msg_empty".to_string(),
+            kind: "message".to_string(),
+            role: "assistant".to_string(),
+            content: vec![OutputContentBlock::Thinking {
+                thinking: "internal".to_string(),
+                signature: None,
+            }],
+            model: "claude-sonnet-4-6".to_string(),
+            stop_reason: Some("end_turn".to_string()),
+            stop_sequence: None,
+            usage: Usage {
+                input_tokens: 10,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                output_tokens: 0,
+            },
+            request_id: Some("req_empty".to_string()),
+        };
+
+        let error = build_provider_child_output("claude-sonnet-4-6", &sample_request(), response)
+            .expect_err("empty provider output should error");
+        assert!(error
+            .to_string()
+            .contains("provider returned an empty child answer"));
+        assert!(error.to_string().contains("req_empty"));
     }
 }
 
