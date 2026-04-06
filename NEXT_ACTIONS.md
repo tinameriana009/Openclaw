@@ -59,7 +59,7 @@ Next step:
 - keep splitting responsibilities cleanly across `rlm/` submodules
 - strengthen tests around:
   - stop reasons
-n  - partial failure paths
+  - partial failure paths
   - convergence/no-new-context behavior
   - token/cost/runtime boundary conditions
 

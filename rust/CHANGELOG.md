@@ -9,15 +9,14 @@ The format is intentionally lightweight and loosely follows Keep a Changelog.
 ## [Unreleased]
 
 ### Added
-- Release-note scaffolding and operator trust docs.
-- Artifact contract notes for trace, telemetry, session, and corpus outputs.
-- Privacy / handling guidance for saved `.claw/` artifacts.
+- Explicit release-hygiene guidance for clean-tree checks, branch/remote posture, and final verification before tagging.
 
 ### Changed
-- None yet.
+- Top-level repository docs now tell operators to verify the canonical publishing remote with `git remote -v` instead of assuming a stale GitHub URL.
 
 ### Fixed
-- None yet.
+- Rust workspace formatting so the documented `cargo fmt --all --check` release gate passes again.
+- A stray bullet formatting typo in `NEXT_ACTIONS.md`.
 
 ### Removed
 - None yet.

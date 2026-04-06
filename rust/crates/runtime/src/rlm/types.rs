@@ -228,4 +228,3 @@ pub(super) struct IterationArtifacts {
     pub(super) slices: Vec<RecursiveContextSlice>,
     pub(super) escalation: EscalationOutcome,
 }
-

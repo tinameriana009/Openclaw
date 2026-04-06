@@ -4,6 +4,21 @@ This project is still source-first, but releases are easier to trust when they f
 
 ## Before tagging or announcing
 
+### Repository hygiene / release posture
+
+```bash
+git status --short
+git branch -vv
+git remote -v
+```
+
+Confirm all of the following before you cut a tag or write release notes:
+
+- the working tree is clean
+- you know which remote is canonical for this clone
+- the branch you are about to tag/publish is pushed where you expect
+- local-only remotes or unpublished commits are called out explicitly if they still exist
+
 ### Build / verification
 
 ```bash

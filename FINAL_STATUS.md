@@ -87,6 +87,9 @@ Yes, with an operator who understands how to drive it.
 ### Is it production-ready for all tasks?
 No.
 
+### Is it release-candidate clean?
+Not yet. The codebase can be verified locally, but release discipline still depends on a clean tree, an unambiguous canonical remote, and final verification on the exact commit that will be pushed/tagged.
+
 ## Maturity by Area
 - Harness core: **strong alpha**
 - Local corpus RAG: **alpha, real**
