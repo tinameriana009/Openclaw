@@ -11,15 +11,30 @@ The format is intentionally lightweight and loosely follows Keep a Changelog.
 ### Added
 - Explicit release-hygiene guidance for clean-tree checks, branch/remote posture, and final verification before tagging.
 - `rust/scripts/release-verify.sh` to run the exact locked release verification sequence with an upfront Rust toolchain sanity check.
+- Stronger operator docs and quickstart guidance in `rust/README.md` and `rust/BOOTSTRAP.md`.
+- Workflow recipes, prompt templates, and demo kits for:
+  - Blender add-on work
+  - Unreal plugin work
+  - repo analysis
+- Trust/release documentation:
+  - `rust/RELEASE.md`
+  - `rust/docs/ARTIFACTS.md`
+  - `rust/docs/PRIVACY.md`
+- `FINAL_STATUS.md`, `NEXT_ACTIONS.md`, and `RELEASE_SUMMARY.md` at the repo root for clearer project status and planning.
 
 ### Changed
 - Top-level repository docs now tell operators to verify the canonical publishing remote with `git remote -v` instead of assuming a stale GitHub URL.
 - Rust bootstrap/readme/release docs now point to the release verification helper first, with the manual locked command sequence kept inline.
+- Recursive runtime behavior was significantly improved through modularization, stronger stop semantics, and better child-failure handling.
+- Corpus retrieval quality improved with better ranking, slice diversity, richer explainability, and skip/per-root reporting.
+- Child/provider execution is cleaner and less CLI-owned, with a stronger shared provider child backend direction.
+- Web-aware child execution now handles approved/degraded web context more honestly.
 
 ### Fixed
 - Rust workspace formatting so the documented `cargo fmt --all --check` release gate passes again.
 - A stray bullet formatting typo in `NEXT_ACTIONS.md`.
 - Blender demo packaging output under `docs/examples/blender-scene-cleanup-demo/dist/` no longer leaves a noisy untracked release artifact in `git status`.
+- Multiple runtime/CLI integration mismatches across corpus, recursive, provenance, and help surfaces during the alpha hardening work.
 
 ### Removed
 - None yet.
