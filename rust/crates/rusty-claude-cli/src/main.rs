@@ -1644,9 +1644,7 @@ fn execute_provider_backed_corpus_answer(
                     model: model.to_string(),
                     max_tokens: max_tokens_for_model(model),
                     messages: vec![InputMessage::user_text(request.prompt.clone())],
-                    system: Some(
-                        "You are a grounded corpus subquery worker. Answer the task using only the provided corpus slices. If the slices are insufficient, say what is missing briefly. Do not invent sources. Keep the answer concise and directly useful.".to_string(),
-                    ),
+                    system: Some(build_corpus_subquery_system_prompt(request)),
                     tools: None,
                     tool_choice: None,
                     stream: false,
@@ -1673,6 +1671,22 @@ fn map_provider_api_error_to_recursive_error(error: ApiError) -> runtime::Recurs
         }
         other => other.to_string(),
     })
+}
+
+fn build_corpus_subquery_system_prompt(request: &runtime::ChildSubqueryRequest) -> String {
+    let mut prompt = "You are a grounded corpus subquery worker. Answer the task using only the provided corpus slices. If the slices are insufficient, say what is missing briefly. Do not invent sources. Keep the answer concise and directly useful.".to_string();
+    match request.web_policy.mode {
+        runtime::WebAccessMode::Off => {
+            prompt.push_str(" Web research is disabled for this subquery, so keep the answer strictly local to the provided slices and do not imply any external verification.");
+        }
+        runtime::WebAccessMode::Ask => {
+            prompt.push_str(" External web research would require explicit approval for this subquery. Stay grounded in the provided slices; if fresh or external evidence is needed, say that approval is required before using the web.");
+        }
+        runtime::WebAccessMode::On => {
+            prompt.push_str(" This subquery is eligible for web escalation, but this runtime path does not provide direct web-fetch tools to the worker. Stay grounded in the provided slices, and if external confirmation would still be useful, state that it remains unverified rather than inventing web evidence.");
+        }
+    }
+    prompt
 }
 
 fn build_provider_child_output(
@@ -1735,6 +1749,20 @@ fn render_extractive_corpus_answer(
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let web_policy_note = match request.web_policy.mode {
+        runtime::WebAccessMode::Off => {
+            Some("Web research disabled for this subquery; response is grounded only in local slices.")
+        }
+        runtime::WebAccessMode::Ask => Some(
+            "Web research would require approval for this subquery; response remains local-only until approved.",
+        ),
+        runtime::WebAccessMode::On => Some(
+            "Web escalation was permitted for this subquery, but no direct web fetcher is available in this runtime path; external facts remain unverified.",
+        ),
+    };
+    if let Some(note) = web_policy_note {
+        answer = format!("{note}\n{answer}");
+    }
     if let Some(reason) = reason {
         answer = format!(
             "Using extractive fallback instead of provider-backed subquery ({reason}; model={model}).\n{answer}"
@@ -7523,7 +7551,8 @@ UU conflicted.rs",
 #[cfg(test)]
 mod corpus_answer_tests {
     use super::{
-        build_provider_child_output, extract_provider_answer_text, format_backend_init_reason,
+        build_corpus_subquery_system_prompt, build_provider_child_output,
+        extract_provider_answer_text, format_backend_init_reason,
         render_extractive_corpus_answer, resolve_corpus_answer_model,
     };
     use api::{ApiError, MessageResponse, OutputContentBlock, Usage};
@@ -7590,6 +7619,9 @@ mod corpus_answer_tests {
         assert!(output
             .answer
             .contains("Using extractive fallback instead of provider-backed subquery"));
+        assert!(output
+            .answer
+            .contains("Web research disabled for this subquery"));
         assert!(output.answer.contains("docs/spec.md"));
         assert!(output
             .answer
@@ -7597,6 +7629,22 @@ mod corpus_answer_tests {
         assert_eq!(output.citations, vec!["chunk-1".to_string()]);
         assert_eq!(output.completion_tokens, 0);
         assert_eq!(output.cost_usd, 0.0);
+    }
+
+    #[test]
+    fn system_prompt_reflects_web_policy_mode() {
+        let mut ask_request = sample_request();
+        ask_request.web_policy.mode = runtime::WebAccessMode::Ask;
+        let ask_prompt = build_corpus_subquery_system_prompt(&ask_request);
+        assert!(ask_prompt.contains("require explicit approval"));
+
+        let mut on_request = sample_request();
+        on_request.web_policy.mode = runtime::WebAccessMode::On;
+        let on_prompt = build_corpus_subquery_system_prompt(&on_request);
+        assert!(on_prompt.contains("does not provide direct web-fetch tools"));
+
+        let off_prompt = build_corpus_subquery_system_prompt(&sample_request());
+        assert!(off_prompt.contains("Web research is disabled"));
     }
 
     #[test]

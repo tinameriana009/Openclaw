@@ -305,12 +305,19 @@ impl PermissionPolicy {
                 PermissionPromptDecision::Deny { reason } => PermissionOutcome::Deny { reason },
             },
             None => PermissionOutcome::Deny {
-                reason: reason.unwrap_or_else(|| {
-                    format!(
-                        "tool '{tool_name}' requires approval to run while mode is {}",
-                        current_mode.as_str()
-                    )
-                }),
+                reason: reason.map_or_else(
+                    || {
+                        format!(
+                            "tool '{tool_name}' requires interactive approval to run while mode is {}; no approval prompter is available",
+                            current_mode.as_str()
+                        )
+                    },
+                    |reason| {
+                        format!(
+                            "{reason}; no approval prompter is available for tool '{tool_name}'"
+                        )
+                    },
+                ),
             },
         }
     }
@@ -671,5 +678,23 @@ mod tests {
             prompter.seen[0].reason.as_deref(),
             Some("hook requested confirmation")
         );
+    }
+
+    #[test]
+    fn prompt_required_without_prompter_returns_explicit_reason() {
+        let policy = PermissionPolicy::new(PermissionMode::DangerFullAccess)
+            .with_tool_requirement("bash", PermissionMode::DangerFullAccess)
+            .with_permission_rules(&RuntimePermissionRuleConfig::new(
+                Vec::new(),
+                Vec::new(),
+                vec!["bash(*)".to_string()],
+            ));
+
+        assert!(matches!(
+            policy.authorize("bash", r#"{"command":"git status"}"#, None),
+            PermissionOutcome::Deny { reason }
+                if reason.contains("requires approval")
+                    && reason.contains("no approval prompter is available")
+        ));
     }
 }

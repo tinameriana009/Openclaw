@@ -557,12 +557,13 @@ where
                 break;
             }
 
+            let child_web_policy = effective_child_web_policy(web_policy.clone(), artifacts.escalation);
             let request = ChildSubqueryRequest {
                 subquery_id: format!("{task_id}-child-{iteration}"),
                 prompt: build_child_prompt(task, iteration, &child_outputs, &artifacts.slices),
                 slices: artifacts.slices,
                 budget: child_budget,
-                web_policy: web_policy.clone().inherit_for_child(None),
+                web_policy: child_web_policy,
             };
             push_trace_event(
                 &mut trace,
@@ -1217,6 +1218,24 @@ fn task_mentions_freshness(task: &str) -> bool {
     .any(|needle| lowered.contains(needle))
 }
 
+fn effective_child_web_policy(parent: WebPolicy, escalation: EscalationOutcome) -> WebPolicy {
+    let max_fetches = parent.max_fetches;
+    match escalation.decision {
+        WebAccessDecision::Denied => WebPolicy {
+            mode: WebAccessMode::Off,
+            max_fetches: Some(0),
+        },
+        WebAccessDecision::RequiresApproval => parent.inherit_for_child(Some(&WebPolicy {
+            mode: WebAccessMode::Ask,
+            max_fetches,
+        })),
+        WebAccessDecision::Allowed => parent.inherit_for_child(Some(&WebPolicy {
+            mode: WebAccessMode::On,
+            max_fetches,
+        })),
+    }
+}
+
 fn web_policy_label(mode: WebAccessMode) -> &'static str {
     match mode {
         WebAccessMode::Off => "off",
@@ -1376,6 +1395,7 @@ mod tests {
     use super::*;
     use crate::corpus::{CorpusBackend, CorpusChunk, CorpusDocument, CorpusKind};
     use std::collections::BTreeMap;
+    use std::sync::{Mutex, OnceLock};
 
     struct StubExecutor;
 
@@ -1735,7 +1755,11 @@ mod tests {
     #[test]
     fn run_with_web_policy_records_escalation_and_child_inheritance() {
         let corpus = sample_corpus();
-        let runtime = RecursiveConversationRuntime::new(&corpus, StubExecutor);
+        captured_web_modes()
+            .lock()
+            .expect("lock should succeed")
+            .clear();
+        let runtime = RecursiveConversationRuntime::new(&corpus, CapturingExecutor);
         let result = runtime
             .run_with_tracer_and_policy(
                 "session-1",
@@ -1767,7 +1791,47 @@ mod tests {
             .iter()
             .any(|event| event.event_type == TraceEventType::SubqueryStarted
                 && event.data.get("webMode") == Some(&JsonValue::String("ask".to_string()))));
+        assert_eq!(
+            captured_web_modes()
+                .lock()
+                .expect("lock should succeed")
+                .as_slice(),
+            &[WebAccessMode::Ask]
+        );
         assert!(result.final_answer.contains("requires approval"));
+    }
+
+    static CAPTURED_WEB_MODES: OnceLock<Mutex<Vec<WebAccessMode>>> = OnceLock::new();
+
+    fn captured_web_modes() -> &'static Mutex<Vec<WebAccessMode>> {
+        CAPTURED_WEB_MODES.get_or_init(|| Mutex::new(Vec::new()))
+    }
+
+    struct CapturingExecutor;
+
+    impl ChildSubqueryExecutor for CapturingExecutor {
+        fn execute(
+            &self,
+            request: &ChildSubqueryRequest,
+        ) -> Result<ChildSubqueryOutput, RecursiveRuntimeError> {
+            captured_web_modes()
+                .lock()
+                .expect("lock should succeed")
+                .push(request.web_policy.mode);
+            Ok(ChildSubqueryOutput {
+                subquery_id: request.subquery_id.clone(),
+                answer: format!("executed with web mode {}", web_policy_label(request.web_policy.mode)),
+                citations: request
+                    .slices
+                    .iter()
+                    .map(|slice| slice.chunk_id.clone())
+                    .collect(),
+                web_evidence: Vec::new(),
+                prompt_tokens: 20,
+                completion_tokens: 10,
+                cost_usd: 0.0,
+            })
+        }
     }
 
     struct WebStubExecutor;
@@ -1796,6 +1860,48 @@ mod tests {
                 cost_usd: 0.0,
             })
         }
+    }
+
+    #[test]
+    fn local_only_flows_force_child_web_policy_off_even_when_parent_allows_web() {
+        let corpus = sample_corpus();
+        captured_web_modes()
+            .lock()
+            .expect("lock should succeed")
+            .clear();
+        let runtime = RecursiveConversationRuntime::new(&corpus, CapturingExecutor);
+        let result = runtime
+            .run_with_tracer_and_policy(
+                "session-1",
+                "task-local-only",
+                "summarize hidden behavior from the local corpus",
+                RuntimeBudget {
+                    max_depth: Some(2),
+                    max_iterations: Some(2),
+                    max_subcalls: Some(1),
+                    ..RuntimeBudget::default()
+                },
+                None,
+                None,
+                WebPolicy {
+                    mode: WebAccessMode::On,
+                    max_fetches: Some(3),
+                },
+            )
+            .expect("run should succeed");
+
+        assert_eq!(
+            captured_web_modes()
+                .lock()
+                .expect("lock should succeed")
+                .as_slice(),
+            &[WebAccessMode::Off]
+        );
+        assert!(!result
+            .trace
+            .events
+            .iter()
+            .any(|event| event.event_type == TraceEventType::WebEscalationStarted));
     }
 
     #[test]
