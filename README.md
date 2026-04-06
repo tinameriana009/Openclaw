@@ -64,6 +64,9 @@ The most current implementation surface is the **Rust workspace** under [`rust/`
 - GitHub: <https://github.com/tinameriana009/Openclaw>
 - Main operator docs: [`rust/README.md`](rust/README.md)
 - First-run/bootstrap notes: [`rust/BOOTSTRAP.md`](rust/BOOTSTRAP.md)
+- Release checklist: [`rust/RELEASE.md`](rust/RELEASE.md)
+- Changelog: [`rust/CHANGELOG.md`](rust/CHANGELOG.md)
+- Artifact + privacy notes: [`rust/docs/ARTIFACTS.md`](rust/docs/ARTIFACTS.md), [`rust/docs/PRIVACY.md`](rust/docs/PRIVACY.md)
 
 ---
 

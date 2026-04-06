@@ -6,6 +6,14 @@ If you want to install it, authenticate, attach a local corpus, run a task, and 
 
 ## What ships today
 
+Operator trust/release docs added for this harness:
+
+- [`CHANGELOG.md`](CHANGELOG.md) — release notes scaffold and current baseline notes
+- [`RELEASE.md`](RELEASE.md) — repeatable release/readiness checklist
+- [`docs/ARTIFACTS.md`](docs/ARTIFACTS.md) — on-disk artifact contract and compatibility notes
+- [`docs/PRIVACY.md`](docs/PRIVACY.md) — privacy and handling guidance for `.claw/` artifacts
+
+
 The current CLI help and local smoke tests confirm these operator-facing surfaces:
 
 - Interactive REPL (`claw`)
@@ -274,6 +282,18 @@ Other useful operator commands from the current help surface:
 - `status` also reports workspace root, branch, dirty state, and memory-file loading
 - the current default permission mode is `workspace-write` unless config / env overrides it
 - use `--dangerously-skip-permissions` only when you intentionally want unrestricted execution for that run
+
+## Compatibility and migration notes
+
+Current baseline:
+
+- the workspace version is `0.1.0`
+- trace and corpus artifact formats are documented, but still pre-1.0 contracts
+- there is not yet a dedicated migration layer for session / trace / corpus artifacts
+- safest automation strategy today is pinning to a git tag or commit and parsing `.claw/` artifacts defensively
+
+If you build tooling around `.claw/trace/`, `.claw/corpus/`, or `.claw/telemetry/`, read [`docs/ARTIFACTS.md`](docs/ARTIFACTS.md) first.
+If you need to share traces or manifests outside your machine, read [`docs/PRIVACY.md`](docs/PRIVACY.md) first.
 
 ## Known operator gaps
 
