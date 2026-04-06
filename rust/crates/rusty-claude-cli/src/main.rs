@@ -24,37 +24,37 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use api::{
-    build_provider_child_executor, format_provider_child_init_reason,
-    format_provider_execution_fallback_reason, resolve_startup_auth_source, AnthropicClient,
-    ApiError, AuthSource, ContentBlockDelta, InputContentBlock, InputMessage, MessageRequest,
-    MessageResponse, OutputContentBlock, PromptCache, ProviderChildExecutor, ProviderClient,
-    StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition, ToolResultContentBlock,
-    WebEvidenceCollector,
+    AnthropicClient, ApiError, AuthSource, ContentBlockDelta, InputContentBlock, InputMessage,
+    MessageRequest, MessageResponse, OutputContentBlock, PromptCache, ProviderChildAuthResolver,
+    ProviderChildBackend, ProviderClient, StreamEvent as ApiStreamEvent, ToolChoice,
+    ToolDefinition, ToolResultContentBlock, WebEvidenceCollector,
+    format_provider_child_init_reason, format_provider_execution_fallback_reason,
+    render_extractive_child_answer, resolve_startup_auth_source,
 };
 
 use commands::{
-    handle_agents_slash_command, handle_mcp_slash_command, handle_plugins_slash_command,
-    handle_skills_slash_command, render_slash_command_help, resume_supported_slash_commands,
-    slash_command_specs, validate_slash_command_input, SlashCommand,
+    SlashCommand, handle_agents_slash_command, handle_mcp_slash_command,
+    handle_plugins_slash_command, handle_skills_slash_command, render_slash_command_help,
+    resume_supported_slash_commands, slash_command_specs, validate_slash_command_input,
 };
-use compat_harness::{extract_manifest, UpstreamPaths};
+use compat_harness::{UpstreamPaths, extract_manifest};
 use init::initialize_repo;
 use plugins::{PluginHooks, PluginManager, PluginManagerConfig, PluginRegistry};
 use render::{MarkdownStreamState, Spinner, TerminalRenderer};
 use runtime::{
-    attach_corpus, clear_oauth_credentials, default_corpus_store_dir, generate_pkce_pair,
-    generate_state, inspect_corpus, list_corpora, load_corpus, load_system_prompt,
+    ApiClient, ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader, ConfigSource,
+    ContentBlock, ConversationMessage, ConversationRuntime, CorpusAttachOptions, ExecutionProfile,
+    MessageRole, OAuthAuthorizationRequest, OAuthConfig, OAuthTokenExchangeRequest, PermissionMode,
+    PermissionPolicy, ProjectContext, PromptCacheEvent, ResolvedPermissionMode, RuntimeError,
+    Session, TokenUsage, ToolError, ToolExecutor, UsageTracker, attach_corpus,
+    clear_oauth_credentials, default_corpus_store_dir, generate_pkce_pair, generate_state,
+    inspect_corpus, list_corpora, load_corpus, load_system_prompt,
     parse_oauth_callback_request_target, resolve_sandbox_status, save_oauth_credentials,
-    search_corpus, slice_corpus, ApiClient, ApiRequest, AssistantEvent, CompactionConfig,
-    ConfigLoader, ConfigSource, ContentBlock, ConversationMessage, ConversationRuntime,
-    CorpusAttachOptions, ExecutionProfile, MessageRole, OAuthAuthorizationRequest, OAuthConfig,
-    OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext, PromptCacheEvent,
-    ResolvedPermissionMode, RuntimeError, Session, TokenUsage, ToolError, ToolExecutor,
-    UsageTracker,
+    search_corpus, slice_corpus,
 };
 use serde_json::json;
 use telemetry::{JsonlTelemetrySink, SessionTracer};
-use tools::{minimal_web_research, GlobalToolRegistry};
+use tools::{GlobalToolRegistry, minimal_web_research};
 
 const DEFAULT_MODEL: &str = "claude-opus-4-6";
 fn max_tokens_for_model(model: &str) -> u32 {
@@ -356,7 +356,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 index += 1;
             }
             other if rest.is_empty() && other.starts_with('-') => {
-                return Err(format_unknown_option(other))
+                return Err(format_unknown_option(other));
             }
             other => {
                 rest.push(other.to_string());
@@ -1447,17 +1447,7 @@ fn run_corpus_command(
 }
 
 struct CorpusAnswerExecutor {
-    backend: CorpusAnswerBackend,
-}
-
-struct ProviderCorpusAnswerBackend {
-    executor: ProviderChildExecutor,
-    model: String,
-}
-
-enum CorpusAnswerBackend {
-    Provider(ProviderCorpusAnswerBackend),
-    ExtractiveFallback { reason: String, model: String },
+    backend: ProviderChildBackend,
 }
 
 impl CorpusAnswerExecutor {
@@ -1467,14 +1457,11 @@ impl CorpusAnswerExecutor {
         active_model: Option<&str>,
     ) -> Self {
         let resolved_model = resolve_corpus_answer_model(cwd, active_model);
-        match build_corpus_answer_backend(session_id.unwrap_or("corpus-cli"), &resolved_model) {
-            Ok(backend) => Self { backend },
-            Err(reason) => Self {
-                backend: CorpusAnswerBackend::ExtractiveFallback {
-                    reason,
-                    model: resolved_model,
-                },
-            },
+        Self {
+            backend: build_corpus_answer_backend(
+                session_id.unwrap_or("corpus-cli"),
+                &resolved_model,
+            ),
         }
     }
 }
@@ -1484,22 +1471,19 @@ impl runtime::ChildSubqueryExecutor for CorpusAnswerExecutor {
         &self,
         request: &runtime::ChildSubqueryRequest,
     ) -> Result<runtime::ChildSubqueryOutput, runtime::RecursiveRuntimeError> {
-        match &self.backend {
-            CorpusAnswerBackend::Provider(provider) => {
-                runtime::ChildSubqueryExecutor::execute(&provider.executor, request).or_else(
-                    |error| {
-                        Ok(render_extractive_corpus_answer(
-                            request,
-                            Some(&format_provider_execution_fallback_reason(&error)),
-                            &provider.model,
-                        ))
-                    },
-                )
-            }
-            CorpusAnswerBackend::ExtractiveFallback { reason, model } => Ok(
-                render_extractive_corpus_answer(request, Some(reason), model),
-            ),
-        }
+        runtime::ChildSubqueryExecutor::execute(&self.backend, request).or_else(|error| {
+            let fallback_reason = self
+                .backend
+                .unavailable_reason()
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| format_provider_execution_fallback_reason(&error));
+            Ok(render_extractive_child_answer(
+                request,
+                Some(&fallback_reason),
+                self.backend.model(),
+                &collect_minimal_web_evidence,
+            ))
+        })
     }
 }
 
@@ -1585,21 +1569,19 @@ fn resolve_corpus_answer_model(cwd: &Path, active_model: Option<&str>) -> String
     .to_string()
 }
 
-fn build_corpus_answer_backend(
-    session_id: &str,
-    model: &str,
-) -> Result<CorpusAnswerBackend, String> {
+fn build_corpus_answer_backend(session_id: &str, model: &str) -> ProviderChildBackend {
     let web_evidence_collector: WebEvidenceCollector = Arc::new(collect_minimal_web_evidence);
-    let executor = build_provider_child_executor(
+    let auth_resolver: ProviderChildAuthResolver = Arc::new(|| {
+        resolve_cli_auth_source()
+            .map(Some)
+            .map_err(|error| error.to_string())
+    });
+    ProviderChildBackend::build_with_resolver(
         session_id,
         model,
-        resolve_cli_auth_source().ok(),
+        auth_resolver,
         web_evidence_collector,
-    )?;
-    Ok(CorpusAnswerBackend::Provider(ProviderCorpusAnswerBackend {
-        executor,
-        model: model.to_string(),
-    }))
+    )
 }
 
 fn collect_minimal_web_evidence(
@@ -1636,141 +1618,6 @@ fn collect_minimal_web_evidence(
             })
         })
         .collect())
-}
-
-#[derive(Debug, Clone, Default)]
-struct RecursiveWebContext {
-    evidence: Vec<runtime::EvidenceRecord>,
-    note: Option<String>,
-}
-
-fn collect_recursive_web_context(request: &runtime::ChildSubqueryRequest) -> RecursiveWebContext {
-    match collect_minimal_web_evidence(request) {
-        Ok(evidence) => RecursiveWebContext {
-            evidence,
-            note: None,
-        },
-        Err(error) => RecursiveWebContext {
-            evidence: Vec::new(),
-            note: Some(error.to_string()),
-        },
-    }
-}
-
-fn build_corpus_subquery_system_prompt(
-    request: &runtime::ChildSubqueryRequest,
-    web_context: &RecursiveWebContext,
-) -> String {
-    let mut prompt = "You are a grounded corpus subquery worker. Answer the task using the provided corpus slices first. If separately supplied web evidence is present, you may use it only as external confirmation or freshness context. Be explicit about what comes from local corpus slices versus fetched web evidence. If the available evidence is insufficient, say what is missing briefly. Do not invent sources. Keep the answer concise and directly useful.".to_string();
-    match request.web_policy.mode {
-        runtime::WebAccessMode::Off => {
-            prompt.push_str(" Web research is disabled for this subquery, so keep the answer strictly local to the provided slices and do not imply any external verification.");
-        }
-        runtime::WebAccessMode::Ask => {
-            prompt.push_str(" External web research would require explicit approval for this subquery. Stay grounded in the provided slices; if fresh or external evidence is needed, say that approval is required before using the web.");
-        }
-        runtime::WebAccessMode::On => {
-            if !web_context.evidence.is_empty() {
-                prompt.push_str(" Limited web evidence is attached below because the runtime approved escalation for this subquery. Use it carefully, cite it as external evidence, and avoid overstating confidence if the fetched material is thin.");
-            } else if request.web_research_query.is_some() {
-                prompt.push_str(" Web escalation was approved for this subquery, but no fetched web evidence is attached. Stay honest about that and avoid implying successful external verification.");
-            } else {
-                prompt.push_str(" Web access is enabled in principle, but this subquery was not flagged for external fetches. Stay grounded in the provided slices and do not imply web verification.");
-            }
-        }
-    }
-    if let Some(note) = web_context.note.as_deref() {
-        prompt.push_str(" Runtime note: ");
-        prompt.push_str(note);
-    }
-    prompt
-}
-
-fn render_recursive_web_context(web_context: &RecursiveWebContext) -> Option<String> {
-    let mut sections = Vec::new();
-    if !web_context.evidence.is_empty() {
-        sections.push(format!(
-            "Web evidence:\n{}",
-            web_context
-                .evidence
-                .iter()
-                .enumerate()
-                .map(|(index, item)| format!(
-                    "- [W{}] {} — {}\n  {}",
-                    index + 1,
-                    item.title,
-                    item.locator,
-                    item.snippet
-                ))
-                .collect::<Vec<_>>()
-                .join("\n")
-        ));
-    }
-    if let Some(note) = web_context.note.as_deref() {
-        sections.push(format!("Web execution note: {note}"));
-    }
-    (!sections.is_empty()).then(|| sections.join("\n"))
-}
-
-fn render_extractive_corpus_answer(
-    request: &runtime::ChildSubqueryRequest,
-    reason: Option<&str>,
-    model: &str,
-) -> runtime::ChildSubqueryOutput {
-    let web_context = collect_recursive_web_context(request);
-    let mut answer = request
-        .slices
-        .iter()
-        .map(|slice| {
-            let grounded_text = slice
-                .metadata
-                .get("text")
-                .and_then(|value| value.as_str())
-                .filter(|text: &&str| !text.trim().is_empty())
-                .unwrap_or(slice.preview.trim());
-            format!("{}: {}", slice.path, grounded_text.trim())
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let web_policy_note = match request.web_policy.mode {
-        runtime::WebAccessMode::Off => {
-            Some("Web research disabled for this subquery; response is grounded only in local slices.")
-        }
-        runtime::WebAccessMode::Ask => Some(
-            "Web research would require approval for this subquery; response remains local-only until approved.",
-        ),
-        runtime::WebAccessMode::On => {
-            if web_context.evidence.is_empty() {
-                Some("Web escalation was permitted for this subquery, but no external evidence was successfully attached; external facts remain unverified.")
-            } else {
-                Some("Web escalation was permitted for this subquery; any attached web evidence is presented separately from local corpus slices.")
-            }
-        }
-    };
-    if let Some(note) = web_policy_note {
-        answer = format!("{note}\n{answer}");
-    }
-    if let Some(rendered_web) = render_recursive_web_context(&web_context) {
-        answer = format!("{answer}\n\n{rendered_web}");
-    }
-    if let Some(reason) = reason {
-        answer = format!(
-            "Fallback: using an extractive local-only subquery answer because provider-backed execution is unavailable ({reason}; model={model}).\n{answer}"
-        );
-    }
-    runtime::ChildSubqueryOutput {
-        subquery_id: request.subquery_id.clone(),
-        answer,
-        citations: request
-            .slices
-            .iter()
-            .map(|slice| slice.chunk_id.clone())
-            .collect(),
-        web_evidence: web_context.evidence,
-        prompt_tokens: u32::try_from(request.prompt.len()).unwrap_or(u32::MAX),
-        completion_tokens: 0,
-        cost_usd: 0.0,
-    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -4256,10 +4103,12 @@ impl InternalPromptProgressRun {
 
         let (heartbeat_stop, heartbeat_rx) = mpsc::channel();
         let heartbeat_reporter = reporter.clone();
-        let heartbeat_handle = thread::spawn(move || loop {
-            match heartbeat_rx.recv_timeout(INTERNAL_PROGRESS_HEARTBEAT_INTERVAL) {
-                Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
-                Err(RecvTimeoutError::Timeout) => heartbeat_reporter.emit_heartbeat(),
+        let heartbeat_handle = thread::spawn(move || {
+            loop {
+                match heartbeat_rx.recv_timeout(INTERNAL_PROGRESS_HEARTBEAT_INTERVAL) {
+                    Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
+                    Err(RecvTimeoutError::Timeout) => heartbeat_reporter.emit_heartbeat(),
+                }
             }
         });
 
@@ -5606,12 +5455,18 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
         out,
         "                           Balanced enables recursive trace capture by default"
     )?;
-    writeln!(out, "  --allowedTools TOOLS       Restrict enabled tools (repeatable; comma-separated aliases supported)")?;
+    writeln!(
+        out,
+        "  --allowedTools TOOLS       Restrict enabled tools (repeatable; comma-separated aliases supported)"
+    )?;
     writeln!(
         out,
         "  --corpus PATH              Attach a local corpus root before running (repeatable)"
     )?;
-    writeln!(out, "                           Use /corpus answer <query> in REPL or prompt mode to run the grounded recursive corpus path")?;
+    writeln!(
+        out,
+        "                           Use /corpus answer <query> in REPL or prompt mode to run the grounded recursive corpus path"
+    )?;
     writeln!(
         out,
         "  --version, -V              Print version and build information locally"
@@ -5677,7 +5532,9 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_runtime_plugin_state_with_loader, build_runtime_with_plugin_state,
+        CliAction, CliOutputFormat, DEFAULT_MODEL, ExecutionProfile, GitWorkspaceSummary,
+        InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, SlashCommand,
+        StatusUsage, build_runtime_plugin_state_with_loader, build_runtime_with_plugin_state,
         create_managed_session_handle, describe_tool_progress, filter_tool_specs,
         format_bughunter_report, format_commit_preflight_report, format_commit_skipped_report,
         format_compact_report, format_cost_report, format_internal_prompt_progress_line,
@@ -5692,9 +5549,6 @@ mod tests {
         resolve_model_alias, resolve_session_reference, response_to_events,
         resume_supported_slash_commands, run_corpus_command, run_resume_command,
         slash_command_completion_candidates_with_sessions, status_context, validate_no_args,
-        CliAction, CliOutputFormat, ExecutionProfile, GitWorkspaceSummary,
-        InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, SlashCommand,
-        StatusUsage, DEFAULT_MODEL,
     };
     use api::{MessageResponse, OutputContentBlock, Usage};
     use plugins::{
@@ -6669,16 +6523,22 @@ mod tests {
         assert!(preflight.contains("Result           ready"));
         assert!(preflight.contains("Branch           feature/ux"));
         assert!(preflight.contains("Workspace        dirty · 2 files · 1 staged, 1 unstaged"));
-        assert!(preflight
-            .contains("Action           create a git commit from the current workspace changes"));
+        assert!(
+            preflight.contains(
+                "Action           create a git commit from the current workspace changes"
+            )
+        );
     }
 
     #[test]
     fn commit_skipped_report_points_to_next_steps() {
         let report = format_commit_skipped_report();
         assert!(report.contains("Reason           no workspace changes"));
-        assert!(report
-            .contains("Action           create a git commit from the current workspace changes"));
+        assert!(
+            report.contains(
+                "Action           create a git commit from the current workspace changes"
+            )
+        );
         assert!(report.contains("/status to inspect context"));
         assert!(report.contains("/diff to inspect repo changes"));
     }
@@ -7540,11 +7400,10 @@ UU conflicted.rs",
 
 #[cfg(test)]
 mod corpus_answer_tests {
-    use super::{
-        collect_minimal_web_evidence, render_extractive_corpus_answer, resolve_corpus_answer_model,
-    };
+    use super::{collect_minimal_web_evidence, resolve_corpus_answer_model};
     use api::{
-        format_provider_child_init_reason, ApiError, MessageResponse, OutputContentBlock, Usage,
+        ApiError, MessageResponse, OutputContentBlock, Usage, format_provider_child_init_reason,
+        render_extractive_child_answer,
     };
     use runtime::{ChildSubqueryRequest, RecursiveContextSlice, RuntimeBudget};
     use std::collections::BTreeMap;
@@ -7655,22 +7514,29 @@ mod corpus_answer_tests {
 
     #[test]
     fn extractive_fallback_marks_reason_and_keeps_grounded_citations() {
-        let output = render_extractive_corpus_answer(
+        let output = render_extractive_child_answer(
             &sample_request(),
             Some("missing provider auth"),
             "claude-sonnet-4-6",
+            &collect_minimal_web_evidence,
         );
 
-        assert!(output
-            .answer
-            .contains("Fallback: using an extractive local-only subquery answer"));
-        assert!(output
-            .answer
-            .contains("Web research disabled for this subquery"));
+        assert!(
+            output
+                .answer
+                .contains("Fallback: using an extractive local-only subquery answer")
+        );
+        assert!(
+            output
+                .answer
+                .contains("Web research disabled for this subquery")
+        );
         assert!(output.answer.contains("docs/spec.md"));
-        assert!(output
-            .answer
-            .contains("provider-backed subqueries should cite grounded slices"));
+        assert!(
+            output
+                .answer
+                .contains("provider-backed subqueries should cite grounded slices")
+        );
         assert_eq!(output.citations, vec!["chunk-1".to_string()]);
         assert_eq!(output.completion_tokens, 0);
         assert_eq!(output.cost_usd, 0.0);
@@ -7717,10 +7583,11 @@ mod corpus_answer_tests {
         request.web_policy.max_fetches = Some(1);
         request.web_research_query = Some("latest fixture release".to_string());
 
-        let output = render_extractive_corpus_answer(
+        let output = render_extractive_child_answer(
             &request,
             Some("missing provider auth"),
             "claude-sonnet-4-6",
+            &collect_minimal_web_evidence,
         );
         assert!(output.answer.contains("Web evidence:"));
         assert!(output.answer.contains("Example result"));
@@ -7731,7 +7598,7 @@ mod corpus_answer_tests {
 
 #[cfg(test)]
 mod sandbox_report_tests {
-    use super::{format_sandbox_report, HookAbortMonitor};
+    use super::{HookAbortMonitor, format_sandbox_report};
     use runtime::HookAbortSignal;
     use std::sync::mpsc;
     use std::time::Duration;

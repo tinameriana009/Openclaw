@@ -7,8 +7,8 @@ use runtime::{
 use tokio::runtime::Runtime;
 
 use crate::{
-    max_tokens_for_model, ApiError, AuthSource, InputMessage, MessageRequest, MessageResponse,
-    OutputContentBlock, PromptCache, ProviderClient,
+    ApiError, AuthSource, InputMessage, MessageRequest, MessageResponse, OutputContentBlock,
+    PromptCache, ProviderClient, max_tokens_for_model,
 };
 
 pub type WebEvidenceCollector = Arc<
@@ -16,6 +16,9 @@ pub type WebEvidenceCollector = Arc<
         + Send
         + Sync,
 >;
+
+pub type ProviderChildAuthResolver =
+    Arc<dyn Fn() -> Result<Option<AuthSource>, String> + Send + Sync>;
 
 pub struct ProviderChildExecutor {
     runtime: Runtime,
@@ -66,6 +69,88 @@ pub fn build_provider_child_executor(
     ProviderChildExecutor::new(client, model, web_evidence_collector)
 }
 
+pub enum ProviderChildBackend {
+    Provider(ProviderChildExecutor),
+    Unavailable { model: String, reason: String },
+}
+
+impl ProviderChildBackend {
+    #[must_use]
+    pub fn build(
+        session_id: &str,
+        model: &str,
+        anthropic_auth: Option<AuthSource>,
+        web_evidence_collector: WebEvidenceCollector,
+    ) -> Self {
+        match build_provider_child_executor(
+            session_id,
+            model,
+            anthropic_auth,
+            web_evidence_collector,
+        ) {
+            Ok(executor) => Self::Provider(executor),
+            Err(reason) => Self::Unavailable {
+                model: model.to_string(),
+                reason,
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn build_with_resolver(
+        session_id: &str,
+        model: &str,
+        auth_resolver: ProviderChildAuthResolver,
+        web_evidence_collector: WebEvidenceCollector,
+    ) -> Self {
+        let anthropic_auth = match auth_resolver() {
+            Ok(auth) => auth,
+            Err(reason) => {
+                return Self::Unavailable {
+                    model: model.to_string(),
+                    reason,
+                };
+            }
+        };
+        Self::build(session_id, model, anthropic_auth, web_evidence_collector)
+    }
+
+    #[must_use]
+    pub fn model(&self) -> &str {
+        match self {
+            Self::Provider(executor) => executor.model(),
+            Self::Unavailable { model, .. } => model,
+        }
+    }
+
+    #[must_use]
+    pub fn unavailable_reason(&self) -> Option<&str> {
+        match self {
+            Self::Provider(_) => None,
+            Self::Unavailable { reason, .. } => Some(reason.as_str()),
+        }
+    }
+}
+
+impl ChildSubqueryExecutor for ProviderChildBackend {
+    fn execute(
+        &self,
+        request: &ChildSubqueryRequest,
+    ) -> Result<ChildSubqueryOutput, RecursiveRuntimeError> {
+        match self {
+            Self::Provider(executor) => executor.execute(request),
+            Self::Unavailable { reason, model } => {
+                let message = if reason.contains("provider child executor unavailable") {
+                    reason.clone()
+                } else {
+                    format!("provider child executor unavailable for model={model}: {reason}")
+                };
+                Err(RecursiveRuntimeError::ChildExecution(message))
+            }
+        }
+    }
+}
+
 #[must_use]
 pub fn format_provider_child_init_reason(model: &str, error: &ApiError) -> String {
     match error {
@@ -76,12 +161,10 @@ pub fn format_provider_child_init_reason(model: &str, error: &ApiError) -> Strin
         ApiError::ExpiredOAuthToken => format!(
             "provider child executor unavailable for model={model}: saved OAuth token is expired; re-authenticate before retrying"
         ),
-        ApiError::Auth(message) => format!(
-            "provider child executor unavailable for model={model}: auth error: {message}"
-        ),
-        other => format!(
-            "provider child executor unavailable for model={model}: {other}"
-        ),
+        ApiError::Auth(message) => {
+            format!("provider child executor unavailable for model={model}: auth error: {message}")
+        }
+        other => format!("provider child executor unavailable for model={model}: {other}"),
     }
 }
 
@@ -254,6 +337,100 @@ fn build_provider_child_output(
     })
 }
 
+pub fn render_extractive_child_answer(
+    request: &ChildSubqueryRequest,
+    reason: Option<&str>,
+    model: &str,
+    web_evidence_collector: &dyn Fn(
+        &ChildSubqueryRequest,
+    ) -> Result<Vec<EvidenceRecord>, RecursiveRuntimeError>,
+) -> ChildSubqueryOutput {
+    let web_context = collect_web_context(request, web_evidence_collector);
+    let mut answer = request
+        .slices
+        .iter()
+        .map(|slice| {
+            let grounded_text = slice
+                .metadata
+                .get("text")
+                .and_then(|value| value.as_str())
+                .filter(|text: &&str| !text.trim().is_empty())
+                .unwrap_or(slice.preview.trim());
+            format!("{}: {}", slice.path, grounded_text.trim())
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let web_policy_note = match request.web_policy.mode {
+        WebAccessMode::Off => Some(
+            "Web research disabled for this subquery; response is grounded only in local slices.",
+        ),
+        WebAccessMode::Ask => Some(
+            "Web research would require approval for this subquery; response remains local-only until approved.",
+        ),
+        WebAccessMode::On => {
+            if web_context.evidence.is_empty() {
+                Some(
+                    "Web escalation was permitted for this subquery, but no external evidence was successfully attached; external facts remain unverified.",
+                )
+            } else {
+                Some(
+                    "Web escalation was permitted for this subquery; any attached web evidence is presented separately from local corpus slices.",
+                )
+            }
+        }
+    };
+    if let Some(note) = web_policy_note {
+        answer = format!("{note}\n{answer}");
+    }
+    if let Some(rendered_web) = render_web_context(&web_context) {
+        answer = format!("{answer}\n\n{rendered_web}");
+    }
+    if let Some(reason) = reason {
+        answer = format!(
+            "Fallback: using an extractive local-only subquery answer because provider-backed execution is unavailable ({reason}; model={model}).\n{answer}"
+        );
+    }
+    ChildSubqueryOutput {
+        subquery_id: request.subquery_id.clone(),
+        answer,
+        citations: request
+            .slices
+            .iter()
+            .map(|slice| slice.chunk_id.clone())
+            .collect(),
+        web_evidence: web_context.evidence,
+        prompt_tokens: u32::try_from(request.prompt.len()).unwrap_or(u32::MAX),
+        completion_tokens: 0,
+        cost_usd: 0.0,
+    }
+}
+
+fn render_web_context(web_context: &CollectedWebContext) -> Option<String> {
+    let mut sections = Vec::new();
+    if !web_context.evidence.is_empty() {
+        sections.push(format!(
+            "Web evidence:\n{}",
+            web_context
+                .evidence
+                .iter()
+                .enumerate()
+                .map(|(index, item)| format!(
+                    "- [W{}] {} — {}\n  {}",
+                    index + 1,
+                    item.title,
+                    item.locator,
+                    item.snippet
+                ))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    if let Some(note) = web_context.note.as_deref() {
+        sections.push(format!("Web execution note: {note}"));
+    }
+    (!sections.is_empty()).then(|| sections.join("\n"))
+}
+
 fn extract_provider_answer_text(response: &MessageResponse) -> String {
     response
         .content
@@ -402,10 +579,12 @@ mod tests {
         });
 
         assert!(context.evidence.is_empty());
-        assert!(context
-            .note
-            .as_deref()
-            .is_some_and(|note| note.contains("collector failed")));
+        assert!(
+            context
+                .note
+                .as_deref()
+                .is_some_and(|note| note.contains("collector failed"))
+        );
     }
 
     #[test]
@@ -426,9 +605,39 @@ mod tests {
         .expect("degraded web context should still build output");
 
         assert!(output.answer.contains("Grounded answer"));
-        assert!(output
-            .answer
-            .contains("approved web collection failed before model execution"));
+        assert!(
+            output
+                .answer
+                .contains("approved web collection failed before model execution")
+        );
+    }
+
+    #[test]
+    fn shared_extractive_fallback_preserves_degraded_web_note() {
+        let request = sample_request(WebAccessMode::On, Some("freshness"));
+        let output = render_extractive_child_answer(
+            &request,
+            Some("missing provider auth"),
+            "claude-sonnet-4-6",
+            &|_| {
+                Err(RecursiveRuntimeError::ChildExecution(
+                    "collector failed".to_string(),
+                ))
+            },
+        );
+
+        assert!(
+            output
+                .answer
+                .contains("Fallback: using an extractive local-only subquery answer")
+        );
+        assert!(
+            output
+                .answer
+                .contains("Web escalation was permitted for this subquery")
+        );
+        assert!(output.answer.contains("Web execution note: approved web collection failed before model execution: collector failed"));
+        assert_eq!(output.web_evidence, Vec::<EvidenceRecord>::new());
     }
 
     #[test]
@@ -497,5 +706,35 @@ mod tests {
         .expect("shared builder should build executor");
 
         assert_eq!(executor.model(), "claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn shared_backend_factory_builds_provider_variant_when_auth_is_available() {
+        let callback: WebEvidenceCollector = Arc::new(|_| Ok(Vec::new()));
+        let backend = ProviderChildBackend::build_with_resolver(
+            "session-1",
+            "claude-sonnet-4-6",
+            Arc::new(|| Ok(Some(AuthSource::ApiKey("test".to_string())))),
+            callback,
+        );
+
+        assert_eq!(backend.model(), "claude-sonnet-4-6");
+        assert!(backend.unavailable_reason().is_none());
+        assert!(matches!(backend, ProviderChildBackend::Provider(_)));
+    }
+
+    #[test]
+    fn shared_backend_factory_preserves_resolver_failure_as_unavailable_reason() {
+        let callback: WebEvidenceCollector = Arc::new(|_| Ok(Vec::new()));
+        let backend = ProviderChildBackend::build_with_resolver(
+            "session-1",
+            "claude-sonnet-4-6",
+            Arc::new(|| Err("oauth bootstrap failed".to_string())),
+            callback,
+        );
+
+        assert_eq!(backend.model(), "claude-sonnet-4-6");
+        assert_eq!(backend.unavailable_reason(), Some("oauth bootstrap failed"));
+        assert!(matches!(backend, ProviderChildBackend::Unavailable { .. }));
     }
 }
