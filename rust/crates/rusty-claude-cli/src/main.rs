@@ -24,37 +24,37 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use api::{
-    AnthropicClient, ApiError, AuthSource, ContentBlockDelta, InputContentBlock, InputMessage,
-    MessageRequest, MessageResponse, OutputContentBlock, PromptCache, ProviderChildAuthResolver,
+    format_provider_child_init_reason, format_provider_execution_fallback_reason,
+    render_extractive_child_answer, resolve_startup_auth_source, AnthropicClient, ApiError,
+    AuthSource, ContentBlockDelta, InputContentBlock, InputMessage, MessageRequest,
+    MessageResponse, OutputContentBlock, PromptCache, ProviderChildAuthResolver,
     ProviderChildBackend, ProviderClient, StreamEvent as ApiStreamEvent, ToolChoice,
     ToolDefinition, ToolResultContentBlock, WebEvidenceCollector,
-    format_provider_child_init_reason, format_provider_execution_fallback_reason,
-    render_extractive_child_answer, resolve_startup_auth_source,
 };
 
 use commands::{
-    SlashCommand, handle_agents_slash_command, handle_mcp_slash_command,
-    handle_plugins_slash_command, handle_skills_slash_command, render_slash_command_help,
-    resume_supported_slash_commands, slash_command_specs, validate_slash_command_input,
+    handle_agents_slash_command, handle_mcp_slash_command, handle_plugins_slash_command,
+    handle_skills_slash_command, render_slash_command_help, resume_supported_slash_commands,
+    slash_command_specs, validate_slash_command_input, SlashCommand,
 };
-use compat_harness::{UpstreamPaths, extract_manifest};
+use compat_harness::{extract_manifest, UpstreamPaths};
 use init::initialize_repo;
 use plugins::{PluginHooks, PluginManager, PluginManagerConfig, PluginRegistry};
 use render::{MarkdownStreamState, Spinner, TerminalRenderer};
 use runtime::{
-    ApiClient, ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader, ConfigSource,
-    ContentBlock, ConversationMessage, ConversationRuntime, CorpusAttachOptions, ExecutionProfile,
-    MessageRole, OAuthAuthorizationRequest, OAuthConfig, OAuthTokenExchangeRequest, PermissionMode,
-    PermissionPolicy, ProjectContext, PromptCacheEvent, ResolvedPermissionMode, RuntimeError,
-    Session, TokenUsage, ToolError, ToolExecutor, UsageTracker, attach_corpus,
-    clear_oauth_credentials, default_corpus_store_dir, generate_pkce_pair, generate_state,
-    inspect_corpus, list_corpora, load_corpus, load_system_prompt,
+    attach_corpus, clear_oauth_credentials, default_corpus_store_dir, generate_pkce_pair,
+    generate_state, inspect_corpus, list_corpora, load_corpus, load_system_prompt,
     parse_oauth_callback_request_target, resolve_sandbox_status, save_oauth_credentials,
-    search_corpus, slice_corpus,
+    search_corpus, slice_corpus, ApiClient, ApiRequest, AssistantEvent, CompactionConfig,
+    ConfigLoader, ConfigSource, ContentBlock, ConversationMessage, ConversationRuntime,
+    CorpusAttachOptions, ExecutionProfile, MessageRole, OAuthAuthorizationRequest, OAuthConfig,
+    OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext, PromptCacheEvent,
+    ResolvedPermissionMode, RuntimeError, Session, TokenUsage, ToolError, ToolExecutor,
+    UsageTracker,
 };
 use serde_json::json;
 use telemetry::{JsonlTelemetrySink, SessionTracer};
-use tools::{GlobalToolRegistry, minimal_web_research};
+use tools::{minimal_web_research, GlobalToolRegistry};
 
 const DEFAULT_MODEL: &str = "claude-opus-4-6";
 fn max_tokens_for_model(model: &str) -> u32 {
@@ -4103,12 +4103,10 @@ impl InternalPromptProgressRun {
 
         let (heartbeat_stop, heartbeat_rx) = mpsc::channel();
         let heartbeat_reporter = reporter.clone();
-        let heartbeat_handle = thread::spawn(move || {
-            loop {
-                match heartbeat_rx.recv_timeout(INTERNAL_PROGRESS_HEARTBEAT_INTERVAL) {
-                    Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
-                    Err(RecvTimeoutError::Timeout) => heartbeat_reporter.emit_heartbeat(),
-                }
+        let heartbeat_handle = thread::spawn(move || loop {
+            match heartbeat_rx.recv_timeout(INTERNAL_PROGRESS_HEARTBEAT_INTERVAL) {
+                Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
+                Err(RecvTimeoutError::Timeout) => heartbeat_reporter.emit_heartbeat(),
             }
         });
 
@@ -5532,9 +5530,7 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
     use super::{
-        CliAction, CliOutputFormat, DEFAULT_MODEL, ExecutionProfile, GitWorkspaceSummary,
-        InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, SlashCommand,
-        StatusUsage, build_runtime_plugin_state_with_loader, build_runtime_with_plugin_state,
+        build_runtime_plugin_state_with_loader, build_runtime_with_plugin_state,
         create_managed_session_handle, describe_tool_progress, filter_tool_specs,
         format_bughunter_report, format_commit_preflight_report, format_commit_skipped_report,
         format_compact_report, format_cost_report, format_internal_prompt_progress_line,
@@ -5549,6 +5545,9 @@ mod tests {
         resolve_model_alias, resolve_session_reference, response_to_events,
         resume_supported_slash_commands, run_corpus_command, run_resume_command,
         slash_command_completion_candidates_with_sessions, status_context, validate_no_args,
+        CliAction, CliOutputFormat, ExecutionProfile, GitWorkspaceSummary,
+        InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, SlashCommand,
+        StatusUsage, DEFAULT_MODEL,
     };
     use api::{MessageResponse, OutputContentBlock, Usage};
     use plugins::{
@@ -6523,22 +6522,16 @@ mod tests {
         assert!(preflight.contains("Result           ready"));
         assert!(preflight.contains("Branch           feature/ux"));
         assert!(preflight.contains("Workspace        dirty · 2 files · 1 staged, 1 unstaged"));
-        assert!(
-            preflight.contains(
-                "Action           create a git commit from the current workspace changes"
-            )
-        );
+        assert!(preflight
+            .contains("Action           create a git commit from the current workspace changes"));
     }
 
     #[test]
     fn commit_skipped_report_points_to_next_steps() {
         let report = format_commit_skipped_report();
         assert!(report.contains("Reason           no workspace changes"));
-        assert!(
-            report.contains(
-                "Action           create a git commit from the current workspace changes"
-            )
-        );
+        assert!(report
+            .contains("Action           create a git commit from the current workspace changes"));
         assert!(report.contains("/status to inspect context"));
         assert!(report.contains("/diff to inspect repo changes"));
     }
@@ -7402,8 +7395,8 @@ UU conflicted.rs",
 mod corpus_answer_tests {
     use super::{collect_minimal_web_evidence, resolve_corpus_answer_model};
     use api::{
-        ApiError, MessageResponse, OutputContentBlock, Usage, format_provider_child_init_reason,
-        render_extractive_child_answer,
+        format_provider_child_init_reason, render_extractive_child_answer, ApiError,
+        MessageResponse, OutputContentBlock, Usage,
     };
     use runtime::{ChildSubqueryRequest, RecursiveContextSlice, RuntimeBudget};
     use std::collections::BTreeMap;
@@ -7521,22 +7514,16 @@ mod corpus_answer_tests {
             &collect_minimal_web_evidence,
         );
 
-        assert!(
-            output
-                .answer
-                .contains("Fallback: using an extractive local-only subquery answer")
-        );
-        assert!(
-            output
-                .answer
-                .contains("Web research disabled for this subquery")
-        );
+        assert!(output
+            .answer
+            .contains("Fallback: using an extractive local-only subquery answer"));
+        assert!(output
+            .answer
+            .contains("Web research disabled for this subquery"));
         assert!(output.answer.contains("docs/spec.md"));
-        assert!(
-            output
-                .answer
-                .contains("provider-backed subqueries should cite grounded slices")
-        );
+        assert!(output
+            .answer
+            .contains("provider-backed subqueries should cite grounded slices"));
         assert_eq!(output.citations, vec!["chunk-1".to_string()]);
         assert_eq!(output.completion_tokens, 0);
         assert_eq!(output.cost_usd, 0.0);
@@ -7598,7 +7585,7 @@ mod corpus_answer_tests {
 
 #[cfg(test)]
 mod sandbox_report_tests {
-    use super::{HookAbortMonitor, format_sandbox_report};
+    use super::{format_sandbox_report, HookAbortMonitor};
     use runtime::HookAbortSignal;
     use std::sync::mpsc;
     use std::time::Duration;

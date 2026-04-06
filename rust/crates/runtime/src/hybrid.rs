@@ -322,10 +322,22 @@ pub fn local_evidence_trace_event(
                     .to_string(),
                 ),
             ),
+            (
+                "corpusId".to_string(),
+                JsonValue::String(result.corpus_id.clone()),
+            ),
             ("query".to_string(), JsonValue::String(result.query.clone())),
             (
                 "elapsedMs".to_string(),
                 JsonValue::Number(i64::try_from(result.elapsed_ms).unwrap_or(i64::MAX)),
+            ),
+            (
+                "candidateChunks".to_string(),
+                JsonValue::Number(i64::from(result.total_candidate_chunks)),
+            ),
+            (
+                "matchingChunks".to_string(),
+                JsonValue::Number(i64::from(result.total_matching_chunks)),
             ),
             ("records".to_string(), JsonValue::Array(evidence)),
         ]),
@@ -380,9 +392,13 @@ mod tests {
 
     fn retrieval_result_with_hits(hits: Vec<RetrievalHit>) -> RetrievalResult {
         RetrievalResult {
+            corpus_id: "corpus-policy".to_string(),
             query: "policy".to_string(),
             backend: CorpusBackend::Lexical,
             elapsed_ms: 11,
+            path_filter: None,
+            total_candidate_chunks: u32::try_from(hits.len()).unwrap_or(u32::MAX),
+            total_matching_chunks: u32::try_from(hits.len()).unwrap_or(u32::MAX),
             hits,
         }
     }
@@ -394,6 +410,7 @@ mod tests {
             path: path.to_string(),
             score,
             reason: "keyword match".to_string(),
+            matched_terms: vec!["policy".to_string()],
             preview: "matched text".to_string(),
         }
     }

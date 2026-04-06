@@ -27,6 +27,23 @@ pub enum CorpusBackend {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CorpusSkipSummary {
+    pub skipped_directories: u32,
+    pub unsupported_files: u32,
+    pub oversized_files: u32,
+    pub binary_files: u32,
+    pub unreadable_files: u32,
+    pub empty_files: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CorpusRootSummary {
+    pub root: String,
+    pub document_count: u32,
+    pub chunk_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CorpusManifest {
     pub corpus_id: String,
     pub roots: Vec<String>,
@@ -35,6 +52,8 @@ pub struct CorpusManifest {
     pub document_count: u32,
     pub chunk_count: u32,
     pub estimated_bytes: u64,
+    pub root_summaries: Vec<CorpusRootSummary>,
+    pub skip_summary: CorpusSkipSummary,
     pub documents: Vec<CorpusDocument>,
 }
 
@@ -70,6 +89,8 @@ pub struct CorpusInspectResult {
     pub document_count: u32,
     pub chunk_count: u32,
     pub estimated_bytes: u64,
+    pub root_summaries: Vec<CorpusRootSummary>,
+    pub skip_summary: CorpusSkipSummary,
     pub documents: Vec<CorpusDocumentSummary>,
 }
 
@@ -97,9 +118,13 @@ pub struct CorpusSlice {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RetrievalResult {
+    pub corpus_id: String,
     pub query: String,
     pub backend: CorpusBackend,
     pub elapsed_ms: u64,
+    pub path_filter: Option<String>,
+    pub total_candidate_chunks: u32,
+    pub total_matching_chunks: u32,
     pub hits: Vec<RetrievalHit>,
 }
 
@@ -110,6 +135,7 @@ pub struct RetrievalHit {
     pub path: String,
     pub score: f64,
     pub reason: String,
+    pub matched_terms: Vec<String>,
     pub preview: String,
 }
 
@@ -161,6 +187,97 @@ impl From<JsonError> for CorpusError {
     }
 }
 
+impl CorpusSkipSummary {
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            skipped_directories: 0,
+            unsupported_files: 0,
+            oversized_files: 0,
+            binary_files: 0,
+            unreadable_files: 0,
+            empty_files: 0,
+        }
+    }
+
+    fn to_json_value(&self) -> JsonValue {
+        JsonValue::Object(BTreeMap::from([
+            (
+                "skippedDirectories".to_string(),
+                JsonValue::Number(i64::from(self.skipped_directories)),
+            ),
+            (
+                "unsupportedFiles".to_string(),
+                JsonValue::Number(i64::from(self.unsupported_files)),
+            ),
+            (
+                "oversizedFiles".to_string(),
+                JsonValue::Number(i64::from(self.oversized_files)),
+            ),
+            (
+                "binaryFiles".to_string(),
+                JsonValue::Number(i64::from(self.binary_files)),
+            ),
+            (
+                "unreadableFiles".to_string(),
+                JsonValue::Number(i64::from(self.unreadable_files)),
+            ),
+            (
+                "emptyFiles".to_string(),
+                JsonValue::Number(i64::from(self.empty_files)),
+            ),
+        ]))
+    }
+
+    fn from_json_value(value: Option<&JsonValue>) -> Result<Self, CorpusError> {
+        let Some(value) = value else {
+            return Ok(Self::empty());
+        };
+        let object = value.as_object().ok_or_else(|| {
+            CorpusError::Format("skipSummary must be an object when present".to_string())
+        })?;
+        Ok(Self {
+            skipped_directories: optional_u32(object, "skippedDirectories")?.unwrap_or(0),
+            unsupported_files: optional_u32(object, "unsupportedFiles")?.unwrap_or(0),
+            oversized_files: optional_u32(object, "oversizedFiles")?.unwrap_or(0),
+            binary_files: optional_u32(object, "binaryFiles")?.unwrap_or(0),
+            unreadable_files: optional_u32(object, "unreadableFiles")?.unwrap_or(0),
+            empty_files: optional_u32(object, "emptyFiles")?.unwrap_or(0),
+        })
+    }
+}
+
+impl CorpusRootSummary {
+    fn to_json_value(&self) -> JsonValue {
+        JsonValue::Object(BTreeMap::from([
+            ("root".to_string(), JsonValue::String(self.root.clone())),
+            (
+                "documentCount".to_string(),
+                JsonValue::Number(i64::from(self.document_count)),
+            ),
+            (
+                "chunkCount".to_string(),
+                JsonValue::Number(i64::from(self.chunk_count)),
+            ),
+        ]))
+    }
+
+    fn from_json_value(value: &JsonValue) -> Result<Self, CorpusError> {
+        let object = value.as_object().ok_or_else(|| {
+            CorpusError::Format("root summary entries must be objects".to_string())
+        })?;
+        Ok(Self {
+            root: expect_string(object, "root")?.to_string(),
+            document_count: u32::try_from(expect_u64(object, "documentCount")?).map_err(|_| {
+                CorpusError::Format("documentCount is out of range for u32".to_string())
+            })?,
+            chunk_count: u32::try_from(expect_u64(object, "chunkCount")?).map_err(|_| {
+                CorpusError::Format("chunkCount is out of range for u32".to_string())
+            })?,
+        })
+    }
+}
+
 impl CorpusManifest {
     #[must_use]
     pub fn stable_document_id(path: &str) -> String {
@@ -204,6 +321,16 @@ impl CorpusManifest {
                 JsonValue::Number(i64::try_from(self.estimated_bytes).unwrap_or(i64::MAX)),
             ),
             (
+                "rootSummaries".to_string(),
+                JsonValue::Array(
+                    self.root_summaries
+                        .iter()
+                        .map(CorpusRootSummary::to_json_value)
+                        .collect(),
+                ),
+            ),
+            ("skipSummary".to_string(), self.skip_summary.to_json_value()),
+            (
                 "documents".to_string(),
                 JsonValue::Array(
                     self.documents
@@ -231,6 +358,8 @@ impl CorpusManifest {
                 CorpusError::Format("chunkCount is out of range for u32".to_string())
             })?,
             estimated_bytes: expect_u64(object, "estimatedBytes")?,
+            root_summaries: optional_root_summaries(object, "rootSummaries")?,
+            skip_summary: CorpusSkipSummary::from_json_value(object.get("skipSummary"))?,
             documents: expect_documents(object, "documents")?,
         })
     }
@@ -433,6 +562,8 @@ pub fn attach_corpus(
     }
     let mut documents = Vec::new();
     let mut estimated_bytes = 0_u64;
+    let mut root_summaries = Vec::new();
+    let mut skip_summary = CorpusSkipSummary::empty();
 
     for root in roots {
         let canonical_root = fs::canonicalize(root).map_err(|error| {
@@ -441,6 +572,11 @@ pub fn attach_corpus(
                 root.display()
             ))
         })?;
+        let before_docs = documents.len();
+        let before_chunks: usize = documents
+            .iter()
+            .map(|doc: &CorpusDocument| doc.chunks.len())
+            .sum();
         collect_documents(
             &canonical_root,
             &canonical_root,
@@ -448,7 +584,16 @@ pub fn attach_corpus(
             options.max_file_bytes,
             &mut documents,
             &mut estimated_bytes,
+            &mut skip_summary,
         )?;
+        let after_chunks: usize = documents.iter().map(|doc| doc.chunks.len()).sum();
+        root_summaries.push(CorpusRootSummary {
+            root: root.display().to_string(),
+            document_count: u32::try_from(documents.len().saturating_sub(before_docs))
+                .unwrap_or(u32::MAX),
+            chunk_count: u32::try_from(after_chunks.saturating_sub(before_chunks))
+                .unwrap_or(u32::MAX),
+        });
     }
 
     let corpus_id = options
@@ -467,6 +612,8 @@ pub fn attach_corpus(
         chunk_count: u32::try_from(documents.iter().map(|doc| doc.chunks.len()).sum::<usize>())
             .unwrap_or(u32::MAX),
         estimated_bytes,
+        root_summaries,
+        skip_summary,
         documents,
     };
 
@@ -509,6 +656,8 @@ pub fn inspect_corpus(cwd: &Path, corpus_id: &str) -> Result<CorpusInspectResult
         document_count: manifest.document_count,
         chunk_count: manifest.chunk_count,
         estimated_bytes: manifest.estimated_bytes,
+        root_summaries: manifest.root_summaries,
+        skip_summary: manifest.skip_summary,
         documents: manifest
             .documents
             .into_iter()
@@ -588,9 +737,13 @@ pub fn search_corpus_manifest(
     let tokens = query_tokens(query);
     if tokens.is_empty() {
         return RetrievalResult {
+            corpus_id: manifest.corpus_id.clone(),
             query: query.to_string(),
             backend: manifest.backend,
             elapsed_ms: 0,
+            path_filter: path_filter.map(ToOwned::to_owned),
+            total_candidate_chunks: 0,
+            total_matching_chunks: 0,
             hits: Vec::new(),
         };
     }
@@ -598,6 +751,8 @@ pub fn search_corpus_manifest(
     let normalized_query = normalize_for_match(query);
     let filename_query = filename_like_query(&tokens);
     let mut hits = Vec::new();
+    let mut total_candidate_chunks = 0_u32;
+    let mut total_matching_chunks = 0_u32;
     for doc in &manifest.documents {
         if let Some(filter) = path_filter {
             if !doc.path.contains(filter) {
@@ -615,6 +770,7 @@ pub fn search_corpus_manifest(
             .to_ascii_lowercase();
         let normalized_basename = normalize_for_match(&basename_lower).replace(' ', "");
         for chunk in &doc.chunks {
+            total_candidate_chunks = total_candidate_chunks.saturating_add(1);
             let body = chunk
                 .metadata
                 .get("text")
@@ -625,6 +781,7 @@ pub fn search_corpus_manifest(
             let normalized_body = normalize_for_match(&body);
             let mut score = 0.0_f64;
             let mut reasons = Vec::new();
+            let mut matched_terms = Vec::new();
             let mut matched_tokens = 0usize;
             let mut in_order = true;
             let mut cursor = 0usize;
@@ -635,6 +792,7 @@ pub fn search_corpus_manifest(
                 let heading_hit = heading_text.contains(token);
                 if body_hits > 0 || preview_hits > 0 || path_hit || heading_hit {
                     matched_tokens += 1;
+                    matched_terms.push(token.clone());
                 }
                 if body_hits > 0 {
                     score += body_hits as f64 * 2.0;
@@ -697,12 +855,23 @@ pub fn search_corpus_manifest(
                     reasons.push("filename-match".to_string());
                 }
             }
+            if let Some(span) = minimum_term_span(&normalized_body, &tokens) {
+                if span <= 48 {
+                    score += 3.0;
+                    reasons.push(format!("tight-span:{span}"));
+                } else if span <= 96 {
+                    score += 1.5;
+                    reasons.push(format!("span:{span}"));
+                }
+            }
+            total_matching_chunks = total_matching_chunks.saturating_add(1);
             hits.push(RetrievalHit {
                 chunk_id: chunk.chunk_id.clone(),
                 document_id: doc.document_id.clone(),
                 path: doc.path.clone(),
                 score,
                 reason: reasons.join(", "),
+                matched_terms,
                 preview: chunk.text_preview.clone(),
             });
         }
@@ -719,9 +888,13 @@ pub fn search_corpus_manifest(
     hits.truncate(top_k.max(1));
 
     RetrievalResult {
+        corpus_id: manifest.corpus_id.clone(),
         query: query.to_string(),
         backend: manifest.backend,
         elapsed_ms: 0,
+        path_filter: path_filter.map(ToOwned::to_owned),
+        total_candidate_chunks,
+        total_matching_chunks,
         hits,
     }
 }
@@ -742,6 +915,7 @@ fn collect_documents(
     max_file_bytes: u64,
     documents: &mut Vec<CorpusDocument>,
     estimated_bytes: &mut u64,
+    skip_summary: &mut CorpusSkipSummary,
 ) -> Result<(), CorpusError> {
     for entry in fs::read_dir(current)? {
         let entry = entry?;
@@ -749,6 +923,8 @@ fn collect_documents(
         let metadata = entry.metadata()?;
         if metadata.is_dir() {
             if should_skip_dir(&path) {
+                skip_summary.skipped_directories =
+                    skip_summary.skipped_directories.saturating_add(1);
                 continue;
             }
             collect_documents(
@@ -758,25 +934,41 @@ fn collect_documents(
                 max_file_bytes,
                 documents,
                 estimated_bytes,
+                skip_summary,
             )?;
             continue;
         }
-        if !metadata.is_file() || metadata.len() > max_file_bytes || !is_supported_text_path(&path)
-        {
+        if !metadata.is_file() {
+            continue;
+        }
+        if metadata.len() > max_file_bytes {
+            skip_summary.oversized_files = skip_summary.oversized_files.saturating_add(1);
+            continue;
+        }
+        if !is_supported_text_path(&path) {
+            skip_summary.unsupported_files = skip_summary.unsupported_files.saturating_add(1);
             continue;
         }
         let raw = match fs::read(&path) {
             Ok(raw) => raw,
-            Err(_) => continue,
+            Err(_) => {
+                skip_summary.unreadable_files = skip_summary.unreadable_files.saturating_add(1);
+                continue;
+            }
         };
         if raw.contains(&0) {
+            skip_summary.binary_files = skip_summary.binary_files.saturating_add(1);
             continue;
         }
         let text = match String::from_utf8(raw) {
             Ok(text) => text,
-            Err(_) => continue,
+            Err(_) => {
+                skip_summary.binary_files = skip_summary.binary_files.saturating_add(1);
+                continue;
+            }
         };
         if text.trim().is_empty() {
+            skip_summary.empty_files = skip_summary.empty_files.saturating_add(1);
             continue;
         }
         let relative = path
@@ -988,6 +1180,17 @@ fn count_occurrences(haystack: &str, needle: &str) -> usize {
     haystack.match_indices(needle).count()
 }
 
+fn minimum_term_span(haystack: &str, tokens: &[String]) -> Option<usize> {
+    let mut positions = Vec::new();
+    for token in tokens {
+        let position = haystack.find(token)?;
+        positions.push((position, position + token.len()));
+    }
+    let start = positions.iter().map(|(start, _)| *start).min()?;
+    let end = positions.iter().map(|(_, end)| *end).max()?;
+    Some(end.saturating_sub(start))
+}
+
 fn normalize_for_match(value: &str) -> String {
     value
         .chars()
@@ -1075,6 +1278,17 @@ fn optional_u64(
     }
 }
 
+fn optional_u32(
+    object: &BTreeMap<String, JsonValue>,
+    key: &str,
+) -> Result<Option<u32>, CorpusError> {
+    optional_u64(object, key)?.map_or(Ok(None), |value| {
+        u32::try_from(value)
+            .map(Some)
+            .map_err(|_| CorpusError::Format(format!("numeric field {key} is out of range")))
+    })
+}
+
 fn expect_string_array(
     object: &BTreeMap<String, JsonValue>,
     key: &str,
@@ -1092,6 +1306,22 @@ fn expect_string_array(
                 .ok_or_else(|| CorpusError::Format(format!("field {key} must contain strings")))
         })
         .collect()
+}
+
+fn optional_root_summaries(
+    object: &BTreeMap<String, JsonValue>,
+    key: &str,
+) -> Result<Vec<CorpusRootSummary>, CorpusError> {
+    match object.get(key) {
+        Some(JsonValue::Null) | None => Ok(Vec::new()),
+        Some(JsonValue::Array(values)) => values
+            .iter()
+            .map(CorpusRootSummary::from_json_value)
+            .collect(),
+        Some(_) => Err(CorpusError::Format(format!(
+            "field {key} must be an array or null"
+        ))),
+    }
 }
 
 fn expect_documents(
@@ -1146,6 +1376,12 @@ mod tests {
             document_count: 1,
             chunk_count: 1,
             estimated_bytes: 1234,
+            root_summaries: vec![CorpusRootSummary {
+                root: "docs".to_string(),
+                document_count: 1,
+                chunk_count: 1,
+            }],
+            skip_summary: CorpusSkipSummary::empty(),
             documents: vec![CorpusDocument {
                 document_id: document_id.clone(),
                 path: "docs/guide.md".to_string(),
@@ -1221,6 +1457,8 @@ mod tests {
         let inspect = inspect_corpus(&cwd, &manifest.corpus_id).expect("inspect");
         assert_eq!(inspect.corpus_id, manifest.corpus_id);
         assert!(inspect.documents.iter().any(|doc| doc.path == "guide.md"));
+        assert_eq!(inspect.root_summaries.len(), 1);
+        assert_eq!(inspect.root_summaries[0].document_count, 2);
 
         let result = search_corpus(&cwd, &manifest.corpus_id, "lexical search guide", 5, None)
             .expect("search");
@@ -1284,6 +1522,9 @@ mod tests {
         assert_eq!(paths, vec!["guide.md"]);
         assert_eq!(manifest.document_count, 1);
         assert_eq!(manifest.chunk_count, 1);
+        assert_eq!(manifest.skip_summary.oversized_files, 1);
+        assert_eq!(manifest.skip_summary.unsupported_files, 1);
+        assert_eq!(manifest.skip_summary.binary_files, 1);
 
         let _ = fs::remove_dir_all(cwd);
     }
@@ -1311,7 +1552,44 @@ mod tests {
 
         assert_eq!(result.hits[0].path, "exact.md");
         assert!(result.hits[0].reason.contains("phrase:body"));
+        assert!(result.hits[0].reason.contains("tight-span:"));
+        assert_eq!(result.total_matching_chunks, 2);
+        assert!(result.hits[0]
+            .matched_terms
+            .iter()
+            .any(|term| term == "lexical"));
         assert!(result.hits.iter().any(|hit| hit.path == "partial.md"));
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn inspect_reports_per_root_counts_for_multi_corpus_attach() {
+        let cwd = temp_dir("workspace-multi-root");
+        let docs_root = cwd.join("docs");
+        let code_root = cwd.join("src");
+        fs::create_dir_all(&docs_root).expect("mkdir docs");
+        fs::create_dir_all(&code_root).expect("mkdir src");
+        fs::write(docs_root.join("guide.md"), "# Guide\nretrieval notes\n").expect("write docs");
+        fs::write(code_root.join("main.rs"), "fn retrieval_notes() {}\n").expect("write code");
+
+        let manifest = attach_corpus(
+            &cwd,
+            &[docs_root.clone(), code_root.clone()],
+            CorpusAttachOptions::default(),
+        )
+        .expect("attach corpus");
+        let inspect = inspect_corpus(&cwd, &manifest.corpus_id).expect("inspect");
+
+        assert_eq!(inspect.root_summaries.len(), 2);
+        assert!(inspect
+            .root_summaries
+            .iter()
+            .any(|summary| summary.root.ends_with("docs") && summary.document_count == 1));
+        assert!(inspect
+            .root_summaries
+            .iter()
+            .any(|summary| summary.root.ends_with("src") && summary.document_count == 1));
 
         let _ = fs::remove_dir_all(cwd);
     }

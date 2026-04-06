@@ -7,8 +7,8 @@ use runtime::{
 use tokio::runtime::Runtime;
 
 use crate::{
-    ApiError, AuthSource, InputMessage, MessageRequest, MessageResponse, OutputContentBlock,
-    PromptCache, ProviderClient, max_tokens_for_model,
+    max_tokens_for_model, ApiError, AuthSource, InputMessage, MessageRequest, MessageResponse,
+    OutputContentBlock, PromptCache, ProviderClient,
 };
 
 pub type WebEvidenceCollector = Arc<
@@ -579,12 +579,10 @@ mod tests {
         });
 
         assert!(context.evidence.is_empty());
-        assert!(
-            context
-                .note
-                .as_deref()
-                .is_some_and(|note| note.contains("collector failed"))
-        );
+        assert!(context
+            .note
+            .as_deref()
+            .is_some_and(|note| note.contains("collector failed")));
     }
 
     #[test]
@@ -605,11 +603,9 @@ mod tests {
         .expect("degraded web context should still build output");
 
         assert!(output.answer.contains("Grounded answer"));
-        assert!(
-            output
-                .answer
-                .contains("approved web collection failed before model execution")
-        );
+        assert!(output
+            .answer
+            .contains("approved web collection failed before model execution"));
     }
 
     #[test]
@@ -626,16 +622,12 @@ mod tests {
             },
         );
 
-        assert!(
-            output
-                .answer
-                .contains("Fallback: using an extractive local-only subquery answer")
-        );
-        assert!(
-            output
-                .answer
-                .contains("Web escalation was permitted for this subquery")
-        );
+        assert!(output
+            .answer
+            .contains("Fallback: using an extractive local-only subquery answer"));
+        assert!(output
+            .answer
+            .contains("Web escalation was permitted for this subquery"));
         assert!(output.answer.contains("Web execution note: approved web collection failed before model execution: collector failed"));
         assert_eq!(output.web_evidence, Vec::<EvidenceRecord>::new());
     }

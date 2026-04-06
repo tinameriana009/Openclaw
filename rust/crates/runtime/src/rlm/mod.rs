@@ -391,6 +391,7 @@ where
                     &child_output.web_evidence,
                 ));
             }
+            let web_evidence_count = child_output.web_evidence.len();
             push_trace_event(
                 &mut trace,
                 TraceEventType::SubqueryCompleted,
@@ -407,6 +408,18 @@ where
                         "citationCount".to_string(),
                         JsonValue::Number(
                             i64::try_from(child_output.citations.len()).unwrap_or(i64::MAX),
+                        ),
+                    ),
+                    (
+                        "webEvidenceCount".to_string(),
+                        JsonValue::Number(i64::try_from(web_evidence_count).unwrap_or(i64::MAX)),
+                    ),
+                    (
+                        "webCollectionDegraded".to_string(),
+                        JsonValue::Bool(
+                            matches!(request.web_policy.mode, WebAccessMode::On)
+                                && request.web_research_query.is_some()
+                                && web_evidence_count == 0,
                         ),
                     ),
                 ]),
@@ -596,7 +609,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::corpus::{CorpusBackend, CorpusChunk, CorpusDocument, CorpusKind};
+    use crate::corpus::{
+        CorpusBackend, CorpusChunk, CorpusDocument, CorpusKind, CorpusRootSummary,
+    };
     use crate::hybrid::{EvidenceKind, EvidenceRecord};
     use std::collections::BTreeMap;
     use std::fs;
@@ -709,6 +724,12 @@ mod tests {
             document_count: 1,
             chunk_count: 4,
             estimated_bytes: 520,
+            root_summaries: vec![CorpusRootSummary {
+                root: "docs".to_string(),
+                document_count: 1,
+                chunk_count: 4,
+            }],
+            skip_summary: crate::corpus::CorpusSkipSummary::empty(),
             documents: vec![CorpusDocument {
                 document_id: doc_id,
                 path: "docs/spec.md".to_string(),
@@ -734,6 +755,7 @@ mod tests {
                 path: "docs/a.md".to_string(),
                 score: 12.0,
                 reason: "phrase:body".to_string(),
+                matched_terms: vec!["alpha".to_string()],
                 preview: "alpha".to_string(),
             },
             RetrievalHit {
@@ -742,6 +764,7 @@ mod tests {
                 path: "docs/a.md".to_string(),
                 score: 11.5,
                 reason: "coverage:3/3".to_string(),
+                matched_terms: vec!["alpha".to_string(), "trace".to_string()],
                 preview: "alpha-2".to_string(),
             },
             RetrievalHit {
@@ -750,6 +773,7 @@ mod tests {
                 path: "docs/b.md".to_string(),
                 score: 10.0,
                 reason: "content:beta".to_string(),
+                matched_terms: vec!["beta".to_string()],
                 preview: "beta".to_string(),
             },
             RetrievalHit {
@@ -758,6 +782,7 @@ mod tests {
                 path: "docs/c.md".to_string(),
                 score: 9.0,
                 reason: "content:gamma".to_string(),
+                matched_terms: vec!["gamma".to_string()],
                 preview: "gamma".to_string(),
             },
         ]
@@ -1204,6 +1229,40 @@ mod tests {
             .events
             .iter()
             .any(|event| event.event_type == TraceEventType::WebEscalationStarted));
+    }
+
+    #[test]
+    fn trace_marks_degraded_web_collection_when_approved_subquery_returns_no_web_evidence() {
+        let corpus = sample_corpus();
+        let runtime = RecursiveConversationRuntime::new(&corpus, CapturingExecutor);
+        let result = runtime
+            .run_with_tracer_and_policy(
+                "session-1",
+                "task-web-missing",
+                "search the web for the latest hidden behavior",
+                RuntimeBudget {
+                    max_depth: Some(2),
+                    max_iterations: Some(2),
+                    max_subcalls: Some(1),
+                    ..RuntimeBudget::default()
+                },
+                None,
+                None,
+                WebPolicy {
+                    mode: WebAccessMode::On,
+                    max_fetches: Some(2),
+                },
+            )
+            .expect("run should succeed");
+
+        assert!(result
+            .final_answer
+            .contains("no web evidence was attached by the child executor"));
+        assert!(result.trace.events.iter().any(|event| {
+            event.event_type == TraceEventType::SubqueryCompleted
+                && event.data.get("webEvidenceCount") == Some(&JsonValue::Number(0))
+                && event.data.get("webCollectionDegraded") == Some(&JsonValue::Bool(true))
+        }));
     }
 
     #[test]
