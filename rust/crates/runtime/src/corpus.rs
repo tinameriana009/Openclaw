@@ -750,6 +750,8 @@ pub fn search_corpus_manifest(
 
     let normalized_query = normalize_for_match(query);
     let filename_query = filename_like_query(&tokens);
+    let token_stats = build_token_document_stats(manifest, path_filter, &tokens);
+    let total_docs = token_stats.total_docs.max(1);
     let mut hits = Vec::new();
     let mut total_candidate_chunks = 0_u32;
     let mut total_matching_chunks = 0_u32;
@@ -794,22 +796,24 @@ pub fn search_corpus_manifest(
                     matched_tokens += 1;
                     matched_terms.push(token.clone());
                 }
+                let doc_freq = *token_stats.doc_freq.get(token).unwrap_or(&0);
+                let idf = inverse_document_frequency(total_docs, doc_freq);
                 if body_hits > 0 {
-                    score += body_hits as f64 * 2.0;
-                    reasons.push(format!("content:{token}x{body_hits}"));
+                    score += body_hits as f64 * (1.5 + idf * 1.2);
+                    reasons.push(format!("content:{token}x{body_hits}@{idf:.2}"));
                 }
                 if preview_hits > body_hits {
                     let preview_only_hits = preview_hits - body_hits;
-                    score += preview_only_hits as f64 * 0.75;
+                    score += preview_only_hits as f64 * (0.5 + idf * 0.25);
                     reasons.push(format!("preview:{token}x{preview_only_hits}"));
                 }
                 if path_hit {
-                    score += 3.0;
-                    reasons.push(format!("path:{token}"));
+                    score += 2.0 + idf * 1.5;
+                    reasons.push(format!("path:{token}@{idf:.2}"));
                 }
                 if heading_hit {
-                    score += 2.5;
-                    reasons.push(format!("heading:{token}"));
+                    score += 1.5 + idf * 1.5;
+                    reasons.push(format!("heading:{token}@{idf:.2}"));
                 }
                 if let Some(found) =
                     normalized_body[cursor.min(normalized_body.len())..].find(token)
@@ -822,12 +826,12 @@ pub fn search_corpus_manifest(
             if matched_tokens == 0 {
                 continue;
             }
+            let coverage_ratio = matched_tokens as f64 / tokens.len() as f64;
+            score += coverage_ratio * 5.0;
+            reasons.push(format!("coverage:{matched_tokens}/{}", tokens.len()));
             if matched_tokens == tokens.len() {
-                score += 4.0;
-                reasons.push(format!("coverage:{matched_tokens}/{}", tokens.len()));
-            } else {
-                score += matched_tokens as f64 / tokens.len() as f64;
-                reasons.push(format!("coverage:{matched_tokens}/{}", tokens.len()));
+                score += 3.0;
+                reasons.push("full-coverage".to_string());
             }
             if tokens.len() > 1 && in_order {
                 score += 2.0;
@@ -839,7 +843,7 @@ pub fn search_corpus_manifest(
                     reasons.push("phrase:body".to_string());
                 }
                 if normalized_headings.contains(&normalized_query) {
-                    score += 4.0;
+                    score += 4.5;
                     reasons.push("phrase:heading".to_string());
                 }
                 if normalized_path.contains(&normalized_query) {
@@ -851,7 +855,7 @@ pub fn search_corpus_manifest(
                 if basename_lower.contains(filename_query)
                     || normalized_basename.contains(filename_query)
                 {
-                    score += 3.5;
+                    score += 4.0;
                     reasons.push("filename-match".to_string());
                 }
             }
@@ -885,6 +889,7 @@ pub fn search_corpus_manifest(
             .then_with(|| left.path.cmp(&right.path))
             .then_with(|| left.chunk_id.cmp(&right.chunk_id))
     });
+    diversify_hits(&mut hits, top_k.max(1));
     hits.truncate(top_k.max(1));
 
     RetrievalResult {
@@ -897,6 +902,81 @@ pub fn search_corpus_manifest(
         total_matching_chunks,
         hits,
     }
+}
+
+#[derive(Debug, Default)]
+struct TokenDocumentStats {
+    total_docs: usize,
+    doc_freq: BTreeMap<String, usize>,
+}
+
+fn build_token_document_stats(
+    manifest: &CorpusManifest,
+    path_filter: Option<&str>,
+    tokens: &[String],
+) -> TokenDocumentStats {
+    let mut stats = TokenDocumentStats::default();
+    for doc in &manifest.documents {
+        if let Some(filter) = path_filter {
+            if !doc.path.contains(filter) {
+                continue;
+            }
+        }
+        stats.total_docs += 1;
+        let path_lower = doc.path.to_ascii_lowercase();
+        let headings_lower = doc.headings.join(" ").to_ascii_lowercase();
+        let body_lower = doc
+            .chunks
+            .iter()
+            .filter_map(|chunk| chunk.metadata.get("text").and_then(JsonValue::as_str))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .to_ascii_lowercase();
+        for token in tokens {
+            if path_lower.contains(token)
+                || headings_lower.contains(token)
+                || body_lower.contains(token)
+            {
+                *stats.doc_freq.entry(token.clone()).or_insert(0) += 1;
+            }
+        }
+    }
+    stats
+}
+
+fn inverse_document_frequency(total_docs: usize, doc_freq: usize) -> f64 {
+    let total = total_docs.max(1) as f64;
+    let df = doc_freq as f64;
+    ((1.0 + total) / (1.0 + df)).ln() + 1.0
+}
+
+fn diversify_hits(hits: &mut Vec<RetrievalHit>, limit: usize) {
+    if hits.len() <= 1 || limit <= 1 {
+        return;
+    }
+    let mut diversified = Vec::with_capacity(hits.len());
+    let mut seen_documents = std::collections::BTreeSet::new();
+    for hit in hits.iter() {
+        if diversified.len() >= limit {
+            break;
+        }
+        if seen_documents.insert(hit.document_id.clone()) {
+            diversified.push(hit.clone());
+        }
+    }
+    for hit in hits.iter() {
+        if diversified.len() >= hits.len() {
+            break;
+        }
+        if diversified
+            .iter()
+            .any(|existing| existing.chunk_id == hit.chunk_id)
+        {
+            continue;
+        }
+        diversified.push(hit.clone());
+    }
+    *hits = diversified;
 }
 
 fn stable_corpus_id(roots: &[PathBuf]) -> String {
@@ -1617,6 +1697,30 @@ mod tests {
 
         assert_eq!(result.hits[0].path, "auth_callback.md");
         assert!(result.hits[0].reason.contains("filename-match"));
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_prefers_rare_terms_and_diversifies_top_hits() {
+        let cwd = temp_dir("workspace-idf-diversity");
+        let root = cwd.join("docs");
+        fs::create_dir_all(&root).expect("mkdir");
+        fs::write(root.join("rare.md"), "# Guide\ncommon common raretoken\n").expect("write rare");
+        fs::write(root.join("common-a.md"), "# Guide\ncommon common common\n")
+            .expect("write common a");
+        fs::write(root.join("common-b.md"), "# Guide\ncommon common common\n")
+            .expect("write common b");
+
+        let manifest = attach_corpus(&cwd, &[root.clone()], CorpusAttachOptions::default())
+            .expect("attach corpus");
+        let result =
+            search_corpus(&cwd, &manifest.corpus_id, "common raretoken", 3, None).expect("search");
+
+        assert_eq!(result.hits[0].path, "rare.md");
+        assert!(result.hits[0].reason.contains("content:raretokenx1@"));
+        assert_eq!(result.hits.len(), 3);
+        assert_ne!(result.hits[0].document_id, result.hits[1].document_id);
 
         let _ = fs::remove_dir_all(cwd);
     }
