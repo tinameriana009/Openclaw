@@ -33,6 +33,7 @@ cd rust
 If you want a concrete starting point instead of a blank prompt, begin with:
 
 - [`../examples/blender-scene-cleanup-demo/brief.md`](../examples/blender-scene-cleanup-demo/brief.md)
+- [`../examples/blender-scene-cleanup-demo/validation-baseline.md`](../examples/blender-scene-cleanup-demo/validation-baseline.md)
 - [`../examples/blender-scene-cleanup-demo/manual-test-checklist.md`](../examples/blender-scene-cleanup-demo/manual-test-checklist.md)
 - [`../examples/blender-scene-cleanup-demo/addon/scene_cleanup_helper/`](../examples/blender-scene-cleanup-demo/addon/scene_cleanup_helper/)
 
@@ -93,7 +94,18 @@ ls .claw/trace
 ./target/debug/claw --resume latest /trace summary .claw/trace/<trace-file>
 ```
 
-### 5) Validate in Blender manually
+### 5) Run the lightweight coherence checks first
+
+Before opening Blender, confirm the demo corpus is internally coherent:
+
+```bash
+python3 tests/validate_blender_demo.py
+python3 docs/examples/blender-scene-cleanup-demo/tools/package_demo_addon.py
+```
+
+This still does **not** validate behavior in Blender, but it catches missing files, broken Python syntax, and packaging regressions early.
+
+### 6) Validate in Blender manually against a baseline
 
 Current harness gap: no built-in Blender execution loop.
 
@@ -101,21 +113,23 @@ After code generation, still do the real validation yourself:
 
 - install the add-on in Blender
 - confirm registration succeeds
-- test operators against sample scenes
+- test operators against a disposable scene
+- compare the reported counts with the baseline in [`../examples/blender-scene-cleanup-demo/validation-baseline.md`](../examples/blender-scene-cleanup-demo/validation-baseline.md)
 - check panel visibility and property persistence
 - verify packaging metadata and version compatibility
 
-The repo now includes a realistic manual checklist at [`../examples/blender-scene-cleanup-demo/manual-test-checklist.md`](../examples/blender-scene-cleanup-demo/manual-test-checklist.md).
+The repo includes a realistic manual checklist at [`../examples/blender-scene-cleanup-demo/manual-test-checklist.md`](../examples/blender-scene-cleanup-demo/manual-test-checklist.md).
 
-### 6) Run the lightweight coherence check
+### 7) Feed concrete observations back into the next prompt
 
-Before claiming the workflow is in good shape, run the static validation that ships with this repo:
+Good follow-up evidence looks like:
 
-```bash
-python3 tests/validate_blender_demo.py
-```
+- exact traceback text
+- mismatched scan counts versus the baseline
+- unclear panel wording
+- Blender version-specific registration issues
 
-This does **not** run Blender. It only verifies that the demo corpus exists, the illustrative add-on package compiles as Python, and the workflow docs point to the right assets.
+That keeps the workflow grounded in observed behavior instead of generic "make it better" iteration.
 
 ## Suggested corpus contents
 
