@@ -28,6 +28,7 @@ pub enum RecursiveExecutionMode {
 pub enum RecursiveStopReason {
     Completed,
     NoChildCapacity,
+    ChildFailed,
     DepthCap,
     IterationCap,
     SubcallCap,
@@ -43,6 +44,7 @@ impl RecursiveStopReason {
         match self {
             Self::Completed => "completed",
             Self::NoChildCapacity => "no_child_capacity",
+            Self::ChildFailed => "child_failed",
             Self::DepthCap => "depth_cap",
             Self::IterationCap => "iteration_cap",
             Self::SubcallCap => "subcall_cap",
@@ -57,6 +59,7 @@ impl RecursiveStopReason {
     pub fn trace_status(self) -> TraceFinalStatus {
         match self {
             Self::Completed | Self::NoChildCapacity => TraceFinalStatus::Succeeded,
+            Self::ChildFailed => TraceFinalStatus::Failed,
             Self::DepthCap
             | Self::IterationCap
             | Self::SubcallCap
@@ -219,6 +222,13 @@ pub struct RecursiveConversationRuntime<'a, E, A = DefaultChildOutputAggregator>
     corpus: &'a CorpusManifest,
     executor: E,
     aggregator: A,
+}
+
+struct IterationArtifacts {
+    retrieval: RetrievalResult,
+    selected_chunk_ids: Vec<String>,
+    slices: Vec<RecursiveContextSlice>,
+    escalation: EscalationOutcome,
 }
 
 impl<'a, E> RecursiveConversationRuntime<'a, E, DefaultChildOutputAggregator>
@@ -509,128 +519,28 @@ where
             }
 
             let iteration = state.usage.iterations + 1;
-            let query = build_iteration_query(task, &child_outputs);
-            push_trace_event(
+            let artifacts = match self.prepare_iteration(
+                task,
+                iteration,
+                &child_outputs,
+                &seen_chunk_ids,
+                web_policy.clone(),
                 &mut trace,
-                TraceEventType::RetrievalRequested,
-                BTreeMap::from([
-                    ("query".to_string(), JsonValue::String(query.clone())),
-                    (
-                        "iteration".to_string(),
-                        JsonValue::Number(i64::from(iteration)),
-                    ),
-                ]),
-            );
-            let retrieval = self.corpus_search(&query, 6);
-            push_trace_event(
-                &mut trace,
-                TraceEventType::RetrievalCompleted,
-                BTreeMap::from([
-                    ("query".to_string(), JsonValue::String(query)),
-                    (
-                        "iteration".to_string(),
-                        JsonValue::Number(i64::from(iteration)),
-                    ),
-                    (
-                        "hitCount".to_string(),
-                        JsonValue::Number(i64::try_from(retrieval.hits.len()).unwrap_or(i64::MAX)),
-                    ),
-                ]),
-            );
+            )? {
+                Some(artifacts) => artifacts,
+                None => {
+                    stop_reason = if child_outputs.is_empty() {
+                        RecursiveStopReason::NoChildCapacity
+                    } else {
+                        RecursiveStopReason::Completed
+                    };
+                    break;
+                }
+            };
 
             state.usage.iterations = iteration;
             state.usage.runtime_ms = now_ms().saturating_sub(started_at_ms);
-            last_retrieval = Some(retrieval.clone());
-
-            let selected_chunk_ids = retrieval
-                .hits
-                .iter()
-                .map(|hit| hit.chunk_id.clone())
-                .filter(|chunk_id| !seen_chunk_ids.contains(chunk_id))
-                .take(3)
-                .collect::<Vec<_>>();
-            if selected_chunk_ids.is_empty() {
-                stop_reason = if child_outputs.is_empty() {
-                    RecursiveStopReason::NoChildCapacity
-                } else {
-                    RecursiveStopReason::Completed
-                };
-                break;
-            }
-
-            let slices = self.select_slices(&selected_chunk_ids)?;
-            push_trace_event(
-                &mut trace,
-                TraceEventType::CorpusSliced,
-                BTreeMap::from([
-                    (
-                        "iteration".to_string(),
-                        JsonValue::Number(i64::from(iteration)),
-                    ),
-                    (
-                        "sliceCount".to_string(),
-                        JsonValue::Number(i64::try_from(slices.len()).unwrap_or(i64::MAX)),
-                    ),
-                    (
-                        "chunkIds".to_string(),
-                        JsonValue::Array(
-                            selected_chunk_ids
-                                .iter()
-                                .cloned()
-                                .map(JsonValue::String)
-                                .collect(),
-                        ),
-                    ),
-                ]),
-            );
-            let local_summary = summarize_local_evidence(&retrieval);
-            let escalation = evaluate_web_escalation(
-                web_policy.clone(),
-                EscalationHeuristicInput {
-                    local_summary,
-                    requires_external_freshness: task_mentions_freshness(task),
-                    user_requested_web: task_requests_web(task),
-                },
-            );
-            if escalation.reason != EscalationReason::LocalEvidenceSufficient
-                || last_escalation.is_none()
-            {
-                last_escalation = Some(escalation.clone());
-            }
-            if escalation.reason != EscalationReason::LocalEvidenceSufficient {
-                push_trace_event(
-                    &mut trace,
-                    TraceEventType::WebEscalationStarted,
-                    BTreeMap::from([
-                        (
-                            "decision".to_string(),
-                            JsonValue::String(
-                                web_access_decision_label(escalation.decision).to_string(),
-                            ),
-                        ),
-                        (
-                            "reason".to_string(),
-                            JsonValue::String(
-                                escalation_reason_label(escalation.reason).to_string(),
-                            ),
-                        ),
-                        (
-                            "parentMode".to_string(),
-                            JsonValue::String(web_policy_label(web_policy.mode).to_string()),
-                        ),
-                        (
-                            "localHits".to_string(),
-                            JsonValue::Number(
-                                i64::try_from(local_summary.total_hits).unwrap_or(i64::MAX),
-                            ),
-                        ),
-                        (
-                            "weakLocalEvidence".to_string(),
-                            JsonValue::Bool(is_local_evidence_weak(local_summary)),
-                        ),
-                    ]),
-                );
-            }
+            last_retrieval = Some(artifacts.retrieval.clone());
 
             let child_budget = state.budget.slice_for_child(BudgetSliceRequest {
                 depth_cost: 1,
@@ -649,8 +559,8 @@ where
 
             let request = ChildSubqueryRequest {
                 subquery_id: format!("{task_id}-child-{iteration}"),
-                prompt: build_child_prompt(task, iteration, &child_outputs, &slices),
-                slices,
+                prompt: build_child_prompt(task, iteration, &child_outputs, &artifacts.slices),
+                slices: artifacts.slices,
                 budget: child_budget,
                 web_policy: web_policy.clone().inherit_for_child(None),
             };
@@ -684,7 +594,26 @@ where
                     ),
                 ]),
             );
-            let child_output = self.executor.execute(&request)?;
+
+            let child_output = match self.executor.execute(&request) {
+                Ok(output) => output,
+                Err(error) => {
+                    stop_reason = RecursiveStopReason::ChildFailed;
+                    return finalize_failed_run(
+                        task,
+                        trace,
+                        trace_artifact_dir,
+                        stop_reason,
+                        mode,
+                        last_retrieval,
+                        child_outputs,
+                        state.usage,
+                        tracer,
+                        error.to_string(),
+                    );
+                }
+            };
+
             if !child_output.web_evidence.is_empty() {
                 let sequence = u32::try_from(trace.events.len() + 1).unwrap_or(u32::MAX);
                 trace.events.push(web_evidence_trace_event(
@@ -723,9 +652,10 @@ where
             state.iterations.push(RecursiveIterationState {
                 iteration,
                 child_count: 1,
-                selected_chunk_ids: selected_chunk_ids.clone(),
+                selected_chunk_ids: artifacts.selected_chunk_ids.clone(),
             });
-            seen_chunk_ids.extend(selected_chunk_ids);
+            seen_chunk_ids.extend(artifacts.selected_chunk_ids);
+            last_escalation = Some(artifacts.escalation);
             child_outputs.push(child_output);
 
             if let Some(reason) = state
@@ -738,76 +668,25 @@ where
             }
         }
 
-        let retrieval = last_retrieval;
-        let final_answer = if let Some(ref retrieval) = retrieval {
-            let escalation = last_escalation
-                .clone()
-                .unwrap_or_else(|| default_escalation_outcome(task, retrieval));
-            if child_outputs.is_empty() {
-                format_recursive_answer(
-                    format!("Recursive execution completed without child calls for task: {task}"),
-                    retrieval,
-                    &child_outputs,
-                    &trace.trace_id,
-                    &escalation,
-                )
-            } else {
-                let aggregated_body = self.aggregator.aggregate(task, &child_outputs);
-                format_recursive_answer(
-                    aggregated_body,
-                    retrieval,
-                    &child_outputs,
-                    &trace.trace_id,
-                    &escalation,
-                )
-            }
+        let aggregated_body = if child_outputs.is_empty() {
+            None
         } else {
-            format!("Recursive execution stopped before any child subqueries for task: {task}")
+            Some(self.aggregator.aggregate(task, &child_outputs))
         };
-        push_trace_event(
-            &mut trace,
-            TraceEventType::AggregationCompleted,
-            BTreeMap::from([
-                (
-                    "childCount".to_string(),
-                    JsonValue::Number(i64::try_from(child_outputs.len()).unwrap_or(i64::MAX)),
-                ),
-                (
-                    "iterationCount".to_string(),
-                    JsonValue::Number(i64::try_from(state.iterations.len()).unwrap_or(i64::MAX)),
-                ),
-                (
-                    "finalAnswerChars".to_string(),
-                    JsonValue::Number(i64::try_from(final_answer.len()).unwrap_or(i64::MAX)),
-                ),
-            ]),
-        );
-        push_trace_event(
-            &mut trace,
-            TraceEventType::StopConditionReached,
-            BTreeMap::from([(
-                "stopReason".to_string(),
-                JsonValue::String(stop_reason.as_str().to_string()),
-            )]),
-        );
-        trace.finished_at_ms = Some(now_ms());
-        trace.final_status = stop_reason.trace_status();
-        let trace_path = export_trace_if_requested(&trace, trace_artifact_dir)?;
-        if let Some(tracer) = tracer {
-            trace.emit_telemetry(tracer);
-        }
-        state.trace_artifact_path = trace_path.clone();
 
-        Ok(RecursiveExecutionResult {
-            mode,
-            stop_reason,
-            final_answer,
-            child_outputs,
-            retrieval,
+        finalize_successful_run(
+            task,
             trace,
-            trace_artifact_path: trace_path,
-            usage: state.usage,
-        })
+            trace_artifact_dir,
+            stop_reason,
+            mode,
+            last_retrieval,
+            last_escalation,
+            child_outputs,
+            state,
+            tracer,
+            aggregated_body,
+        )
     }
 
     fn slice_by_chunk_id(
@@ -822,6 +701,131 @@ where
             }
         }
         Err(RecursiveRuntimeError::MissingChunk(chunk_id.to_string()))
+    }
+
+    fn prepare_iteration(
+        &self,
+        task: &str,
+        iteration: u32,
+        child_outputs: &[ChildSubqueryOutput],
+        seen_chunk_ids: &[String],
+        web_policy: WebPolicy,
+        trace: &mut TraceLedger,
+    ) -> Result<Option<IterationArtifacts>, RecursiveRuntimeError> {
+        let query = build_iteration_query(task, child_outputs);
+        push_trace_event(
+            trace,
+            TraceEventType::RetrievalRequested,
+            BTreeMap::from([
+                ("query".to_string(), JsonValue::String(query.clone())),
+                (
+                    "iteration".to_string(),
+                    JsonValue::Number(i64::from(iteration)),
+                ),
+            ]),
+        );
+        let retrieval = self.corpus_search(&query, 6);
+        push_trace_event(
+            trace,
+            TraceEventType::RetrievalCompleted,
+            BTreeMap::from([
+                ("query".to_string(), JsonValue::String(query)),
+                (
+                    "iteration".to_string(),
+                    JsonValue::Number(i64::from(iteration)),
+                ),
+                (
+                    "hitCount".to_string(),
+                    JsonValue::Number(i64::try_from(retrieval.hits.len()).unwrap_or(i64::MAX)),
+                ),
+            ]),
+        );
+
+        let selected_chunk_ids = retrieval
+            .hits
+            .iter()
+            .map(|hit| hit.chunk_id.clone())
+            .filter(|chunk_id| !seen_chunk_ids.contains(chunk_id))
+            .take(3)
+            .collect::<Vec<_>>();
+        if selected_chunk_ids.is_empty() {
+            return Ok(None);
+        }
+
+        let slices = self.select_slices(&selected_chunk_ids)?;
+        push_trace_event(
+            trace,
+            TraceEventType::CorpusSliced,
+            BTreeMap::from([
+                (
+                    "iteration".to_string(),
+                    JsonValue::Number(i64::from(iteration)),
+                ),
+                (
+                    "sliceCount".to_string(),
+                    JsonValue::Number(i64::try_from(slices.len()).unwrap_or(i64::MAX)),
+                ),
+                (
+                    "chunkIds".to_string(),
+                    JsonValue::Array(
+                        selected_chunk_ids
+                            .iter()
+                            .cloned()
+                            .map(JsonValue::String)
+                            .collect(),
+                    ),
+                ),
+            ]),
+        );
+
+        let local_summary = summarize_local_evidence(&retrieval);
+        let escalation = evaluate_web_escalation(
+            web_policy.clone(),
+            EscalationHeuristicInput {
+                local_summary,
+                requires_external_freshness: task_mentions_freshness(task),
+                user_requested_web: task_requests_web(task),
+            },
+        );
+        if escalation.reason != EscalationReason::LocalEvidenceSufficient {
+            push_trace_event(
+                trace,
+                TraceEventType::WebEscalationStarted,
+                BTreeMap::from([
+                    (
+                        "decision".to_string(),
+                        JsonValue::String(
+                            web_access_decision_label(escalation.decision).to_string(),
+                        ),
+                    ),
+                    (
+                        "reason".to_string(),
+                        JsonValue::String(escalation_reason_label(escalation.reason).to_string()),
+                    ),
+                    (
+                        "parentMode".to_string(),
+                        JsonValue::String(web_policy_label(web_policy.mode).to_string()),
+                    ),
+                    (
+                        "localHits".to_string(),
+                        JsonValue::Number(
+                            i64::try_from(local_summary.total_hits).unwrap_or(i64::MAX),
+                        ),
+                    ),
+                    (
+                        "weakLocalEvidence".to_string(),
+                        JsonValue::Bool(is_local_evidence_weak(local_summary)),
+                    ),
+                ]),
+            );
+        }
+
+        Ok(Some(IterationArtifacts {
+            retrieval,
+            selected_chunk_ids,
+            slices,
+            escalation,
+        }))
     }
 }
 
@@ -1037,6 +1041,160 @@ fn format_recursive_answer(
     .render_text()
 }
 
+fn finalize_successful_run(
+    task: &str,
+    mut trace: TraceLedger,
+    trace_artifact_dir: Option<&Path>,
+    stop_reason: RecursiveStopReason,
+    mode: RecursiveExecutionMode,
+    retrieval: Option<RetrievalResult>,
+    last_escalation: Option<EscalationOutcome>,
+    child_outputs: Vec<ChildSubqueryOutput>,
+    mut state: RecursiveRuntimeState,
+    tracer: Option<&SessionTracer>,
+    aggregated_body: Option<String>,
+) -> Result<RecursiveExecutionResult, RecursiveRuntimeError> {
+    let final_answer = if let Some(ref retrieval) = retrieval {
+        let escalation = last_escalation
+            .clone()
+            .unwrap_or_else(|| default_escalation_outcome(task, retrieval));
+        if child_outputs.is_empty() {
+            format_recursive_answer(
+                format!("Recursive execution completed without child calls for task: {task}"),
+                retrieval,
+                &child_outputs,
+                &trace.trace_id,
+                &escalation,
+            )
+        } else {
+            format_recursive_answer(
+                aggregated_body
+                    .unwrap_or_else(|| format!("No child findings were produced for task: {task}")),
+                retrieval,
+                &child_outputs,
+                &trace.trace_id,
+                &escalation,
+            )
+        }
+    } else {
+        format!("Recursive execution stopped before any child subqueries for task: {task}")
+    };
+    push_trace_event(
+        &mut trace,
+        TraceEventType::AggregationCompleted,
+        BTreeMap::from([
+            (
+                "childCount".to_string(),
+                JsonValue::Number(i64::try_from(child_outputs.len()).unwrap_or(i64::MAX)),
+            ),
+            (
+                "iterationCount".to_string(),
+                JsonValue::Number(i64::try_from(state.iterations.len()).unwrap_or(i64::MAX)),
+            ),
+            (
+                "finalAnswerChars".to_string(),
+                JsonValue::Number(i64::try_from(final_answer.len()).unwrap_or(i64::MAX)),
+            ),
+        ]),
+    );
+    push_trace_event(
+        &mut trace,
+        TraceEventType::StopConditionReached,
+        BTreeMap::from([(
+            "stopReason".to_string(),
+            JsonValue::String(stop_reason.as_str().to_string()),
+        )]),
+    );
+    trace.finished_at_ms = Some(now_ms());
+    trace.final_status = stop_reason.trace_status();
+    let trace_path = export_trace_if_requested(&trace, trace_artifact_dir)?;
+    if let Some(tracer) = tracer {
+        trace.emit_telemetry(tracer);
+    }
+    state.trace_artifact_path = trace_path.clone();
+
+    Ok(RecursiveExecutionResult {
+        mode,
+        stop_reason,
+        final_answer,
+        child_outputs,
+        retrieval,
+        trace,
+        trace_artifact_path: trace_path,
+        usage: state.usage,
+    })
+}
+
+fn finalize_failed_run(
+    task: &str,
+    mut trace: TraceLedger,
+    trace_artifact_dir: Option<&Path>,
+    stop_reason: RecursiveStopReason,
+    mode: RecursiveExecutionMode,
+    retrieval: Option<RetrievalResult>,
+    child_outputs: Vec<ChildSubqueryOutput>,
+    usage: RuntimeBudgetUsage,
+    tracer: Option<&SessionTracer>,
+    error_message: String,
+) -> Result<RecursiveExecutionResult, RecursiveRuntimeError> {
+    push_trace_event(
+        &mut trace,
+        TraceEventType::TaskFailed,
+        BTreeMap::from([
+            (
+                "stopReason".to_string(),
+                JsonValue::String(stop_reason.as_str().to_string()),
+            ),
+            (
+                "message".to_string(),
+                JsonValue::String(error_message.clone()),
+            ),
+        ]),
+    );
+    push_trace_event(
+        &mut trace,
+        TraceEventType::StopConditionReached,
+        BTreeMap::from([(
+            "stopReason".to_string(),
+            JsonValue::String(stop_reason.as_str().to_string()),
+        )]),
+    );
+    trace.finished_at_ms = Some(now_ms());
+    trace.final_status = stop_reason.trace_status();
+    let trace_path = export_trace_if_requested(&trace, trace_artifact_dir)?;
+    if let Some(tracer) = tracer {
+        trace.emit_telemetry(tracer);
+    }
+
+    let final_answer = if child_outputs.is_empty() {
+        format!("Recursive child execution failed for task: {task}\nReason: {error_message}")
+    } else if let Some(ref retrieval) = retrieval {
+        let body = format!(
+            "Partial recursive findings were produced before a child failed for task: {task}\nFailure: {error_message}"
+        );
+        format_recursive_answer(
+            body,
+            retrieval,
+            &child_outputs,
+            &trace.trace_id,
+            &default_escalation_outcome(task, retrieval),
+        )
+    } else {
+        format!("Recursive child execution failed for task: {task}\nReason: {error_message}")
+    };
+
+    Ok(RecursiveExecutionResult {
+        mode,
+        stop_reason,
+        final_answer,
+        child_outputs,
+        retrieval,
+        trace,
+        trace_artifact_path: trace_path,
+        usage,
+    })
+}
+
 fn task_requests_web(task: &str) -> bool {
     let lowered = task.to_ascii_lowercase();
     ["web", "online", "internet", "search the web", "browse"]
@@ -1238,6 +1396,34 @@ mod tests {
                 prompt_tokens: 120,
                 completion_tokens: 40,
                 cost_usd: 0.02,
+            })
+        }
+    }
+
+    struct FlakyExecutor {
+        calls: std::sync::Mutex<u32>,
+    }
+
+    impl ChildSubqueryExecutor for FlakyExecutor {
+        fn execute(
+            &self,
+            request: &ChildSubqueryRequest,
+        ) -> Result<ChildSubqueryOutput, RecursiveRuntimeError> {
+            let mut calls = self.calls.lock().expect("lock should succeed");
+            *calls += 1;
+            if *calls >= 2 {
+                return Err(RecursiveRuntimeError::ChildExecution(
+                    "child executor crashed on follow-up".to_string(),
+                ));
+            }
+            Ok(ChildSubqueryOutput {
+                subquery_id: request.subquery_id.clone(),
+                answer: "first child succeeded".to_string(),
+                citations: vec![request.slices[0].chunk_id.clone()],
+                web_evidence: Vec::new(),
+                prompt_tokens: 80,
+                completion_tokens: 20,
+                cost_usd: 0.01,
             })
         }
     }
@@ -1447,7 +1633,7 @@ mod tests {
 
         assert_eq!(result.stop_reason, RecursiveStopReason::Completed);
         assert_eq!(result.child_outputs.len(), 2);
-        assert_eq!(result.usage.iterations, 3);
+        assert_eq!(result.usage.iterations, 2);
         assert_eq!(result.usage.subcalls, 2);
         assert!(result.final_answer.matches("inspected").count() >= 1);
         let counters = result.trace.counters();
@@ -1480,6 +1666,70 @@ mod tests {
         assert_eq!(result.child_outputs.len(), 1);
         assert_eq!(result.usage.iterations, 1);
         assert_eq!(result.usage.subcalls, 1);
+    }
+
+    #[test]
+    fn prompt_token_cap_stops_before_launching_a_follow_up_child() {
+        let corpus = sample_corpus();
+        let runtime = RecursiveConversationRuntime::new(&corpus, StubExecutor);
+
+        let result = runtime
+            .run(
+                "session-1",
+                "task-prompt-cap",
+                "trace aggregation export hidden",
+                RuntimeBudget {
+                    max_depth: Some(2),
+                    max_iterations: Some(4),
+                    max_subcalls: Some(4),
+                    max_prompt_tokens: Some(120),
+                    ..RuntimeBudget::default()
+                },
+                None,
+            )
+            .expect("run should stop at prompt token cap");
+
+        assert_eq!(result.stop_reason, RecursiveStopReason::PromptTokenCap);
+        assert_eq!(result.child_outputs.len(), 1);
+        assert_eq!(result.usage.prompt_tokens, 120);
+        assert_eq!(result.trace.final_status, TraceFinalStatus::BudgetExceeded);
+    }
+
+    #[test]
+    fn child_failure_returns_partial_result_and_records_failure_trace() {
+        let corpus = sample_corpus();
+        let runtime = RecursiveConversationRuntime::new(
+            &corpus,
+            FlakyExecutor {
+                calls: std::sync::Mutex::new(0),
+            },
+        );
+
+        let result = runtime
+            .run(
+                "session-1",
+                "task-flaky",
+                "trace aggregation export hidden",
+                RuntimeBudget {
+                    max_depth: Some(2),
+                    max_iterations: Some(4),
+                    max_subcalls: Some(4),
+                    ..RuntimeBudget::default()
+                },
+                None,
+            )
+            .expect("run should degrade gracefully on child failure");
+
+        assert_eq!(result.stop_reason, RecursiveStopReason::ChildFailed);
+        assert_eq!(result.child_outputs.len(), 1);
+        assert!(result.final_answer.contains("Partial recursive findings"));
+        assert_eq!(result.trace.final_status, TraceFinalStatus::Failed);
+        assert!(result.trace.events.iter().any(|event| event.event_type
+            == TraceEventType::TaskFailed
+            && event.data.get("message")
+                == Some(&JsonValue::String(
+                    "child executor crashed on follow-up".to_string(),
+                ))));
     }
 
     #[test]
