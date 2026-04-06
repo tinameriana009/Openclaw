@@ -55,8 +55,17 @@ Prompt templates live in [`../prompts/`](../prompts/).
 
 Starter example briefs live in [`../examples/`](../examples/).
 
-If you want one especially concrete operator path, start with the **scene cleanup demo kit**:
+If you want one especially concrete operator path, start with one of these demo kits:
+
+### Blender scene cleanup demo kit
 
 - [`../examples/blender-scene-cleanup-demo/README.md`](../examples/blender-scene-cleanup-demo/README.md)
 - [`../examples/blender-scene-cleanup-demo/brief.md`](../examples/blender-scene-cleanup-demo/brief.md)
 - [`../examples/blender-scene-cleanup-demo/manual-test-checklist.md`](../examples/blender-scene-cleanup-demo/manual-test-checklist.md)
+
+### Repo analysis demo kit
+
+- [`../examples/repo-analysis-demo/README.md`](../examples/repo-analysis-demo/README.md)
+- [`../examples/repo-analysis-demo/brief.md`](../examples/repo-analysis-demo/brief.md)
+- [`../examples/repo-analysis-demo/manual-validation-checklist.md`](../examples/repo-analysis-demo/manual-validation-checklist.md)
+- [`../examples/repo-analysis-demo/trace-review-checklist.md`](../examples/repo-analysis-demo/trace-review-checklist.md)

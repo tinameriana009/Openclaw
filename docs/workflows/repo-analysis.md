@@ -29,6 +29,14 @@ cd rust
 
 If the repository is large or the question is cross-cutting, bump to `deep` or `research`.
 
+If you want a more realistic operator path instead of a generic one-liner, use the repo analysis demo kit:
+
+- [`../examples/repo-analysis-demo/README.md`](../examples/repo-analysis-demo/README.md)
+- [`../examples/repo-analysis-demo/brief.md`](../examples/repo-analysis-demo/brief.md)
+- [`../examples/repo-analysis-demo/expected-findings.md`](../examples/repo-analysis-demo/expected-findings.md)
+- [`../examples/repo-analysis-demo/manual-validation-checklist.md`](../examples/repo-analysis-demo/manual-validation-checklist.md)
+- [`../examples/repo-analysis-demo/trace-review-checklist.md`](../examples/repo-analysis-demo/trace-review-checklist.md)
+
 ## Recommended flow
 
 ### 1) Start broad
@@ -94,6 +102,8 @@ ls .claw/trace
 
 This is especially helpful when the answer combines many files or corpus slices.
 
+For a more repeatable review loop, use the repo-analysis trace checklist in [`../examples/repo-analysis-demo/trace-review-checklist.md`](../examples/repo-analysis-demo/trace-review-checklist.md).
+
 ## Suggested query ladder
 
 A reliable progression:
@@ -121,9 +131,29 @@ A reliable progression:
 - risk register
 - onboarding memo
 
+## Manual validation loop
+
+A good repo-analysis workflow should end with verification, not just a plausible summary.
+
+After the model answers:
+
+1. compare it against the known-good anchors in [`../examples/repo-analysis-demo/expected-findings.md`](../examples/repo-analysis-demo/expected-findings.md)
+2. spot-check the referenced files using [`../examples/repo-analysis-demo/manual-validation-checklist.md`](../examples/repo-analysis-demo/manual-validation-checklist.md)
+3. inspect the trace if the model made a broad claim from thin evidence
+4. re-prompt with narrower file targets when needed
+
+You can also run a lightweight coherence check for the demo assets themselves:
+
+```bash
+python3 tests/validate_repo_analysis_demo.py
+```
+
+That validates the docs/examples wiring, not the model's quality.
+
 ## Current workflow limits
 
 - no graphical architecture explorer yet
 - no first-class saved workflow runner beyond normal sessions and prompts
 - very large repos still depend on corpus selection quality and prompt discipline
 - best trace UX is still the saved ledger on disk, not a fully polished in-app viewer
+- architecture validation is still operator-driven; the harness does not automatically certify that its summary is correct

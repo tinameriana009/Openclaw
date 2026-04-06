@@ -12,7 +12,7 @@
 > The practical operator/developer docs for the current Rust harness live in [`rust/README.md`](rust/README.md). If you want to build, run, test, or evaluate the current system — especially the newer `--profile`, corpus, recursive, and trace flows — start there.
 
 > [!NOTE]
-> This repository is maintained at **tinameriana009/Openclaw**. The current local/alpha work is centered on the Rust harness under `rust/`.
+> The current local/alpha work is centered on the Rust harness under `rust/`. Before treating any GitHub URL in this repository as canonical, confirm your clone's remotes with `git remote -v` and make sure your release/tag flow matches the remote you actually intend to publish.
 
 ## What is better in this repository?
 
@@ -61,9 +61,9 @@ The most current implementation surface is the **Rust workspace** under [`rust/`
 
 ## Repository Home
 
-- GitHub: <https://github.com/tinameriana009/Openclaw>
+- Canonical remote: verify with `git remote -v` in your current clone before publishing or cutting a release
 - Main operator docs: [`rust/README.md`](rust/README.md)
-- Workflow recipes, prompt templates, and the Blender scene cleanup demo kit: [`docs/workflows/README.md`](docs/workflows/README.md), [`docs/examples/blender-scene-cleanup-demo/README.md`](docs/examples/blender-scene-cleanup-demo/README.md)
+- Workflow recipes, prompt templates, and demo kits for Blender and repo analysis: [`docs/workflows/README.md`](docs/workflows/README.md), [`docs/examples/blender-scene-cleanup-demo/README.md`](docs/examples/blender-scene-cleanup-demo/README.md), [`docs/examples/repo-analysis-demo/README.md`](docs/examples/repo-analysis-demo/README.md)
 - First-run/bootstrap notes: [`rust/BOOTSTRAP.md`](rust/BOOTSTRAP.md)
 - Release checklist: [`rust/RELEASE.md`](rust/RELEASE.md)
 - Changelog: [`rust/CHANGELOG.md`](rust/CHANGELOG.md)
@@ -107,11 +107,11 @@ Use it for historical comparison, parity exploration, and supplemental experimen
 
 ## Remote reviewer quickstart
 
-If you just want to verify the current stable path on `main`:
+If you just want to verify the current stable path on `main`, clone the remote you actually intend to review/publish from, then run:
 
 ```bash
-git clone https://github.com/tinameriana009/Openclaw.git
-cd Openclaw/rust
+git clone <your-canonical-remote-url>
+cd <repo-dir>/rust
 cargo build --workspace --locked
 cargo test --workspace --locked
 ```
@@ -135,8 +135,7 @@ This repository has been heavily AI-assisted during exploration, refactoring, va
 
 If you fork or continue this work, update the docs and repository metadata to match your own hosting and workflow.
 
-Current repository home:
-- <https://github.com/tinameriana009/Openclaw>
+Current repository home should be treated as an operator decision, not assumed from stale docs. Check `git remote -v`, confirm which remote is authoritative, and update these docs before tagging or announcing a release.
 
 ## Ownership / affiliation disclaimer
 
