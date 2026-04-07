@@ -4,6 +4,20 @@ This `rust/` tree is the current Rust harness implementation for `claw`.
 
 If you want to install it, authenticate, attach a local corpus, run a task, and inspect traces without spelunking through source, start here.
 
+## Current honest status
+
+- **Maturity:** strong alpha / early pre-production candidate
+- **Best current use:** grounded local technical tasks over repos, docs, and attached corpora
+- **Verified state:** `cargo build --workspace --locked` and `cargo test --workspace --locked` currently pass from this `rust/` workspace root with the pinned toolchain
+- **Not yet:** a fully production-ready universal agent platform
+
+Strongest current areas:
+- local corpus RAG
+- recursive runtime hardening
+- trace export and telemetry
+- operator/release/trust docs
+- workflow demos for Blender, repo analysis, and Unreal
+
 ## What ships today
 
 Operator trust/release docs added for this harness:
@@ -61,6 +75,10 @@ rustc --version
 If your shell still resolves the distro Cargo first, use `~/.cargo/bin/cargo` explicitly.
 
 ### Build + verify
+
+Important:
+- run verification from the `rust/` directory, not the repository root
+- on older hosts, prefer `~/.cargo/bin/cargo` or `. "$HOME/.cargo/env"` first if the system Cargo is too old for this workspace
 
 Preferred:
 
@@ -318,6 +336,8 @@ These are the important remaining rough edges from an operator point of view:
 - The install story is still source-first; there is no polished packaged release flow documented here yet.
 - The quickest reliable trace workflow is still “inspect `.claw/trace/` on disk”; the CLI trace UX is improving but the saved artifact path remains the safest one to depend on.
 - Corpus discoverability is much better than before, but the most advanced grounded-answer path should still be treated as an active harness surface rather than a finished product.
+- Web-aware behavior is more honest and traceable than before, but it is still not a fully mature end-to-end operator web workflow.
+- Child execution is cleaner and more shared than before, but not yet fully runtime/provider-owned in every seam.
 - Recursive traces now capture novelty/progress signals per child step, but the runtime still uses lightweight heuristics rather than a full planner or formal verifier.
 - OAuth currently depends on a localhost callback and manual URL opening when no browser opener is available.
 
