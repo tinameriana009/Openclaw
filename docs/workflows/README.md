@@ -29,6 +29,8 @@ They are best used as:
 2. a grounded local-analysis loop
 3. a traceable review flow for multi-step answers
 
+Always run the lightweight validators before trusting a showcase, then finish with the real human validation loop for the target tool or engine.
+
 ## Recommended baseline loop
 
 For any substantial task:
@@ -40,8 +42,12 @@ For any substantial task:
    - `research` when you want the largest local investigation budget
 3. ask for a plan first
 4. ask for concrete patches, file lists, or implementation steps second
-5. inspect `.claw/trace/` if the reasoning path matters
-6. resume the session instead of restarting from scratch
+5. force a validation loop before you trust the answer:
+   - ask what specific build/test/manual check should happen next
+   - ask what evidence actually changed between iterations
+   - treat repeated answers without new evidence as convergence, not progress
+6. inspect `.claw/trace/` if the reasoning path matters
+7. resume the session instead of restarting from scratch
 
 ## Available recipes
 
@@ -76,3 +82,16 @@ If you want one especially concrete operator path, start with one of these demo 
 - [`../examples/unreal-runtime-telemetry-demo/brief.md`](../examples/unreal-runtime-telemetry-demo/brief.md)
 - [`../examples/unreal-runtime-telemetry-demo/manual-validation-checklist.md`](../examples/unreal-runtime-telemetry-demo/manual-validation-checklist.md)
 - [`../examples/unreal-runtime-telemetry-demo/trace-review-checklist.md`](../examples/unreal-runtime-telemetry-demo/trace-review-checklist.md)
+
+## Quick validation commands
+
+Run these from the repository root to confirm the showcase assets and release-facing workflow docs are still honest and wired correctly:
+
+```bash
+python3 tests/validate_operator_readiness.py
+python3 tests/validate_blender_demo.py
+python3 tests/validate_unreal_demo.py
+python3 tests/validate_repo_analysis_demo.py
+```
+
+These checks only validate documentation/demo coherence. They do not replace Blender, Unreal, or repo-specific manual verification.

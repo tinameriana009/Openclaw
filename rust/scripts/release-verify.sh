@@ -14,14 +14,25 @@ print(cfg['toolchain']['channel'])
 PY
 )
 
+workspace_version=$(python3 - <<'PY'
+from pathlib import Path
+import tomllib
+cfg = tomllib.loads(Path('Cargo.toml').read_text())
+print(cfg['workspace']['package']['version'])
+PY
+)
+
 cargo_version=$(cargo --version 2>/dev/null || true)
 rustc_version=$(rustc --version 2>/dev/null || true)
+release_candidate=${RELEASE_CANDIDATE:-0}
 
 echo "== Release verification preflight =="
 echo "rust root: $RUST_ROOT"
+echo "workspace version: $workspace_version"
 echo "required toolchain: $required_toolchain"
 echo "cargo: ${cargo_version:-missing}"
 echo "rustc: ${rustc_version:-missing}"
+echo "release candidate discipline: $release_candidate"
 
 toolchain_mismatch=0
 if [[ -z "$cargo_version" || "$cargo_version" != cargo\ "$required_toolchain"* ]]; then
@@ -49,8 +60,24 @@ fi
 echo
 printf '== Repository posture ==\n'
 git status --short
+current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
+echo "current branch: $current_branch"
 git branch -vv || true
 git remote -v || true
+
+if [[ "$release_candidate" == "1" ]]; then
+  if [[ -n "$(git status --short)" ]]; then
+    echo
+    echo "ERROR: release-candidate verification requires a clean working tree."
+    echo "Commit/stash local changes or rerun without RELEASE_CANDIDATE=1 for a non-RC smoke pass."
+    exit 3
+  fi
+  if [[ "$current_branch" != release/* && "$current_branch" != hotfix/* && "$current_branch" != main ]]; then
+    echo
+    echo "WARN: RC verification is usually run from main, release/*, or hotfix/* branches."
+    echo "Current branch: $current_branch"
+  fi
+fi
 
 echo
 printf '== Locked verification ==\n'
@@ -60,3 +87,30 @@ cargo clippy --workspace --all-targets --locked
 cargo test --workspace --locked
 ./target/debug/claw --help
 ./target/debug/claw status
+
+echo
+printf '== Operator readiness + demo validation ==\n'
+python3 ../tests/validate_operator_readiness.py
+python3 ../tests/validate_blender_demo.py
+python3 ../tests/validate_unreal_demo.py
+python3 ../tests/validate_repo_analysis_demo.py
+
+echo
+printf '== Artifact contract spot-check ==\n'
+python3 - <<'PY'
+from pathlib import Path
+text = Path('docs/ARTIFACTS.md').read_text()
+required = ['schemaVersion', 'compatVersion', 'artifactKind']
+missing = [item for item in required if item not in text]
+if missing:
+    raise SystemExit(f"docs/ARTIFACTS.md is missing required artifact contract markers: {', '.join(missing)}")
+print('docs/ARTIFACTS.md mentions artifactKind/schemaVersion/compatVersion')
+PY
+
+if [[ "$release_candidate" == "1" ]]; then
+  echo
+  printf '== RC reminders ==\n'
+  echo "- confirm CHANGELOG.md and RELEASE.md match actual operator behavior"
+  echo "- call out artifact compatibility notes in the release draft"
+  echo "- if local .claw state from older runs exists, test with a fresh workspace too"
+fi

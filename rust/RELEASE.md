@@ -28,7 +28,14 @@ cd rust
 ./scripts/release-verify.sh
 ```
 
-That script fails fast if the active `cargo`/`rustc` do not match `rust-toolchain.toml`, then runs the exact locked verification sequence below.
+For stricter RC discipline, use:
+
+```bash
+cd rust
+RELEASE_CANDIDATE=1 ./scripts/release-verify.sh
+```
+
+That RC mode keeps the same locked build/test gates but also requires a clean working tree and prints explicit release-candidate reminders.
 
 Manual equivalent:
 
@@ -40,6 +47,10 @@ cargo clippy --workspace --all-targets --locked
 cargo test --workspace --locked
 ./target/debug/claw --help
 ./target/debug/claw status
+python3 ../tests/validate_operator_readiness.py
+python3 ../tests/validate_blender_demo.py
+python3 ../tests/validate_unreal_demo.py
+python3 ../tests/validate_repo_analysis_demo.py
 ```
 
 ### Operator sanity checks
@@ -58,7 +69,24 @@ Confirm:
 - trace files are written when expected
 - telemetry file is written when expected
 - corpus attach/search/inspect flow still works
-- demo/validation helpers do not leave a surprising dirty tree (generated demo zips are ignored or cleaned)
+- `python3 ../tests/validate_operator_readiness.py` passes so release docs and workflow honesty cues stay aligned
+- demo validators pass and do not leave a surprising dirty tree (generated demo zips are ignored or cleaned)
+
+## Release candidate discipline
+
+Before calling something `rc`, explicitly check these:
+
+- `CHANGELOG.md`, `README.md`, `BOOTSTRAP.md`, `docs/ARTIFACTS.md`, and `docs/PRIVACY.md` describe the current behavior rather than the intended future behavior
+- artifact compatibility notes are present in the release draft, even if the note is simply "no schema change from prior RC"
+- trace/corpus artifacts from the current build include `artifactKind`, `schemaVersion`, and `compatVersion`
+- older local `.claw/` state is treated as upgrade-sensitive local state, not as a guaranteed cross-version interchange contract
+- if you changed artifact fields, you either documented the migration impact or told operators to rebuild local corpora / re-run with fresh traces
+
+A practical release-candidate rule for this repo:
+
+- **alpha smoke pass:** `./scripts/release-verify.sh`
+- **release candidate pass:** `RELEASE_CANDIDATE=1 ./scripts/release-verify.sh`
+- **taggable RC:** clean tree, current docs, explicit compatibility note, and at least one grounded operator run on a fresh `.claw/` state
 
 ## Release notes template
 
@@ -91,7 +119,7 @@ Copy into the top of `CHANGELOG.md` or a GitHub release draft.
 For every release, answer these explicitly:
 
 - Did any `.claw/trace/` artifact keys change?
-- Did any `.claw/corpus/` manifest keys change?
+- Did any `.claw/corpora/` manifest keys change?
 - Did session resume behavior change?
 - Did any command/help surface or profile default change?
 - Do operators need to delete old local artifacts or rebuild corpora?
@@ -102,10 +130,11 @@ If the answer is "no", say so plainly in the release notes.
 
 As of `0.1.0`:
 
-- no dedicated artifact migration layer exists
-- no explicit schema-version fields exist on trace/corpus artifacts
-- safest automation strategy is pinning to a tag/commit and parsing defensively
-- old `.claw/` directories should be treated as local state, not as guaranteed cross-version interchange
+- trace ledgers and corpus manifests now include `artifactKind`, `schemaVersion`, and `compatVersion`
+- legacy unversioned trace/corpus artifacts are still read defensively by the current runtime
+- no dedicated artifact migration layer exists yet beyond backward-compatible readers
+- safest automation strategy is still pinning to a tag/commit and parsing defensively
+- old `.claw/` directories should still be treated as local state, not as guaranteed cross-version interchange
 
 ## Trust signals worth preserving
 

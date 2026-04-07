@@ -79,6 +79,10 @@ cargo build --workspace --locked
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked
 cargo test --workspace --locked
+python3 ../tests/validate_operator_readiness.py
+python3 ../tests/validate_blender_demo.py
+python3 ../tests/validate_unreal_demo.py
+python3 ../tests/validate_repo_analysis_demo.py
 ```
 
 After a successful build, the binary is:
@@ -299,6 +303,7 @@ Other useful operator commands from the current help surface:
 Current baseline:
 
 - the workspace version is `0.1.0`
+- new trace ledgers and corpus manifests now carry `artifactKind`, `schemaVersion`, and `compatVersion`
 - trace and corpus artifact formats are documented, but still pre-1.0 contracts
 - there is not yet a dedicated migration layer for session / trace / corpus artifacts
 - safest automation strategy today is pinning to a git tag or commit and parsing `.claw/` artifacts defensively
@@ -313,6 +318,7 @@ These are the important remaining rough edges from an operator point of view:
 - The install story is still source-first; there is no polished packaged release flow documented here yet.
 - The quickest reliable trace workflow is still “inspect `.claw/trace/` on disk”; the CLI trace UX is improving but the saved artifact path remains the safest one to depend on.
 - Corpus discoverability is much better than before, but the most advanced grounded-answer path should still be treated as an active harness surface rather than a finished product.
+- Recursive traces now capture novelty/progress signals per child step, but the runtime still uses lightweight heuristics rather than a full planner or formal verifier.
 - OAuth currently depends on a localhost callback and manual URL opening when no browser opener is available.
 
 ## Workspace layout
