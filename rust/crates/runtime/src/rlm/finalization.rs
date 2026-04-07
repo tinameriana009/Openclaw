@@ -403,7 +403,7 @@ pub fn render_trace_summary(trace: &TraceLedger) -> String {
         .unwrap_or("unknown");
     let counters = trace.counters();
     format!(
-        "Trace\n  Id               {}\n  Session          {}\n  Task             {}\n  Status           {}\n  Stop reason      {}\n  Events           {}\n  Retrievals       {} / {}\n  Subqueries       {} / {}\n  Web escalations  {}\n  Web evidence     {}",
+        "Trace\n  Id               {}\n  Session          {}\n  Task             {}\n  Status           {}\n  Stop reason      {}\n  Events           {}\n  Retrievals       {} / {}\n  Subqueries       {} / {}\n  Web escalations  {}\n  Web executions   {}\n  Web degraded     {}\n  Web evidence     {}",
         trace.trace_id,
         trace.session_id,
         trace.root_task_id,
@@ -415,6 +415,8 @@ pub fn render_trace_summary(trace: &TraceLedger) -> String {
         counters.subqueries_completed,
         counters.subqueries_started,
         counters.web_escalations,
+        counters.web_executions_completed,
+        counters.degraded_web_executions,
         counters.web_evidence_items,
     )
 }

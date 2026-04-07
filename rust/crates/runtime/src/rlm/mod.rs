@@ -1050,6 +1050,8 @@ mod tests {
         assert!(trace_path.is_file());
         let summary = render_trace_summary(&result.trace);
         assert!(summary.contains("Stop reason      subcall_cap"));
+        assert!(summary.contains("Web executions"));
+        assert!(summary.contains("Web degraded"));
 
         let exported = export_trace(&result.trace, &trace_dir.join("exported"))
             .expect("trace export helper should succeed");

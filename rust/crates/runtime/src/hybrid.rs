@@ -54,6 +54,7 @@ pub struct WebEvidenceInput {
     pub url: String,
     pub snippet: String,
     pub fetched_at_ms: Option<u64>,
+    pub fetched: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -319,6 +320,9 @@ impl EvidenceRecord {
                 JsonValue::Number(i64::try_from(fetched_at_ms).unwrap_or(i64::MAX)),
             );
         }
+        if let Some(fetched) = input.fetched {
+            metadata.insert("fetched".to_string(), JsonValue::Bool(fetched));
+        }
         Self {
             kind: EvidenceKind::Web,
             id: input.id,
@@ -336,6 +340,16 @@ impl EvidenceRecord {
             EvidenceKind::Local => format!("[local] {}", self.locator),
             EvidenceKind::Web => format!("[web] {}", self.locator),
         }
+    }
+
+    #[must_use]
+    pub fn is_fetched_web_evidence(&self) -> bool {
+        matches!(self.kind, EvidenceKind::Web)
+            && self
+                .metadata
+                .get("fetched")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(true)
     }
 
     #[must_use]
@@ -608,6 +622,7 @@ mod tests {
             url: "https://example.test/release".to_string(),
             snippet: "fresh info".to_string(),
             fetched_at_ms: Some(1234),
+            fetched: None,
         });
 
         assert_eq!(local[0].kind, EvidenceKind::Local);
@@ -622,6 +637,33 @@ mod tests {
         assert_eq!(
             web.metadata.get("fetchedAtMs"),
             Some(&JsonValue::Number(1234))
+        );
+    }
+
+    #[test]
+    fn web_evidence_records_preserve_fetch_state() {
+        let fetched = EvidenceRecord::from_web_input(WebEvidenceInput {
+            id: "web-1".to_string(),
+            title: "Fetched page".to_string(),
+            url: "https://example.test/fetched".to_string(),
+            snippet: "full page summary".to_string(),
+            fetched_at_ms: None,
+            fetched: Some(true),
+        });
+        let search_only = EvidenceRecord::from_web_input(WebEvidenceInput {
+            id: "web-2".to_string(),
+            title: "Search result only".to_string(),
+            url: "https://example.test/search".to_string(),
+            snippet: "search snippet".to_string(),
+            fetched_at_ms: None,
+            fetched: Some(false),
+        });
+
+        assert!(fetched.is_fetched_web_evidence());
+        assert!(!search_only.is_fetched_web_evidence());
+        assert_eq!(
+            search_only.metadata.get("fetched"),
+            Some(&JsonValue::Bool(false))
         );
     }
 
@@ -641,6 +683,7 @@ mod tests {
                 url: "https://example.test/release".to_string(),
                 snippet: "fresh info".to_string(),
                 fetched_at_ms: None,
+                fetched: None,
             })],
         );
 

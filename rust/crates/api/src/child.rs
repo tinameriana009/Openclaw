@@ -855,7 +855,7 @@ mod tests {
                     url: "https://example.test/release".to_string(),
                     snippet: "release snippet".to_string(),
                     fetched_at_ms: None,
-                fetched: None,
+                    fetched: None,
                 })],
                 outcome: WebExecutionOutcome::succeeded("latest release", 1, None),
                 note: None,
@@ -978,7 +978,7 @@ mod tests {
                     url: "https://example.test/release".to_string(),
                     snippet: "release snippet".to_string(),
                     fetched_at_ms: None,
-                fetched: None,
+                    fetched: Some(true),
                 })],
                 outcome: WebExecutionOutcome::succeeded(
                     "latest release",
@@ -992,7 +992,37 @@ mod tests {
         assert!(prompt.contains("Summarize the relevant slice"));
         assert!(prompt.contains("Attached web evidence"));
         assert!(prompt.contains("[W1] Example release note"));
+        assert!(prompt.contains("(fetched)"));
+        assert!(prompt.contains("Web provenance: status=succeeded; approval=approved; query=\"latest release\"; evidence=1"));
         assert!(prompt.contains("Web execution note: fetched from minimal web adapter"));
+    }
+
+    #[test]
+    fn collect_web_context_marks_search_only_evidence_as_degraded_success() {
+        let request = sample_request(WebAccessMode::On, Some("latest release"));
+        let context = collect_web_context(&request, &|_| {
+            Ok(vec![EvidenceRecord::from_web_input(
+                runtime::WebEvidenceInput {
+                    id: "web-1".to_string(),
+                    title: "Example release note (search result only)".to_string(),
+                    url: "https://example.test/release".to_string(),
+                    snippet: "Search result located, but page fetch failed: timeout".to_string(),
+                    fetched_at_ms: None,
+                    fetched: Some(false),
+                },
+            )])
+        });
+
+        assert_eq!(context.outcome.status.as_str(), "succeeded");
+        assert!(context.outcome.degraded);
+        assert_eq!(context.outcome.evidence_count, 1);
+        assert!(context
+            .note
+            .as_deref()
+            .is_some_and(|note| note.contains("only search-result snippets were available")));
+        let rendered = render_web_context(&context).expect("web context should render");
+        assert!(rendered.contains("Web provenance: status=succeeded, degraded; approval=approved; query=\"latest release\"; evidence=1"));
+        assert!(rendered.contains("search-result snippet only"));
     }
 
     #[test]
