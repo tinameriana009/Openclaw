@@ -47,16 +47,28 @@ pub(super) fn build_child_prompt(
     prior_outputs: &[ChildSubqueryOutput],
     slices: &[RecursiveContextSlice],
 ) -> String {
-    let mut prompt =
-        format!("Task: {task}\nIteration: {iteration}\nUse only the provided slices.\n");
+    let mut prompt = format!(
+        "Task: {task}\nIteration: {iteration}\nUse only the provided slices. Stay grounded in observed evidence.\n\nRequired response shape:\n1. Findings: concise answer tied to the task.\n2. Evidence used: cite the slice ids or citations that support the findings.\n3. Validation loop: name one concrete check, repo inspection, build/test step, or operator verification that should happen next.\n4. Remaining gaps: state what is still uncertain or missing.\n"
+    );
     if !prior_outputs.is_empty() {
-        prompt.push_str("Prior child findings:\n");
+        prompt.push_str("\nPrior child findings (avoid repeating them unless you are correcting or validating them):\n");
         for output in prior_outputs {
             prompt.push_str("- ");
             prompt.push_str(&output.answer);
+            if !output.citations.is_empty() {
+                prompt.push_str(" [citations: ");
+                prompt.push_str(&output.citations.join(", "));
+                prompt.push(']');
+            }
+            if let Some(note) = output.web_execution_note.as_deref() {
+                prompt.push_str(" [note: ");
+                prompt.push_str(note);
+                prompt.push(']');
+            }
             prompt.push('\n');
         }
     }
+    prompt.push_str("\nAvailable slices:\n");
     for slice in slices {
         let text = slice_text(&slice.metadata, &slice.preview);
         prompt.push_str("\n");
@@ -65,6 +77,9 @@ pub(super) fn build_child_prompt(
             slice.chunk_id, slice.path, slice.ordinal, slice.start_offset, slice.end_offset, text
         ));
     }
+    prompt.push_str(
+        "\nDo not claim completion just because you produced a summary. Prefer verifiable next steps and explicitly say when the slices are not enough.\n",
+    );
     prompt
 }
 
@@ -198,13 +213,106 @@ pub(super) fn child_output_signature(output: &ChildSubqueryOutput) -> String {
     )
 }
 
+fn normalized_answer_tokens(answer: &str) -> Vec<String> {
+    answer
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| token.len() >= 4)
+        .map(|token| token.to_ascii_lowercase())
+        .collect()
+}
+
+pub(super) fn child_output_novelty_metrics(
+    child_outputs: &[ChildSubqueryOutput],
+) -> Option<(usize, usize, usize, bool)> {
+    let (last, prior) = child_outputs.split_last()?;
+    let previous = prior.last()?;
+
+    let prior_citations = prior
+        .iter()
+        .flat_map(|output| output.citations.iter().cloned())
+        .collect::<std::collections::BTreeSet<_>>();
+    let prior_web_ids = prior
+        .iter()
+        .flat_map(|output| output.web_evidence.iter().map(|record| record.id.clone()))
+        .collect::<std::collections::BTreeSet<_>>();
+    let previous_answer_tokens = normalized_answer_tokens(&previous.answer)
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let current_answer_tokens = normalized_answer_tokens(&last.answer)
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+
+    let novel_citations = last
+        .citations
+        .iter()
+        .filter(|citation| !prior_citations.contains(*citation))
+        .count();
+    let novel_web_ids = last
+        .web_evidence
+        .iter()
+        .filter(|record| !prior_web_ids.contains(&record.id))
+        .count();
+    let novel_answer_tokens = current_answer_tokens
+        .difference(&previous_answer_tokens)
+        .count();
+    let materially_novel = novel_citations > 0 || novel_web_ids > 0 || novel_answer_tokens >= 3;
+
+    Some((
+        novel_citations,
+        novel_web_ids,
+        novel_answer_tokens,
+        materially_novel,
+    ))
+}
+
 pub(super) fn should_stop_for_convergence(child_outputs: &[ChildSubqueryOutput]) -> bool {
     let Some((last, prior)) = child_outputs.split_last() else {
         return false;
     };
-    prior
+    if prior
         .last()
         .is_some_and(|previous| child_output_signature(previous) == child_output_signature(last))
+    {
+        return true;
+    }
+
+    child_output_novelty_metrics(child_outputs)
+        .is_some_and(|(_, _, _, materially_novel)| !materially_novel)
+}
+
+pub(super) fn no_iteration_artifacts_stop_reason(
+    child_outputs: &[ChildSubqueryOutput],
+) -> RecursiveStopReason {
+    if child_outputs.is_empty() {
+        RecursiveStopReason::NoChildCapacity
+    } else {
+        RecursiveStopReason::NoNewContext
+    }
+}
+
+pub(super) fn stop_event_data(
+    reason: RecursiveStopReason,
+    child_outputs: &[ChildSubqueryOutput],
+    usage: &RuntimeBudgetUsage,
+) -> BTreeMap<String, JsonValue> {
+    BTreeMap::from([
+        (
+            "stopReason".to_string(),
+            JsonValue::String(reason.as_str().to_string()),
+        ),
+        (
+            "childCount".to_string(),
+            JsonValue::Number(i64::try_from(child_outputs.len()).unwrap_or(i64::MAX)),
+        ),
+        (
+            "completedIterations".to_string(),
+            JsonValue::Number(i64::from(usage.iterations)),
+        ),
+        (
+            "subcalls".to_string(),
+            JsonValue::Number(i64::from(usage.subcalls)),
+        ),
+    ])
 }
 
 pub(super) fn web_policy_label(mode: WebAccessMode) -> &'static str {
@@ -231,5 +339,59 @@ pub(super) fn escalation_reason_label(reason: EscalationReason) -> &'static str 
         EscalationReason::FreshnessRequired => "freshness_required",
         EscalationReason::LocalEvidenceSufficient => "local_evidence_sufficient",
         EscalationReason::PolicyDenied => "policy_denied",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hybrid::WebExecutionOutcome;
+
+    fn sample_child_output(answer: &str) -> ChildSubqueryOutput {
+        ChildSubqueryOutput {
+            subquery_id: "child-1".to_string(),
+            answer: answer.to_string(),
+            citations: vec!["chunk-1".to_string()],
+            web_evidence: Vec::new(),
+            web_execution: Some(WebExecutionOutcome::not_requested()),
+            web_execution_note: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            cost_usd: 0.0,
+        }
+    }
+
+    #[test]
+    fn no_iteration_artifacts_distinguishes_bootstrap_vs_exhausted_context() {
+        assert_eq!(
+            no_iteration_artifacts_stop_reason(&[]),
+            RecursiveStopReason::NoChildCapacity
+        );
+        assert_eq!(
+            no_iteration_artifacts_stop_reason(&[sample_child_output("done")]),
+            RecursiveStopReason::NoNewContext
+        );
+    }
+
+    #[test]
+    fn stop_event_data_captures_counts_for_trace_consistency() {
+        let usage = RuntimeBudgetUsage {
+            iterations: 2,
+            subcalls: 2,
+            ..RuntimeBudgetUsage::default()
+        };
+        let data = stop_event_data(
+            RecursiveStopReason::Converged,
+            &[sample_child_output("stable answer")],
+            &usage,
+        );
+
+        assert_eq!(
+            data.get("stopReason"),
+            Some(&JsonValue::String("converged".to_string()))
+        );
+        assert_eq!(data.get("childCount"), Some(&JsonValue::Number(1)));
+        assert_eq!(data.get("completedIterations"), Some(&JsonValue::Number(2)));
+        assert_eq!(data.get("subcalls"), Some(&JsonValue::Number(2)));
     }
 }
