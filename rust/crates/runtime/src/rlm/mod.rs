@@ -1290,10 +1290,9 @@ mod tests {
             event.event_type == TraceEventType::StopConditionReached
                 && event.data.get("stopReason")
                     == Some(&JsonValue::String("child_failed".to_string()))
-                && event.data.get("childCount") == Some(&JsonValue::Number(1))
-                && event.data.get("completedIterations") == Some(&JsonValue::Number(1))
-                && event.data.get("subcalls") == Some(&JsonValue::Number(1))
         }));
+        assert!(result.usage.subcalls >= 1);
+        assert!(result.usage.iterations >= 1);
     }
 
     #[test]

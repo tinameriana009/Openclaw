@@ -86,6 +86,26 @@ pub struct EscalationOutcome {
     pub reason: EscalationReason,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebExecutionStatus {
+    NotRequested,
+    ApprovalRequired,
+    Skipped,
+    Succeeded,
+    NoEvidence,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebExecutionOutcome {
+    pub status: WebExecutionStatus,
+    pub approved: bool,
+    pub query: Option<String>,
+    pub evidence_count: u32,
+    pub degraded: bool,
+    pub note: Option<String>,
+}
+
 impl WebAccessMode {
     #[must_use]
     pub fn allows_web(self) -> bool {
@@ -139,20 +159,151 @@ impl WebPolicy {
     }
 }
 
+impl WebExecutionStatus {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotRequested => "not_requested",
+            Self::ApprovalRequired => "approval_required",
+            Self::Skipped => "skipped",
+            Self::Succeeded => "succeeded",
+            Self::NoEvidence => "no_evidence",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+impl WebExecutionOutcome {
+    #[must_use]
+    pub fn not_requested() -> Self {
+        Self {
+            status: WebExecutionStatus::NotRequested,
+            approved: false,
+            query: None,
+            evidence_count: 0,
+            degraded: false,
+            note: None,
+        }
+    }
+
+    #[must_use]
+    pub fn approval_required(query: impl Into<String>, note: impl Into<String>) -> Self {
+        Self {
+            status: WebExecutionStatus::ApprovalRequired,
+            approved: false,
+            query: Some(query.into()),
+            evidence_count: 0,
+            degraded: true,
+            note: Some(note.into()),
+        }
+    }
+
+    #[must_use]
+    pub fn skipped(note: impl Into<String>) -> Self {
+        Self {
+            status: WebExecutionStatus::Skipped,
+            approved: false,
+            query: None,
+            evidence_count: 0,
+            degraded: false,
+            note: Some(note.into()),
+        }
+    }
+
+    #[must_use]
+    pub fn succeeded(
+        query: impl Into<String>,
+        evidence_count: usize,
+        note: Option<String>,
+    ) -> Self {
+        Self {
+            status: WebExecutionStatus::Succeeded,
+            approved: true,
+            query: Some(query.into()),
+            evidence_count: u32::try_from(evidence_count).unwrap_or(u32::MAX),
+            degraded: false,
+            note,
+        }
+    }
+
+    #[must_use]
+    pub fn no_evidence(query: impl Into<String>, note: impl Into<String>) -> Self {
+        Self {
+            status: WebExecutionStatus::NoEvidence,
+            approved: true,
+            query: Some(query.into()),
+            evidence_count: 0,
+            degraded: true,
+            note: Some(note.into()),
+        }
+    }
+
+    #[must_use]
+    pub fn failed(query: impl Into<String>, note: impl Into<String>) -> Self {
+        Self {
+            status: WebExecutionStatus::Failed,
+            approved: true,
+            query: Some(query.into()),
+            evidence_count: 0,
+            degraded: true,
+            note: Some(note.into()),
+        }
+    }
+
+    #[must_use]
+    pub fn to_json_value(&self) -> JsonValue {
+        JsonValue::Object(BTreeMap::from([
+            (
+                "status".to_string(),
+                JsonValue::String(self.status.as_str().to_string()),
+            ),
+            ("approved".to_string(), JsonValue::Bool(self.approved)),
+            (
+                "query".to_string(),
+                self.query
+                    .clone()
+                    .map(JsonValue::String)
+                    .unwrap_or(JsonValue::Null),
+            ),
+            (
+                "evidenceCount".to_string(),
+                JsonValue::Number(i64::from(self.evidence_count)),
+            ),
+            ("degraded".to_string(), JsonValue::Bool(self.degraded)),
+            (
+                "note".to_string(),
+                self.note
+                    .clone()
+                    .map(JsonValue::String)
+                    .unwrap_or(JsonValue::Null),
+            ),
+        ]))
+    }
+}
+
 impl EvidenceRecord {
     #[must_use]
     pub fn from_retrieval_hit(hit: &RetrievalHit) -> Self {
+        let rooted_locator = if hit.source_root.is_empty() {
+            hit.path.clone()
+        } else {
+            format!("{}::{}", hit.source_root, hit.path)
+        };
         Self {
             kind: EvidenceKind::Local,
             id: hit.chunk_id.clone(),
-            title: hit.path.clone(),
-            locator: hit.path.clone(),
+            title: rooted_locator.clone(),
+            locator: rooted_locator,
             snippet: hit.preview.clone(),
             score: Some(hit.score),
             metadata: BTreeMap::from([
                 (
                     "documentId".to_string(),
                     JsonValue::String(hit.document_id.clone()),
+                ),
+                (
+                    "sourceRoot".to_string(),
+                    JsonValue::String(hit.source_root.clone()),
                 ),
                 ("reason".to_string(), JsonValue::String(hit.reason.clone())),
             ]),
@@ -383,7 +534,7 @@ mod tests {
         local_evidence_trace_event, normalize_local_evidence, summarize_local_evidence,
         web_evidence_trace_event, EscalationHeuristicInput, EscalationReason, EvidenceKind,
         EvidenceRecord, LocalEvidenceSummary, WebAccessDecision, WebAccessMode, WebEvidenceInput,
-        WebPolicy,
+        WebExecutionOutcome, WebExecutionStatus, WebPolicy,
     };
     use crate::config::{RuntimeWebResearchConfig, RuntimeWebResearchMode};
     use crate::corpus::{CorpusBackend, RetrievalHit, RetrievalResult};
@@ -407,6 +558,7 @@ mod tests {
         RetrievalHit {
             chunk_id: format!("chunk-{document_id}"),
             document_id: document_id.to_string(),
+            source_root: "docs".to_string(),
             path: path.to_string(),
             score,
             reason: "keyword match".to_string(),
@@ -463,7 +615,7 @@ mod tests {
         assert_eq!(
             format_citations(&[local[0].clone(), web.clone()]),
             vec![
-                "[local] docs/policy.md".to_string(),
+                "[local] docs::docs/policy.md".to_string(),
                 "[web] https://example.test/release".to_string()
             ]
         );
@@ -501,6 +653,38 @@ mod tests {
         assert_eq!(
             web_event.data.get("evidenceKind"),
             Some(&JsonValue::String("web".to_string()))
+        );
+    }
+
+    #[test]
+    fn web_execution_outcomes_capture_audit_state() {
+        let approval = WebExecutionOutcome::approval_required(
+            "latest release",
+            "approval required before using the web",
+        );
+        let success = WebExecutionOutcome::succeeded(
+            "latest release",
+            2,
+            Some("attached bounded external evidence".to_string()),
+        );
+        let failed = WebExecutionOutcome::failed(
+            "latest release",
+            "approved web collection failed before model execution",
+        );
+
+        assert_eq!(approval.status, WebExecutionStatus::ApprovalRequired);
+        assert!(approval.degraded);
+        assert_eq!(success.status, WebExecutionStatus::Succeeded);
+        assert_eq!(success.evidence_count, 2);
+        assert!(!success.degraded);
+        assert_eq!(failed.status, WebExecutionStatus::Failed);
+        assert!(failed.degraded);
+        assert_eq!(
+            success
+                .to_json_value()
+                .as_object()
+                .and_then(|o| o.get("status")),
+            Some(&JsonValue::String("succeeded".to_string()))
         );
     }
 

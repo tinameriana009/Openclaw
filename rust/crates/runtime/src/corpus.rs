@@ -10,6 +10,9 @@ use crate::json::{JsonError, JsonValue};
 
 const DEFAULT_MAX_FILE_BYTES: u64 = 512 * 1024;
 const DEFAULT_CHUNK_BYTES: usize = 2_048;
+pub(crate) const CORPUS_ARTIFACT_KIND: &str = "claw.corpus-manifest";
+pub(crate) const CORPUS_SCHEMA_VERSION: u32 = 1;
+pub(crate) const CORPUS_COMPAT_VERSION: &str = "0.1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum CorpusKind {
@@ -45,6 +48,9 @@ pub struct CorpusRootSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CorpusManifest {
+    pub artifact_kind: String,
+    pub schema_version: u32,
+    pub compat_version: String,
     pub corpus_id: String,
     pub roots: Vec<String>,
     pub kind: CorpusKind,
@@ -60,6 +66,7 @@ pub struct CorpusManifest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CorpusDocument {
     pub document_id: String,
+    pub source_root: String,
     pub path: String,
     pub media_type: String,
     pub language: Option<String>,
@@ -97,6 +104,7 @@ pub struct CorpusInspectResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CorpusDocumentSummary {
     pub document_id: String,
+    pub source_root: String,
     pub path: String,
     pub language: Option<String>,
     pub headings: Vec<String>,
@@ -109,6 +117,7 @@ pub struct CorpusSlice {
     pub corpus_id: String,
     pub chunk_id: String,
     pub document_id: String,
+    pub source_root: String,
     pub path: String,
     pub ordinal: u32,
     pub start_offset: u32,
@@ -132,11 +141,20 @@ pub struct RetrievalResult {
 pub struct RetrievalHit {
     pub chunk_id: String,
     pub document_id: String,
+    pub source_root: String,
     pub path: String,
     pub score: f64,
     pub reason: String,
     pub matched_terms: Vec<String>,
     pub preview: String,
+}
+
+#[derive(Debug, Clone)]
+struct ScoredChunkHit {
+    hit: RetrievalHit,
+    ordinal: u32,
+    matched_token_count: usize,
+    full_coverage: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -293,6 +311,18 @@ impl CorpusManifest {
     pub fn to_json_value(&self) -> JsonValue {
         JsonValue::Object(BTreeMap::from([
             (
+                "artifactKind".to_string(),
+                JsonValue::String(self.artifact_kind.clone()),
+            ),
+            (
+                "schemaVersion".to_string(),
+                JsonValue::Number(i64::from(self.schema_version)),
+            ),
+            (
+                "compatVersion".to_string(),
+                JsonValue::String(self.compat_version.clone()),
+            ),
+            (
                 "corpusId".to_string(),
                 JsonValue::String(self.corpus_id.clone()),
             ),
@@ -347,6 +377,13 @@ impl CorpusManifest {
             .as_object()
             .ok_or_else(|| CorpusError::Format("corpus manifest must be an object".to_string()))?;
         Ok(Self {
+            artifact_kind: optional_string(object, "artifactKind")?
+                .unwrap_or(CORPUS_ARTIFACT_KIND)
+                .to_string(),
+            schema_version: optional_u32(object, "schemaVersion")?.unwrap_or(0),
+            compat_version: optional_string(object, "compatVersion")?
+                .unwrap_or("0.0")
+                .to_string(),
             corpus_id: expect_string(object, "corpusId")?.to_string(),
             roots: expect_string_array(object, "roots")?,
             kind: CorpusKind::from_str(expect_string(object, "kind")?)?,
@@ -434,6 +471,10 @@ impl CorpusDocument {
                 "documentId".to_string(),
                 JsonValue::String(self.document_id.clone()),
             ),
+            (
+                "sourceRoot".to_string(),
+                JsonValue::String(self.source_root.clone()),
+            ),
             ("path".to_string(), JsonValue::String(self.path.clone())),
             (
                 "mediaType".to_string(),
@@ -479,6 +520,9 @@ impl CorpusDocument {
             .ok_or_else(|| CorpusError::Format("corpus document must be an object".to_string()))?;
         Ok(Self {
             document_id: expect_string(object, "documentId")?.to_string(),
+            source_root: optional_string(object, "sourceRoot")?
+                .unwrap_or("")
+                .to_string(),
             path: expect_string(object, "path")?.to_string(),
             media_type: expect_string(object, "mediaType")?.to_string(),
             language: optional_string(object, "language")?.map(ToOwned::to_owned),
@@ -578,6 +622,7 @@ pub fn attach_corpus(
             .map(|doc: &CorpusDocument| doc.chunks.len())
             .sum();
         collect_documents(
+            root,
             &canonical_root,
             &canonical_root,
             options.chunk_bytes.max(256),
@@ -601,6 +646,9 @@ pub fn attach_corpus(
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| stable_corpus_id(roots));
     let manifest = CorpusManifest {
+        artifact_kind: CORPUS_ARTIFACT_KIND.to_string(),
+        schema_version: CORPUS_SCHEMA_VERSION,
+        compat_version: CORPUS_COMPAT_VERSION.to_string(),
         corpus_id: corpus_id.clone(),
         roots: roots
             .iter()
@@ -664,6 +712,7 @@ pub fn inspect_corpus(cwd: &Path, corpus_id: &str) -> Result<CorpusInspectResult
             .map(|doc| CorpusDocumentSummary {
                 chunk_count: u32::try_from(doc.chunks.len()).unwrap_or(u32::MAX),
                 document_id: doc.document_id,
+                source_root: doc.source_root,
                 path: doc.path,
                 language: doc.language,
                 headings: doc.headings,
@@ -694,6 +743,7 @@ pub fn slice_corpus(
                     corpus_id: manifest.corpus_id,
                     chunk_id: chunk.chunk_id.clone(),
                     document_id: doc.document_id.clone(),
+                    source_root: doc.source_root.clone(),
                     path: doc.path.clone(),
                     ordinal: chunk.ordinal,
                     start_offset: chunk.start_offset,
@@ -749,10 +799,11 @@ pub fn search_corpus_manifest(
     }
 
     let normalized_query = normalize_for_match(query);
+    let compact_query = normalized_query.replace(' ', "");
     let filename_query = filename_like_query(&tokens);
     let token_stats = build_token_document_stats(manifest, path_filter, &tokens);
     let total_docs = token_stats.total_docs.max(1);
-    let mut hits = Vec::new();
+    let mut scored_hits = Vec::new();
     let mut total_candidate_chunks = 0_u32;
     let mut total_matching_chunks = 0_u32;
     for doc in &manifest.documents {
@@ -771,6 +822,7 @@ pub fn search_corpus_manifest(
             .unwrap_or_default()
             .to_ascii_lowercase();
         let normalized_basename = normalize_for_match(&basename_lower).replace(' ', "");
+        let mut document_hits = Vec::new();
         for chunk in &doc.chunks {
             total_candidate_chunks = total_candidate_chunks.saturating_add(1);
             let body = chunk
@@ -781,6 +833,7 @@ pub fn search_corpus_manifest(
                 .to_ascii_lowercase();
             let preview_lower = chunk.text_preview.to_ascii_lowercase();
             let normalized_body = normalize_for_match(&body);
+            let compact_body = normalized_body.replace(' ', "");
             let mut score = 0.0_f64;
             let mut reasons = Vec::new();
             let mut matched_terms = Vec::new();
@@ -792,7 +845,22 @@ pub fn search_corpus_manifest(
                 let preview_hits = count_occurrences(&preview_lower, token);
                 let path_hit = path_lower.contains(token);
                 let heading_hit = heading_text.contains(token);
-                if body_hits > 0 || preview_hits > 0 || path_hit || heading_hit {
+                let normalized_token = normalize_for_match(token).replace(' ', "");
+                let compact_body_hit = normalized_token.len() >= 4
+                    && !normalized_token.is_empty()
+                    && compact_body.contains(&normalized_token)
+                    && body_hits == 0;
+                let compact_path_hit = normalized_token.len() >= 4
+                    && !normalized_token.is_empty()
+                    && normalized_path.replace(' ', "").contains(&normalized_token)
+                    && !path_hit;
+                if body_hits > 0
+                    || preview_hits > 0
+                    || path_hit
+                    || heading_hit
+                    || compact_body_hit
+                    || compact_path_hit
+                {
                     matched_tokens += 1;
                     matched_terms.push(token.clone());
                 }
@@ -814,6 +882,14 @@ pub fn search_corpus_manifest(
                 if heading_hit {
                     score += 1.5 + idf * 1.5;
                     reasons.push(format!("heading:{token}@{idf:.2}"));
+                }
+                if compact_body_hit {
+                    score += 1.25 + idf * 0.9;
+                    reasons.push(format!("identifier-body:{token}@{idf:.2}"));
+                }
+                if compact_path_hit {
+                    score += 1.5 + idf * 1.0;
+                    reasons.push(format!("identifier-path:{token}@{idf:.2}"));
                 }
                 if let Some(found) =
                     normalized_body[cursor.min(normalized_body.len())..].find(token)
@@ -850,6 +926,20 @@ pub fn search_corpus_manifest(
                     score += 5.0;
                     reasons.push("phrase:path".to_string());
                 }
+                if compact_query.len() >= 4 && !compact_query.is_empty() {
+                    if compact_body.contains(&compact_query)
+                        && !normalized_body.contains(&normalized_query)
+                    {
+                        score += 4.0;
+                        reasons.push("phrase:identifier-body".to_string());
+                    }
+                    if normalized_path.replace(' ', "").contains(&compact_query)
+                        && !normalized_path.contains(&normalized_query)
+                    {
+                        score += 4.0;
+                        reasons.push("phrase:identifier-path".to_string());
+                    }
+                }
             }
             if let Some(filename_query) = filename_query.as_deref() {
                 if basename_lower.contains(filename_query)
@@ -869,18 +959,30 @@ pub fn search_corpus_manifest(
                 }
             }
             total_matching_chunks = total_matching_chunks.saturating_add(1);
-            hits.push(RetrievalHit {
-                chunk_id: chunk.chunk_id.clone(),
-                document_id: doc.document_id.clone(),
-                path: doc.path.clone(),
-                score,
-                reason: reasons.join(", "),
-                matched_terms,
-                preview: chunk.text_preview.clone(),
+            document_hits.push(ScoredChunkHit {
+                hit: RetrievalHit {
+                    chunk_id: chunk.chunk_id.clone(),
+                    document_id: doc.document_id.clone(),
+                    source_root: doc.source_root.clone(),
+                    path: doc.path.clone(),
+                    score,
+                    reason: reasons.join(", "),
+                    matched_terms,
+                    preview: chunk.text_preview.clone(),
+                },
+                ordinal: chunk.ordinal,
+                matched_token_count: matched_tokens,
+                full_coverage: matched_tokens == tokens.len(),
             });
         }
+        expand_neighbor_hits(doc, &document_hits, &mut scored_hits);
+        scored_hits.extend(document_hits);
     }
 
+    let mut hits = scored_hits
+        .into_iter()
+        .map(|entry| entry.hit)
+        .collect::<Vec<_>>();
     hits.sort_by(|left, right| {
         right
             .score
@@ -901,6 +1003,87 @@ pub fn search_corpus_manifest(
         total_candidate_chunks,
         total_matching_chunks,
         hits,
+    }
+}
+
+fn expand_neighbor_hits(
+    doc: &CorpusDocument,
+    base_hits: &[ScoredChunkHit],
+    scored_hits: &mut Vec<ScoredChunkHit>,
+) {
+    if base_hits.is_empty() {
+        return;
+    }
+
+    let mut strongest_by_ordinal = BTreeMap::<u32, &ScoredChunkHit>::new();
+    for hit in base_hits {
+        strongest_by_ordinal
+            .entry(hit.ordinal)
+            .and_modify(|current| {
+                if hit.hit.score > current.hit.score {
+                    *current = hit;
+                }
+            })
+            .or_insert(hit);
+    }
+
+    let existing_chunk_ids = base_hits
+        .iter()
+        .map(|hit| hit.hit.chunk_id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut expanded_chunk_ids = std::collections::BTreeSet::new();
+
+    for anchor in base_hits {
+        if !(anchor.full_coverage || anchor.matched_token_count >= 2 || anchor.hit.score >= 12.0) {
+            continue;
+        }
+        for neighbor_ordinal in [
+            anchor.ordinal.saturating_sub(2),
+            anchor.ordinal.saturating_sub(1),
+            anchor.ordinal.saturating_add(1),
+            anchor.ordinal.saturating_add(2),
+        ] {
+            if neighbor_ordinal == anchor.ordinal
+                || strongest_by_ordinal.contains_key(&neighbor_ordinal)
+            {
+                continue;
+            }
+            let Some(chunk) = doc
+                .chunks
+                .iter()
+                .find(|chunk| chunk.ordinal == neighbor_ordinal)
+            else {
+                continue;
+            };
+            if existing_chunk_ids.contains(&chunk.chunk_id)
+                || !expanded_chunk_ids.insert(chunk.chunk_id.clone())
+            {
+                continue;
+            }
+            let boost = if anchor.full_coverage { 0.72 } else { 0.55 };
+            let score = anchor.hit.score * boost + 1.5;
+            let mut matched_terms = anchor.hit.matched_terms.clone();
+            matched_terms.sort();
+            matched_terms.dedup();
+            scored_hits.push(ScoredChunkHit {
+                hit: RetrievalHit {
+                    chunk_id: chunk.chunk_id.clone(),
+                    document_id: doc.document_id.clone(),
+                    source_root: doc.source_root.clone(),
+                    path: doc.path.clone(),
+                    score,
+                    reason: format!(
+                        "neighbor-context:{}::{}#{} from {}",
+                        doc.source_root, doc.path, neighbor_ordinal, anchor.hit.chunk_id
+                    ),
+                    matched_terms,
+                    preview: chunk.text_preview.clone(),
+                },
+                ordinal: chunk.ordinal,
+                matched_token_count: anchor.matched_token_count,
+                full_coverage: false,
+            });
+        }
     }
 }
 
@@ -989,6 +1172,7 @@ fn stable_corpus_id(roots: &[PathBuf]) -> String {
 }
 
 fn collect_documents(
+    source_root: &Path,
     root: &Path,
     current: &Path,
     chunk_bytes: usize,
@@ -1008,6 +1192,7 @@ fn collect_documents(
                 continue;
             }
             collect_documents(
+                source_root,
                 root,
                 &path,
                 chunk_bytes,
@@ -1056,7 +1241,8 @@ fn collect_documents(
             .unwrap_or(&path)
             .display()
             .to_string();
-        let document_id = CorpusManifest::stable_document_id(&relative);
+        let document_identity = format!("{}::{}", source_root.display(), relative);
+        let document_id = CorpusManifest::stable_document_id(&document_identity);
         let headings = collect_headings(&text);
         let chunks = chunk_document(&document_id, &text, chunk_bytes, headings.first().cloned());
         if chunks.is_empty() {
@@ -1065,6 +1251,7 @@ fn collect_documents(
         *estimated_bytes = estimated_bytes.saturating_add(metadata.len());
         documents.push(CorpusDocument {
             document_id,
+            source_root: source_root.display().to_string(),
             path: relative,
             media_type: media_type_for_path(&path),
             language: language_for_path(&path),
@@ -1249,10 +1436,76 @@ fn infer_corpus_kind(documents: &[CorpusDocument]) -> CorpusKind {
 }
 
 fn query_tokens(query: &str) -> Vec<String> {
-    query
+    let mut tokens = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for raw in query
         .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-' && ch != '.')
         .filter(|token| !token.is_empty())
-        .map(|token| token.to_ascii_lowercase())
+    {
+        for token in expand_query_token(raw) {
+            if seen.insert(token.clone()) {
+                tokens.push(token);
+            }
+        }
+    }
+    tokens
+}
+
+fn expand_query_token(token: &str) -> Vec<String> {
+    let lowered = token.to_ascii_lowercase();
+    let mut expanded = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+
+    if !lowered.is_empty() && seen.insert(lowered.clone()) {
+        expanded.push(lowered.clone());
+    }
+
+    let normalized = normalize_for_match(token);
+    if !normalized.is_empty() && seen.insert(normalized.clone()) {
+        expanded.push(normalized.clone());
+    }
+
+    let identifier_parts = split_identifier_parts(token);
+    if identifier_parts.len() > 1 {
+        for part in &identifier_parts {
+            if seen.insert(part.clone()) {
+                expanded.push(part.clone());
+            }
+        }
+        let compact = identifier_parts.join("");
+        if !compact.is_empty() && seen.insert(compact.clone()) {
+            expanded.push(compact);
+        }
+    }
+
+    expanded
+}
+
+fn split_identifier_parts(token: &str) -> Vec<String> {
+    let mut normalized = String::new();
+    let mut prev_is_lower_or_digit = false;
+    for ch in token.chars() {
+        if matches!(ch, '_' | '-' | '.' | '/' | '\\') {
+            normalized.push(' ');
+            prev_is_lower_or_digit = false;
+            continue;
+        }
+        if ch.is_ascii_uppercase() && prev_is_lower_or_digit {
+            normalized.push(' ');
+        }
+        let lowered = ch.to_ascii_lowercase();
+        if lowered.is_ascii_alphanumeric() {
+            normalized.push(lowered);
+            prev_is_lower_or_digit = lowered.is_ascii_lowercase() || lowered.is_ascii_digit();
+        } else {
+            normalized.push(' ');
+            prev_is_lower_or_digit = false;
+        }
+    }
+    normalized
+        .split_whitespace()
+        .filter(|part| !part.is_empty())
+        .map(ToOwned::to_owned)
         .collect()
 }
 
@@ -1449,6 +1702,9 @@ mod tests {
         let document_id = CorpusManifest::stable_document_id("docs/guide.md");
         let chunk_id = CorpusManifest::stable_chunk_id(&document_id, 0);
         CorpusManifest {
+            artifact_kind: CORPUS_ARTIFACT_KIND.to_string(),
+            schema_version: CORPUS_SCHEMA_VERSION,
+            compat_version: CORPUS_COMPAT_VERSION.to_string(),
             corpus_id: "corpus-main".to_string(),
             roots: vec![".".to_string(), "docs".to_string()],
             kind: CorpusKind::Mixed,
@@ -1464,6 +1720,7 @@ mod tests {
             skip_summary: CorpusSkipSummary::empty(),
             documents: vec![CorpusDocument {
                 document_id: document_id.clone(),
+                source_root: "docs".to_string(),
                 path: "docs/guide.md".to_string(),
                 media_type: "text/markdown".to_string(),
                 language: Some("markdown".to_string()),
@@ -1723,5 +1980,153 @@ mod tests {
         assert_ne!(result.hits[0].document_id, result.hits[1].document_id);
 
         let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_matches_identifier_style_queries_against_camel_and_snake_case() {
+        let cwd = temp_dir("workspace-identifier-ranking");
+        let root = cwd.join("docs");
+        fs::create_dir_all(&root).expect("mkdir");
+        fs::write(
+            root.join("callbacks.md"),
+            "# Auth\nThe AuthCallback handler finalizes login and records auth_callback metrics.\n",
+        )
+        .expect("write callbacks");
+        fs::write(
+            root.join("other.md"),
+            "# Notes\nAuthentication notes without the exact identifier form.\n",
+        )
+        .expect("write other");
+
+        let manifest = attach_corpus(&cwd, &[root.clone()], CorpusAttachOptions::default())
+            .expect("attach corpus");
+        let result =
+            search_corpus(&cwd, &manifest.corpus_id, "auth callback", 5, None).expect("search");
+
+        assert_eq!(result.hits[0].path, "callbacks.md");
+        assert!(result.hits[0]
+            .matched_terms
+            .iter()
+            .any(|term| term == "auth" || term == "callback"));
+        assert!(
+            result.hits[0].reason.contains("phrase:")
+                || result.hits[0].reason.contains("identifier-body:")
+                || result.hits[0].reason.contains("content:auth")
+        );
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_expands_neighbor_chunks_for_strong_matches() {
+        let cwd = temp_dir("workspace-neighbor-expansion");
+        let root = cwd.join("docs");
+        fs::create_dir_all(&root).expect("mkdir");
+        let bridge = "bridge context ".repeat(18);
+        fs::write(
+            root.join("guide.md"),
+            format!(
+                "# Guide\n\nalpha beta retrieval quality\n\n{bridge}\n\nneighbor chunk context carries implementation details\n"
+            ),
+        )
+        .expect("write guide");
+
+        let manifest = attach_corpus(
+            &cwd,
+            &[root.clone()],
+            CorpusAttachOptions {
+                chunk_bytes: 192,
+                ..CorpusAttachOptions::default()
+            },
+        )
+        .expect("attach corpus");
+        let result = search_corpus(&cwd, &manifest.corpus_id, "alpha beta retrieval", 8, None)
+            .expect("search");
+
+        assert!(result
+            .hits
+            .iter()
+            .any(|hit| hit.reason.contains("neighbor-context:")));
+        assert!(result
+            .hits
+            .iter()
+            .any(|hit| hit.preview.contains("implementation details")));
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn multi_root_attach_keeps_same_named_files_distinct_in_search_and_inspection() {
+        let cwd = temp_dir("workspace-multi-root-disambiguation");
+        let docs_root = cwd.join("docs");
+        let guides_root = cwd.join("guides");
+        fs::create_dir_all(&docs_root).expect("mkdir docs");
+        fs::create_dir_all(&guides_root).expect("mkdir guides");
+        fs::write(
+            docs_root.join("guide.md"),
+            "# Docs Guide\nruntime retrieval and corpus notes\n",
+        )
+        .expect("write docs guide");
+        fs::write(
+            guides_root.join("guide.md"),
+            "# Guides Guide\noperator playbook and deployment runbook\n",
+        )
+        .expect("write guides guide");
+
+        let manifest = attach_corpus(
+            &cwd,
+            &[docs_root.clone(), guides_root.clone()],
+            CorpusAttachOptions::default(),
+        )
+        .expect("attach corpus");
+
+        let inspect = inspect_corpus(&cwd, &manifest.corpus_id).expect("inspect");
+        let guide_docs = inspect
+            .documents
+            .iter()
+            .filter(|doc| doc.path == "guide.md")
+            .collect::<Vec<_>>();
+        assert_eq!(guide_docs.len(), 2);
+        assert_ne!(guide_docs[0].source_root, guide_docs[1].source_root);
+        assert_ne!(guide_docs[0].document_id, guide_docs[1].document_id);
+
+        let docs_result = search_corpus(&cwd, &manifest.corpus_id, "runtime retrieval", 5, None)
+            .expect("search docs root");
+        assert_eq!(docs_result.hits[0].path, "guide.md");
+        assert!(docs_result.hits[0].source_root.ends_with("docs"));
+
+        let guides_result =
+            search_corpus(&cwd, &manifest.corpus_id, "deployment runbook", 5, None)
+                .expect("search guides root");
+        assert_eq!(guides_result.hits[0].path, "guide.md");
+        assert!(guides_result.hits[0].source_root.ends_with("guides"));
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+
+    #[test]
+    fn corpus_reader_accepts_legacy_unversioned_manifest() {
+        let legacy = JsonValue::parse(
+            r#"{
+          "corpusId":"legacy",
+          "roots":["./docs"],
+          "kind":"docs",
+          "backend":"lexical",
+          "documentCount":0,
+          "chunkCount":0,
+          "estimatedBytes":0,
+          "documents":[]
+        }"#,
+        )
+        .expect("legacy json");
+        let parsed = CorpusManifest::from_json_value(&legacy).expect("parse legacy manifest");
+        assert_eq!(parsed.schema_version, 0);
+        assert_eq!(parsed.artifact_kind, CORPUS_ARTIFACT_KIND);
+        assert_eq!(parsed.compat_version, "0.0");
     }
 }
