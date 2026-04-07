@@ -5,19 +5,20 @@ Move the repository from **disciplined alpha** toward a more genuinely productio
 
 ## Immediate Priorities
 
-### 1. Push and verify latest local work
-- Confirm which local commits are not yet pushed to `tinameriana009/Openclaw`
-- Push the latest stable local `main`
-- Re-run final verification on the pushed state
-
-### 2. Reconfirm clean working tree
-- Ensure the repo is clean after all salvage/integration work
-- Remove or ignore local-only artifacts such as `.port_sessions/`
-- Make sure no accidental temp files remain in tracked paths
-
-### 3. Preserve current status in docs
-- Keep `README.md`, `rust/README.md`, `FINAL_STATUS.md`, and `NEXT_ACTIONS.md` aligned
+### 1. Preserve current status in docs
+- Keep `README.md`, `rust/README.md`, `FINAL_STATUS.md`, `RELEASE_SUMMARY.md`, and `NEXT_ACTIONS.md` aligned
+- Keep the newer planning docs (`PRODUCTION_READY_PRD.md`, `PRODUCTION_READY_CHECKLIST.md`, `READINESS_SCORECARD.md`, `IMPLEMENTATION_PLAN.md`) in sync with real behavior
 - Avoid docs drift as new runtime work lands
+
+### 2. Protect clean verification posture
+- Keep the repo clean after salvage/integration work
+- Remove or ignore local-only artifacts such as `.port_sessions/`
+- Treat `rust/` as the real Rust workspace root for verification
+- Reconfirm `cargo build --workspace --locked` and `cargo test --workspace --locked` whenever meaningful runtime work lands
+
+### 3. Preserve fork-specific changelog clarity
+- Maintain `FORK_CHANGELOG.md` as a concise explanation of what changed versus the earlier parity baseline
+- Keep the README current-status block and fork-delta framing aligned
 
 ## Technical Priorities
 

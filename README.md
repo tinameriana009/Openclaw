@@ -49,6 +49,7 @@ In short: this repo is no longer just a parity snapshot. It is evolving into a m
 
 - **Maturity:** strong alpha / early pre-production candidate
 - **Best current use:** grounded local technical tasks over repos/docs/corpora
+- **Verification status:** `cargo build --workspace --locked` and `cargo test --workspace --locked` pass from the real Rust workspace root at [`rust/`](rust/), using the pinned toolchain
 - **Not yet:** a fully production-ready universal agent platform
 
 **Quick status block**
@@ -62,6 +63,11 @@ If you want the detailed snapshot and the most honest summary of strengths/limit
 - [`FINAL_STATUS.md`](FINAL_STATUS.md)
 - [`NEXT_ACTIONS.md`](NEXT_ACTIONS.md)
 - [`RELEASE_SUMMARY.md`](RELEASE_SUMMARY.md)
+- [`PRODUCTION_READY_PRD.md`](PRODUCTION_READY_PRD.md)
+- [`PRODUCTION_READY_CHECKLIST.md`](PRODUCTION_READY_CHECKLIST.md)
+- [`READINESS_SCORECARD.md`](READINESS_SCORECARD.md)
+- [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md)
+- [`FORK_CHANGELOG.md`](FORK_CHANGELOG.md)
 
 ## Current Focus
 

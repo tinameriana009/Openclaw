@@ -18,28 +18,36 @@ It is no longer just a parity snapshot. The fork now includes substantial additi
 - stronger recursive stop semantics (`NoNewContext`, `Converged`)
 - better child failure handling
 - partial modularization of the recursive runtime under `rust/crates/runtime/src/rlm/`
+- stronger stop-event metadata and trace consistency
 
 ### Child/provider execution
 - cleaner shared provider child backend/factory direction
 - less CLI-owned duplication
+- shared provider extractive child executor builder moved into the `api` crate
 - better fallback messaging and backend availability reporting
 
 ### Local corpus RAG
 - richer lexical ranking
 - better retrieval explainability
 - better slice diversity across documents
+- root-aware retrieval provenance
+- per-root disambiguation for same-named files
 - skip telemetry / per-root reporting improvements
 
 ### Web-aware behavior
+- explicit web execution completion events in traces
+- richer web counters/telemetry
 - child execution path now handles approved web evidence more honestly
 - degraded web collection is surfaced as explicit notes instead of silent failure or overclaiming
+- final-answer web execution summaries are more honest
 - provenance handling is stronger
 
 ### Operator / product surface
 - stronger root and Rust README docs
 - bootstrap / quickstart guidance
 - release/trust docs (`CHANGELOG`, `RELEASE`, `ARTIFACTS`, `PRIVACY`)
-- domain workflow docs, prompt templates, and demo kits
+- production-readiness planning docs, checklist, scorecard, and implementation plan
+- domain workflow docs, prompt templates, demo kits, and lightweight readiness validators
 
 ### Showcase workflows
 - Blender scene cleanup demo kit
@@ -60,6 +68,11 @@ Main reasons:
 Use language like:
 
 > Rust-first agent harness with real local corpus RAG, improving recursive runtime behavior, stronger traceability, and early hybrid local+web support. Suitable for serious local technical experimentation and grounded custom-task workflows, but not yet a fully production-ready universal agent platform.
+
+## Verified state
+Using the pinned Rust toolchain from the real workspace root at `rust/`, the current repository state verifies with:
+- `cargo build --workspace --locked` ✅
+- `cargo test --workspace --locked` ✅
 
 ## Suggested next focus
 1. finalize release-candidate cleanliness and locked verification flow

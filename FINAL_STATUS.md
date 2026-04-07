@@ -3,7 +3,7 @@
 ## Repository
 - Repository: `tinameriana009/Openclaw`
 - Working focus: Rust harness under `rust/`
-- Current maturity: **disciplined alpha / serious advanced prototype**
+- Current maturity: **strong alpha / early pre-production candidate**
 
 ## High-Level Summary
 This repository is no longer just a parity snapshot. It now includes substantial fork-specific work around:
@@ -88,7 +88,7 @@ Yes, with an operator who understands how to drive it.
 No.
 
 ### Is it release-candidate clean?
-Not yet. The codebase can be verified locally, but release discipline still depends on a clean tree, an unambiguous canonical remote, and final verification on the exact commit that will be pushed/tagged.
+Not yet. The Rust workspace currently verifies cleanly from `rust/` with the pinned toolchain (`cargo build --workspace --locked` and `cargo test --workspace --locked` pass), but release discipline still depends on a clean tree, an unambiguous canonical remote, and final verification on the exact commit that will be pushed/tagged.
 
 ## Maturity by Area
 - Harness core: **strong alpha**
