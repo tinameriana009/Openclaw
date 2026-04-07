@@ -157,6 +157,13 @@ struct ScoredChunkHit {
     full_coverage: bool,
 }
 
+#[derive(Debug, Clone, Default)]
+struct QueryFeatures {
+    tokens: Vec<String>,
+    raw_terms: Vec<String>,
+    compact_terms: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CorpusAttachOptions {
     pub corpus_id: Option<String>,
@@ -784,7 +791,8 @@ pub fn search_corpus_manifest(
     top_k: usize,
     path_filter: Option<&str>,
 ) -> RetrievalResult {
-    let tokens = query_tokens(query);
+    let query_features = query_features(query);
+    let tokens = query_features.tokens.clone();
     if tokens.is_empty() {
         return RetrievalResult {
             corpus_id: manifest.corpus_id.clone(),
@@ -813,8 +821,10 @@ pub fn search_corpus_manifest(
             }
         }
         let path_lower = doc.path.to_ascii_lowercase();
+        let source_root_lower = doc.source_root.to_ascii_lowercase();
         let heading_text = doc.headings.join(" ").to_ascii_lowercase();
         let normalized_path = normalize_for_match(&doc.path);
+        let normalized_source_root = normalize_for_match(&doc.source_root);
         let normalized_headings = normalize_for_match(&doc.headings.join(" "));
         let basename_lower = Path::new(&doc.path)
             .file_name()
@@ -844,6 +854,7 @@ pub fn search_corpus_manifest(
                 let body_hits = count_occurrences(&body, token);
                 let preview_hits = count_occurrences(&preview_lower, token);
                 let path_hit = path_lower.contains(token);
+                let root_hit = source_root_lower.contains(token);
                 let heading_hit = heading_text.contains(token);
                 let normalized_token = normalize_for_match(token).replace(' ', "");
                 let compact_body_hit = normalized_token.len() >= 4
@@ -854,12 +865,20 @@ pub fn search_corpus_manifest(
                     && !normalized_token.is_empty()
                     && normalized_path.replace(' ', "").contains(&normalized_token)
                     && !path_hit;
+                let compact_root_hit = normalized_token.len() >= 4
+                    && !normalized_token.is_empty()
+                    && normalized_source_root
+                        .replace(' ', "")
+                        .contains(&normalized_token)
+                    && !root_hit;
                 if body_hits > 0
                     || preview_hits > 0
                     || path_hit
+                    || root_hit
                     || heading_hit
                     || compact_body_hit
                     || compact_path_hit
+                    || compact_root_hit
                 {
                     matched_tokens += 1;
                     matched_terms.push(token.clone());
@@ -879,6 +898,10 @@ pub fn search_corpus_manifest(
                     score += 2.0 + idf * 1.5;
                     reasons.push(format!("path:{token}@{idf:.2}"));
                 }
+                if root_hit {
+                    score += 1.75 + idf * 1.25;
+                    reasons.push(format!("root:{token}@{idf:.2}"));
+                }
                 if heading_hit {
                     score += 1.5 + idf * 1.5;
                     reasons.push(format!("heading:{token}@{idf:.2}"));
@@ -890,6 +913,10 @@ pub fn search_corpus_manifest(
                 if compact_path_hit {
                     score += 1.5 + idf * 1.0;
                     reasons.push(format!("identifier-path:{token}@{idf:.2}"));
+                }
+                if compact_root_hit {
+                    score += 1.25 + idf * 0.9;
+                    reasons.push(format!("identifier-root:{token}@{idf:.2}"));
                 }
                 if let Some(found) =
                     normalized_body[cursor.min(normalized_body.len())..].find(token)
@@ -947,6 +974,48 @@ pub fn search_corpus_manifest(
                 {
                     score += 4.0;
                     reasons.push("filename-match".to_string());
+                }
+            }
+            for raw_term in &query_features.raw_terms {
+                let raw_body_hits = count_occurrences(&body, raw_term);
+                let raw_path_hit = path_lower.contains(raw_term);
+                let raw_root_hit = source_root_lower.contains(raw_term);
+                let raw_heading_hit = heading_text.contains(raw_term);
+                if raw_body_hits > 0 {
+                    score += raw_body_hits as f64 * 3.2;
+                    reasons.push(format!("symbol-body:{raw_term}x{raw_body_hits}"));
+                }
+                if raw_path_hit {
+                    score += 3.0;
+                    reasons.push(format!("symbol-path:{raw_term}"));
+                }
+                if raw_root_hit {
+                    score += 2.5;
+                    reasons.push(format!("symbol-root:{raw_term}"));
+                }
+                if raw_heading_hit {
+                    score += 2.0;
+                    reasons.push(format!("symbol-heading:{raw_term}"));
+                }
+            }
+            for compact_term in &query_features.compact_terms {
+                if compact_term.len() < 5 {
+                    continue;
+                }
+                if compact_body.contains(compact_term) && !compact_query.contains(compact_term) {
+                    score += 2.2;
+                    reasons.push(format!("symbol-compact-body:{compact_term}"));
+                }
+                if normalized_path.replace(' ', "").contains(compact_term) {
+                    score += 2.0;
+                    reasons.push(format!("symbol-compact-path:{compact_term}"));
+                }
+                if normalized_source_root
+                    .replace(' ', "")
+                    .contains(compact_term)
+                {
+                    score += 1.8;
+                    reasons.push(format!("symbol-compact-root:{compact_term}"));
                 }
             }
             if let Some(span) = minimum_term_span(&normalized_body, &tokens) {
@@ -1435,20 +1504,40 @@ fn infer_corpus_kind(documents: &[CorpusDocument]) -> CorpusKind {
     }
 }
 
-fn query_tokens(query: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut seen = std::collections::BTreeSet::new();
+fn query_features(query: &str) -> QueryFeatures {
+    let mut features = QueryFeatures::default();
+    let mut seen_tokens = std::collections::BTreeSet::new();
+    let mut seen_raw = std::collections::BTreeSet::new();
+    let mut seen_compact = std::collections::BTreeSet::new();
     for raw in query
-        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-' && ch != '.')
+        .split_whitespace()
+        .flat_map(|part| part.split("::"))
+        .flat_map(|part| {
+            part.split(|ch: char| {
+                ch.is_whitespace() || matches!(ch, ',' | ';' | '(' | ')' | '[' | ']')
+            })
+        })
         .filter(|token| !token.is_empty())
     {
+        let lowered_raw = raw.to_ascii_lowercase();
+        let has_symbol_shape = raw
+            .chars()
+            .any(|ch| matches!(ch, '_' | '-' | '.' | '/' | '\\'))
+            || raw.chars().any(|ch| ch.is_ascii_uppercase());
+        if has_symbol_shape && seen_raw.insert(lowered_raw.clone()) {
+            features.raw_terms.push(lowered_raw);
+        }
+        let compact = normalize_for_match(raw).replace(' ', "");
+        if compact.len() >= 5 && seen_compact.insert(compact.clone()) {
+            features.compact_terms.push(compact);
+        }
         for token in expand_query_token(raw) {
-            if seen.insert(token.clone()) {
-                tokens.push(token);
+            if seen_tokens.insert(token.clone()) {
+                features.tokens.push(token);
             }
         }
     }
-    tokens
+    features
 }
 
 fn expand_query_token(token: &str) -> Vec<String> {
@@ -2095,9 +2184,8 @@ mod tests {
         assert_eq!(docs_result.hits[0].path, "guide.md");
         assert!(docs_result.hits[0].source_root.ends_with("docs"));
 
-        let guides_result =
-            search_corpus(&cwd, &manifest.corpus_id, "deployment runbook", 5, None)
-                .expect("search guides root");
+        let guides_result = search_corpus(&cwd, &manifest.corpus_id, "deployment runbook", 5, None)
+            .expect("search guides root");
         assert_eq!(guides_result.hits[0].path, "guide.md");
         assert!(guides_result.hits[0].source_root.ends_with("guides"));
 
@@ -2128,5 +2216,90 @@ mod schema_tests {
         assert_eq!(parsed.schema_version, 0);
         assert_eq!(parsed.artifact_kind, CORPUS_ARTIFACT_KIND);
         assert_eq!(parsed.compat_version, "0.0");
+    }
+}
+
+#[cfg(test)]
+mod retrieval_gap_regression_tests {
+    use super::*;
+    use std::fs;
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("claw-corpus-{name}-{nanos}"));
+        if path.exists() {
+            let _ = fs::remove_dir_all(&path);
+        }
+        fs::create_dir_all(&path).expect("create temp dir");
+        path
+    }
+
+    #[test]
+    fn search_prefers_exact_symbol_forms_in_code_heavy_corpora() {
+        let cwd = temp_dir("workspace-symbol-heavy");
+        let root = cwd.join("src");
+        fs::create_dir_all(&root).expect("mkdir");
+        fs::write(
+            root.join("auth.rs"),
+            "pub fn auth_callback_handler() {}\n// wires auth_callback_handler into routing\n",
+        )
+        .expect("write exact symbol");
+        fs::write(
+            root.join("notes.rs"),
+            "pub fn auth() {}\npub fn callback() {}\n// handler notes kept separate\n",
+        )
+        .expect("write partial symbol");
+
+        let manifest = attach_corpus(&cwd, &[root.clone()], CorpusAttachOptions::default())
+            .expect("attach corpus");
+        let result = search_corpus(&cwd, &manifest.corpus_id, "auth_callback_handler", 5, None)
+            .expect("search");
+
+        assert_eq!(result.hits[0].path, "auth.rs");
+        assert!(result.hits[0]
+            .reason
+            .contains("symbol-body:auth_callback_handler"));
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_uses_source_root_terms_to_disambiguate_multi_corpus_results() {
+        let cwd = temp_dir("workspace-root-aware-ranking");
+        let docs_root = cwd.join("docs");
+        let sdk_root = cwd.join("sdk");
+        fs::create_dir_all(&docs_root).expect("mkdir docs");
+        fs::create_dir_all(&sdk_root).expect("mkdir sdk");
+        fs::write(
+            docs_root.join("guide.md"),
+            "# Guide\nauth callback walkthrough\n",
+        )
+        .expect("write docs");
+        fs::write(
+            sdk_root.join("guide.md"),
+            "# Guide\nauth callback API details\n",
+        )
+        .expect("write sdk");
+
+        let manifest = attach_corpus(
+            &cwd,
+            &[docs_root.clone(), sdk_root.clone()],
+            CorpusAttachOptions::default(),
+        )
+        .expect("attach corpus");
+        let result =
+            search_corpus(&cwd, &manifest.corpus_id, "sdk auth callback", 5, None).expect("search");
+
+        assert_eq!(result.hits[0].path, "guide.md");
+        assert!(result.hits[0].source_root.ends_with("sdk"));
+        assert!(
+            result.hits[0].reason.contains("root:sdk")
+                || result.hits[0].reason.contains("symbol-root:sdk")
+        );
+
+        let _ = fs::remove_dir_all(cwd);
     }
 }
