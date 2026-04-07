@@ -1,8 +1,9 @@
+use std::path::Path;
 use std::sync::Arc;
 
 use runtime::{
-    ChildSubqueryExecutor, ChildSubqueryOutput, ChildSubqueryRequest, EvidenceRecord,
-    RecursiveRuntimeError, WebAccessMode, WebExecutionOutcome,
+    ChildSubqueryExecutor, ChildSubqueryOutput, ChildSubqueryRequest, ConfigLoader, EvidenceRecord,
+    RecursiveRuntimeError, WebAccessMode, WebEvidenceInput, WebExecutionOutcome,
 };
 use tokio::runtime::Runtime;
 
@@ -16,6 +17,17 @@ pub type WebEvidenceCollector = Arc<
         + Send
         + Sync,
 >;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MinimalWebEvidence {
+    pub title: String,
+    pub url: String,
+    pub snippet: String,
+    pub fetched: bool,
+}
+
+pub type MinimalWebEvidenceFetcher =
+    Arc<dyn Fn(&str, usize) -> Result<Vec<MinimalWebEvidence>, String> + Send + Sync>;
 
 pub type ProviderChildAuthResolver =
     Arc<dyn Fn() -> Result<Option<AuthSource>, String> + Send + Sync>;
@@ -216,6 +228,88 @@ pub fn build_provider_extractive_child_executor(
 }
 
 #[must_use]
+pub fn resolve_provider_child_model(
+    cwd: &Path,
+    active_model: Option<&str>,
+    default_model: &str,
+) -> String {
+    let configured = ConfigLoader::default_for(cwd)
+        .load()
+        .ok()
+        .and_then(|config| {
+            config
+                .rlm()
+                .subcall_model
+                .clone()
+                .or_else(|| config.model().map(ToOwned::to_owned))
+        });
+    crate::resolve_model_alias(
+        configured
+            .as_deref()
+            .or(active_model)
+            .unwrap_or(default_model),
+    )
+    .to_string()
+}
+
+pub fn build_configured_provider_extractive_child_executor(
+    cwd: &Path,
+    session_id: &str,
+    active_model: Option<&str>,
+    default_model: &str,
+    auth_resolver: ProviderChildAuthResolver,
+    web_fetcher: MinimalWebEvidenceFetcher,
+) -> ProviderBackedChildExecutor {
+    let model = resolve_provider_child_model(cwd, active_model, default_model);
+    let web_evidence_collector: WebEvidenceCollector =
+        Arc::new(move |request| collect_minimal_web_evidence(request, &*web_fetcher));
+    build_provider_extractive_child_executor(
+        session_id,
+        &model,
+        auth_resolver,
+        web_evidence_collector,
+    )
+}
+
+pub fn collect_minimal_web_evidence(
+    request: &ChildSubqueryRequest,
+    web_fetcher: &dyn Fn(&str, usize) -> Result<Vec<MinimalWebEvidence>, String>,
+) -> Result<Vec<EvidenceRecord>, RecursiveRuntimeError> {
+    if !matches!(request.web_policy.mode, WebAccessMode::On) {
+        return Ok(Vec::new());
+    }
+    let Some(query) = request.web_research_query.as_deref() else {
+        return Ok(Vec::new());
+    };
+    let fetch_limit = usize::try_from(request.web_policy.max_fetches.unwrap_or(1)).unwrap_or(1);
+    let evidence = web_fetcher(query, fetch_limit).map_err(|error| {
+        RecursiveRuntimeError::ChildExecution(format!(
+            "minimal web research failed for subquery {}: {error}",
+            request.subquery_id
+        ))
+    })?;
+    Ok(evidence
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let title = if item.fetched {
+                item.title
+            } else {
+                format!("{} (search result only)", item.title)
+            };
+            EvidenceRecord::from_web_input(WebEvidenceInput {
+                id: format!("{}-web-{}", request.subquery_id, index + 1),
+                title,
+                url: item.url,
+                snippet: item.snippet,
+                fetched_at_ms: None,
+                fetched: Some(item.fetched),
+            })
+        })
+        .collect())
+}
+
+#[must_use]
 pub fn format_provider_child_init_reason(model: &str, error: &ApiError) -> String {
     match error {
         ApiError::MissingCredentials { provider, env_vars } => format!(
@@ -336,15 +430,38 @@ fn collect_web_context(
                         note: Some(note.to_string()),
                     }
                 }
-                Ok(evidence) => CollectedWebContext {
-                    outcome: WebExecutionOutcome::succeeded(
-                        query,
-                        evidence.len(),
-                        Some("attached bounded external evidence".to_string()),
-                    ),
-                    note: Some("attached bounded external evidence".to_string()),
-                    evidence,
-                },
+                Ok(evidence) => {
+                    let fetched_count = evidence
+                        .iter()
+                        .filter(|record| record.is_fetched_web_evidence())
+                        .count();
+                    let degraded = fetched_count < evidence.len();
+                    let note = if degraded {
+                        if fetched_count == 0 {
+                            "attached bounded external evidence, but only search-result snippets were available; no page fetch completed"
+                                .to_string()
+                        } else {
+                            format!(
+                                "attached bounded external evidence; {fetched_count}/{} page fetches completed and the rest degraded to search-result snippets",
+                                evidence.len()
+                            )
+                        }
+                    } else {
+                        "attached bounded external evidence".to_string()
+                    };
+                    CollectedWebContext {
+                        outcome: WebExecutionOutcome {
+                            status: runtime::WebExecutionStatus::Succeeded,
+                            approved: true,
+                            query: Some(query.to_string()),
+                            evidence_count: u32::try_from(evidence.len()).unwrap_or(u32::MAX),
+                            degraded,
+                            note: Some(note.clone()),
+                        },
+                        note: Some(note),
+                        evidence,
+                    }
+                }
                 Err(error) => {
                     let note =
                         format!("approved web collection failed before model execution: {error}");
@@ -367,14 +484,24 @@ fn build_provider_child_user_prompt(
     if !web_context.evidence.is_empty() {
         prompt.push_str("\n\nAttached web evidence:\n");
         for (index, record) in web_context.evidence.iter().enumerate() {
+            let fetch_state = if record.is_fetched_web_evidence() {
+                "fetched"
+            } else {
+                "search-result snippet only"
+            };
             prompt.push_str(&format!(
-                "- [W{}] {} — {}\n  {}\n",
+                "- [W{}] {} — {} ({})\n  {}\n",
                 index + 1,
                 record.title,
                 record.locator,
+                fetch_state,
                 record.snippet
             ));
         }
+    }
+    if let Some(summary) = render_web_provenance_summary(web_context) {
+        prompt.push_str("\n\n");
+        prompt.push_str(&summary);
     }
     if let Some(note) = web_context.note.as_deref() {
         prompt.push_str("\n\nWeb execution note: ");
@@ -526,8 +653,31 @@ pub fn render_extractive_child_answer(
     }
 }
 
+fn render_web_provenance_summary(web_context: &CollectedWebContext) -> Option<String> {
+    let query = web_context.outcome.query.as_deref()?;
+    let approval = if web_context.outcome.approved {
+        "approved"
+    } else {
+        "not approved"
+    };
+    let degraded = if web_context.outcome.degraded {
+        ", degraded"
+    } else {
+        ""
+    };
+    Some(format!(
+        "Web provenance: status={}{}; approval={approval}; query=\"{query}\"; evidence={}",
+        web_context.outcome.status.as_str(),
+        degraded,
+        web_context.outcome.evidence_count
+    ))
+}
+
 fn render_web_context(web_context: &CollectedWebContext) -> Option<String> {
     let mut sections = Vec::new();
+    if let Some(summary) = render_web_provenance_summary(web_context) {
+        sections.push(summary);
+    }
     if !web_context.evidence.is_empty() {
         sections.push(format!(
             "Web evidence:\n{}",
@@ -535,13 +685,21 @@ fn render_web_context(web_context: &CollectedWebContext) -> Option<String> {
                 .evidence
                 .iter()
                 .enumerate()
-                .map(|(index, item)| format!(
-                    "- [W{}] {} — {}\n  {}",
-                    index + 1,
-                    item.title,
-                    item.locator,
-                    item.snippet
-                ))
+                .map(|(index, item)| {
+                    let fetch_state = if item.is_fetched_web_evidence() {
+                        "fetched"
+                    } else {
+                        "search-result snippet only"
+                    };
+                    format!(
+                        "- [W{}] {} — {} ({})\n  {}",
+                        index + 1,
+                        item.title,
+                        item.locator,
+                        fetch_state,
+                        item.snippet
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("\n")
         ));
@@ -568,7 +726,10 @@ fn extract_provider_answer_text(response: &MessageResponse) -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::PathBuf;
     use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use runtime::{
         ChildSubqueryRequest, RecursiveContextSlice, RecursiveRuntimeError, RuntimeBudget,
@@ -577,6 +738,14 @@ mod tests {
 
     use super::*;
     use crate::{AuthSource, MessageResponse, Usage};
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("api-child-{label}-{nanos}"))
+    }
 
     fn sample_request(
         mode: WebAccessMode,
@@ -626,6 +795,44 @@ mod tests {
     }
 
     #[test]
+    fn resolve_provider_child_model_prefers_rlm_subcall_model() {
+        let cwd = temp_dir("model-resolution");
+        fs::create_dir_all(cwd.join(".claw")).expect("config dir");
+        fs::write(
+            cwd.join(".claw").join("settings.json"),
+            r#"{"model":"claude-opus-4-6","rlm":{"subcallModel":"haiku"}}"#,
+        )
+        .expect("write settings");
+
+        let resolved =
+            resolve_provider_child_model(&cwd, Some("claude-sonnet-4-6"), "claude-opus-4-6");
+        assert_eq!(resolved, "claude-haiku-4-5-20251213");
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn collect_minimal_web_evidence_shapes_search_only_hits() {
+        let request = sample_request(WebAccessMode::On, Some("latest release"));
+        let evidence = collect_minimal_web_evidence(&request, &|query, fetch_limit| {
+            assert_eq!(query, "latest release");
+            assert_eq!(fetch_limit, 1);
+            Ok(vec![MinimalWebEvidence {
+                title: "Example result".to_string(),
+                url: "https://example.test/release".to_string(),
+                snippet: "Search hit only".to_string(),
+                fetched: false,
+            }])
+        })
+        .expect("web evidence should collect");
+
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0].title, "Example result (search result only)");
+        assert_eq!(evidence[0].locator, "https://example.test/release");
+        assert_eq!(evidence[0].snippet, "Search hit only");
+    }
+
+    #[test]
     fn system_prompt_reflects_web_policy() {
         let off = build_corpus_subquery_system_prompt(
             &sample_request(WebAccessMode::Off, None),
@@ -648,12 +855,9 @@ mod tests {
                     url: "https://example.test/release".to_string(),
                     snippet: "release snippet".to_string(),
                     fetched_at_ms: None,
+                fetched: None,
                 })],
-                outcome: WebExecutionOutcome::succeeded(
-                    "latest release",
-                    1,
-                    None,
-                ),
+                outcome: WebExecutionOutcome::succeeded("latest release", 1, None),
                 note: None,
             },
         );
@@ -774,6 +978,7 @@ mod tests {
                     url: "https://example.test/release".to_string(),
                     snippet: "release snippet".to_string(),
                     fetched_at_ms: None,
+                fetched: None,
                 })],
                 outcome: WebExecutionOutcome::succeeded(
                     "latest release",

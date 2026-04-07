@@ -24,12 +24,13 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use api::{
-    build_provider_extractive_child_executor, format_provider_child_init_reason,
-    render_extractive_child_answer, resolve_startup_auth_source, AnthropicClient, ApiError,
+    build_configured_provider_extractive_child_executor, collect_minimal_web_evidence,
+    format_provider_child_init_reason, render_extractive_child_answer,
+    resolve_provider_child_model, resolve_startup_auth_source, AnthropicClient, ApiError,
     AuthSource, ContentBlockDelta, InputContentBlock, InputMessage, MessageRequest,
-    MessageResponse, OutputContentBlock, PromptCache, ProviderChildAuthResolver, ProviderClient,
-    StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition, ToolResultContentBlock,
-    WebEvidenceCollector,
+    MessageResponse, MinimalWebEvidence, OutputContentBlock, PromptCache,
+    ProviderChildAuthResolver, ProviderClient, StreamEvent as ApiStreamEvent, ToolChoice,
+    ToolDefinition, ToolResultContentBlock,
 };
 
 use commands::{
@@ -46,8 +47,8 @@ use runtime::{
     generate_state, inspect_corpus, list_corpora, load_corpus, load_system_prompt,
     parse_oauth_callback_request_target, resolve_sandbox_status, save_oauth_credentials,
     search_corpus, slice_corpus, ApiClient, ApiRequest, AssistantEvent, CompactionConfig,
-    ConfigLoader, ConfigSource, ContentBlock, ConversationMessage, ConversationRuntime,
-    CorpusAttachOptions, ExecutionProfile, MessageRole, OAuthAuthorizationRequest, OAuthConfig,
+    ConfigSource, ContentBlock, ConversationMessage, ConversationRuntime, CorpusAttachOptions,
+    ExecutionProfile, MessageRole, OAuthAuthorizationRequest, OAuthConfig,
     OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext, PromptCacheEvent,
     ResolvedPermissionMode, RuntimeError, Session, TokenUsage, ToolError, ToolExecutor,
     UsageTracker,
@@ -1451,18 +1452,30 @@ fn build_corpus_answer_executor(
     session_id: Option<&str>,
     active_model: Option<&str>,
 ) -> api::ProviderBackedChildExecutor {
-    let resolved_model = resolve_corpus_answer_model(cwd, active_model);
-    let web_evidence_collector: WebEvidenceCollector = Arc::new(collect_minimal_web_evidence);
     let auth_resolver: ProviderChildAuthResolver = Arc::new(|| {
         resolve_cli_auth_source()
             .map(Some)
             .map_err(|error| error.to_string())
     });
-    build_provider_extractive_child_executor(
+    build_configured_provider_extractive_child_executor(
+        cwd,
         session_id.unwrap_or("corpus-cli"),
-        &resolved_model,
+        active_model,
+        DEFAULT_MODEL,
         auth_resolver,
-        web_evidence_collector,
+        Arc::new(|query, fetch_limit| {
+            minimal_web_research(query, fetch_limit).map(|evidence| {
+                evidence
+                    .into_iter()
+                    .map(|item| MinimalWebEvidence {
+                        title: item.title,
+                        url: item.url,
+                        snippet: item.snippet,
+                        fetched: item.fetched,
+                    })
+                    .collect()
+            })
+        }),
     )
 }
 
@@ -1526,62 +1539,6 @@ fn run_corpus_answer(
         trace_artifact,
         telemetry_path.display()
     ))
-}
-
-fn resolve_corpus_answer_model(cwd: &Path, active_model: Option<&str>) -> String {
-    let configured = ConfigLoader::default_for(cwd)
-        .load()
-        .ok()
-        .and_then(|config| {
-            config
-                .rlm()
-                .subcall_model
-                .clone()
-                .or_else(|| config.model().map(ToOwned::to_owned))
-        });
-    resolve_model_alias(
-        configured
-            .as_deref()
-            .or(active_model)
-            .unwrap_or(DEFAULT_MODEL),
-    )
-    .to_string()
-}
-
-fn collect_minimal_web_evidence(
-    request: &runtime::ChildSubqueryRequest,
-) -> Result<Vec<runtime::EvidenceRecord>, runtime::RecursiveRuntimeError> {
-    if !matches!(request.web_policy.mode, runtime::WebAccessMode::On) {
-        return Ok(Vec::new());
-    }
-    let Some(query) = request.web_research_query.as_deref() else {
-        return Ok(Vec::new());
-    };
-    let fetch_limit = usize::try_from(request.web_policy.max_fetches.unwrap_or(1)).unwrap_or(1);
-    let evidence = minimal_web_research(query, fetch_limit).map_err(|error| {
-        runtime::RecursiveRuntimeError::ChildExecution(format!(
-            "minimal web research failed for subquery {}: {error}",
-            request.subquery_id
-        ))
-    })?;
-    Ok(evidence
-        .into_iter()
-        .enumerate()
-        .map(|(index, item)| {
-            let title = if item.fetched {
-                item.title
-            } else {
-                format!("{} (search result only)", item.title)
-            };
-            runtime::EvidenceRecord::from_web_input(runtime::WebEvidenceInput {
-                id: format!("{}-web-{}", request.subquery_id, index + 1),
-                title,
-                url: item.url,
-                snippet: item.snippet,
-                fetched_at_ms: None,
-            })
-        })
-        .collect())
 }
 
 #[allow(clippy::too_many_lines)]
@@ -7357,10 +7314,10 @@ UU conflicted.rs",
 
 #[cfg(test)]
 mod corpus_answer_tests {
-    use super::{collect_minimal_web_evidence, resolve_corpus_answer_model};
     use api::{
-        format_provider_child_init_reason, render_extractive_child_answer, ApiError,
-        MessageResponse, OutputContentBlock, Usage,
+        collect_minimal_web_evidence, format_provider_child_init_reason,
+        render_extractive_child_answer, resolve_provider_child_model, ApiError, MessageResponse,
+        MinimalWebEvidence, OutputContentBlock, Usage,
     };
     use runtime::{ChildSubqueryRequest, RecursiveContextSlice, RuntimeBudget};
     use std::collections::BTreeMap;
@@ -7453,6 +7410,24 @@ mod corpus_answer_tests {
         }
     }
 
+    fn collect_fixture_web_evidence(
+        request: &ChildSubqueryRequest,
+    ) -> Result<Vec<runtime::EvidenceRecord>, runtime::RecursiveRuntimeError> {
+        collect_minimal_web_evidence(request, &|query, fetch_limit| {
+            minimal_web_research(query, fetch_limit).map(|evidence| {
+                evidence
+                    .into_iter()
+                    .map(|item| MinimalWebEvidence {
+                        title: item.title,
+                        url: item.url,
+                        snippet: item.snippet,
+                        fetched: item.fetched,
+                    })
+                    .collect()
+            })
+        })
+    }
+
     #[test]
     fn resolve_corpus_answer_model_prefers_rlm_subcall_model() {
         let cwd = temp_dir("model-resolution");
@@ -7463,7 +7438,7 @@ mod corpus_answer_tests {
         )
         .expect("write settings");
 
-        let resolved = resolve_corpus_answer_model(&cwd, Some("claude-sonnet-4-6"));
+        let resolved = resolve_provider_child_model(&cwd, Some("claude-sonnet-4-6"), DEFAULT_MODEL);
         assert_eq!(resolved, "claude-haiku-4-5-20251213");
 
         let _ = fs::remove_dir_all(cwd);
@@ -7475,7 +7450,7 @@ mod corpus_answer_tests {
             &sample_request(),
             Some("missing provider auth"),
             "claude-sonnet-4-6",
-            &collect_minimal_web_evidence,
+            &collect_fixture_web_evidence,
         );
 
         assert!(output
@@ -7516,7 +7491,7 @@ mod corpus_answer_tests {
         request.web_policy.max_fetches = Some(1);
         request.web_research_query = Some("latest fixture release".to_string());
 
-        let evidence = collect_minimal_web_evidence(&request).expect("web evidence should collect");
+        let evidence = collect_fixture_web_evidence(&request).expect("web evidence should collect");
         assert_eq!(evidence.len(), 1);
         assert!(evidence[0].locator.contains("/page1"));
         assert!(evidence[0].snippet.contains("Fetched http://127.0.0.1"));
@@ -7538,7 +7513,7 @@ mod corpus_answer_tests {
             &request,
             Some("missing provider auth"),
             "claude-sonnet-4-6",
-            &collect_minimal_web_evidence,
+            &collect_fixture_web_evidence,
         );
         assert!(output.answer.contains("Web evidence:"));
         assert!(output.answer.contains("Example result"));
