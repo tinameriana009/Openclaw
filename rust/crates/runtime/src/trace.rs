@@ -8,8 +8,15 @@ use telemetry::SessionTracer;
 
 use crate::json::{JsonError, JsonValue};
 
+pub(crate) const TRACE_ARTIFACT_KIND: &str = "claw.trace-ledger";
+pub(crate) const TRACE_SCHEMA_VERSION: u32 = 1;
+pub(crate) const TRACE_COMPAT_VERSION: &str = "0.1";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraceLedger {
+    pub artifact_kind: String,
+    pub schema_version: u32,
+    pub compat_version: String,
     pub trace_id: String,
     pub session_id: String,
     pub root_task_id: String,
@@ -43,6 +50,8 @@ pub struct TraceCounters {
     pub subqueries_started: u32,
     pub subqueries_completed: u32,
     pub web_escalations: u32,
+    pub web_executions_completed: u32,
+    pub degraded_web_executions: u32,
     pub web_evidence_items: u32,
 }
 
@@ -57,6 +66,7 @@ pub enum TraceEventType {
     SubqueryCompleted,
     WebEscalationStarted,
     WebEvidenceAdded,
+    WebExecutionCompleted,
     AggregationCompleted,
     StopConditionReached,
     TaskFailed,
@@ -98,6 +108,18 @@ impl TraceLedger {
     pub fn to_json_value(&self) -> JsonValue {
         JsonValue::Object(BTreeMap::from([
             (
+                "artifactKind".to_string(),
+                JsonValue::String(self.artifact_kind.clone()),
+            ),
+            (
+                "schemaVersion".to_string(),
+                JsonValue::Number(i64::from(self.schema_version)),
+            ),
+            (
+                "compatVersion".to_string(),
+                JsonValue::String(self.compat_version.clone()),
+            ),
+            (
                 "traceId".to_string(),
                 JsonValue::String(self.trace_id.clone()),
             ),
@@ -135,6 +157,13 @@ impl TraceLedger {
             .as_object()
             .ok_or_else(|| TraceError::Format("trace ledger must be a JSON object".to_string()))?;
         Ok(Self {
+            artifact_kind: optional_string(object, "artifactKind")?
+                .unwrap_or(TRACE_ARTIFACT_KIND)
+                .to_string(),
+            schema_version: optional_u32(object, "schemaVersion")?.unwrap_or(0),
+            compat_version: optional_string(object, "compatVersion")?
+                .unwrap_or("0.0")
+                .to_string(),
             trace_id: expect_string(object, "traceId")?.to_string(),
             session_id: expect_string(object, "sessionId")?.to_string(),
             root_task_id: expect_string(object, "rootTaskId")?.to_string(),
@@ -183,6 +212,17 @@ impl TraceLedger {
                 TraceEventType::SubqueryCompleted => counters.subqueries_completed += 1,
                 TraceEventType::WebEscalationStarted => counters.web_escalations += 1,
                 TraceEventType::WebEvidenceAdded => counters.web_evidence_items += 1,
+                TraceEventType::WebExecutionCompleted => {
+                    counters.web_executions_completed += 1;
+                    if event
+                        .data
+                        .get("degraded")
+                        .and_then(JsonValue::as_bool)
+                        .unwrap_or(false)
+                    {
+                        counters.degraded_web_executions += 1;
+                    }
+                }
                 _ => {}
             }
         }
@@ -226,6 +266,14 @@ impl TraceLedger {
             Value::from(counters.web_escalations),
         );
         summary.insert(
+            "web_executions_completed".to_string(),
+            Value::from(counters.web_executions_completed),
+        );
+        summary.insert(
+            "degraded_web_executions".to_string(),
+            Value::from(counters.degraded_web_executions),
+        );
+        summary.insert(
             "web_evidence_items".to_string(),
             Value::from(counters.web_evidence_items),
         );
@@ -249,6 +297,12 @@ impl TraceLedger {
             }
             if let Some(value) = event.data.get("stopReason").and_then(JsonValue::as_str) {
                 attributes.insert("stop_reason".to_string(), Value::String(value.to_string()));
+            }
+            if let Some(value) = event.data.get("status").and_then(JsonValue::as_str) {
+                attributes.insert("status".to_string(), Value::String(value.to_string()));
+            }
+            if let Some(value) = event.data.get("degraded").and_then(JsonValue::as_bool) {
+                attributes.insert("degraded".to_string(), Value::Bool(value));
             }
             tracer.record("recursive_trace_event", attributes);
         }
@@ -343,6 +397,7 @@ impl TraceEventType {
             Self::SubqueryCompleted => "subquery_completed",
             Self::WebEscalationStarted => "web_escalation_started",
             Self::WebEvidenceAdded => "web_evidence_added",
+            Self::WebExecutionCompleted => "web_execution_completed",
             Self::AggregationCompleted => "aggregation_completed",
             Self::StopConditionReached => "stop_condition_reached",
             Self::TaskFailed => "task_failed",
@@ -360,6 +415,7 @@ impl TraceEventType {
             "subquery_completed" => Ok(Self::SubqueryCompleted),
             "web_escalation_started" => Ok(Self::WebEscalationStarted),
             "web_evidence_added" => Ok(Self::WebEvidenceAdded),
+            "web_execution_completed" => Ok(Self::WebExecutionCompleted),
             "aggregation_completed" => Ok(Self::AggregationCompleted),
             "stop_condition_reached" => Ok(Self::StopConditionReached),
             "task_failed" => Ok(Self::TaskFailed),
@@ -389,6 +445,21 @@ fn expect_u64(object: &BTreeMap<String, JsonValue>, key: &str) -> Result<u64, Tr
         .map_err(|_| TraceError::Format(format!("numeric field {key} is out of range")))
 }
 
+fn optional_u32(
+    object: &BTreeMap<String, JsonValue>,
+    key: &str,
+) -> Result<Option<u32>, TraceError> {
+    match object.get(key) {
+        Some(JsonValue::Null) | None => Ok(None),
+        Some(JsonValue::Number(value)) => u32::try_from(*value)
+            .map(Some)
+            .map_err(|_| TraceError::Format(format!("numeric field {key} is out of range"))),
+        Some(_) => Err(TraceError::Format(format!(
+            "field {key} must be a number or null"
+        ))),
+    }
+}
+
 fn optional_u64(
     object: &BTreeMap<String, JsonValue>,
     key: &str,
@@ -400,6 +471,19 @@ fn optional_u64(
             .map_err(|_| TraceError::Format(format!("numeric field {key} is out of range"))),
         Some(_) => Err(TraceError::Format(format!(
             "field {key} must be a number or null"
+        ))),
+    }
+}
+
+fn optional_string<'a>(
+    object: &'a BTreeMap<String, JsonValue>,
+    key: &str,
+) -> Result<Option<&'a str>, TraceError> {
+    match object.get(key) {
+        Some(JsonValue::Null) | None => Ok(None),
+        Some(JsonValue::String(value)) => Ok(Some(value.as_str())),
+        Some(_) => Err(TraceError::Format(format!(
+            "field {key} must be a string or null"
         ))),
     }
 }
@@ -427,7 +511,10 @@ fn expect_events(
 
 #[cfg(test)]
 mod tests {
-    use super::{TraceEvent, TraceEventType, TraceFinalStatus, TraceLedger};
+    use super::{
+        TraceEvent, TraceEventType, TraceFinalStatus, TraceLedger, TRACE_ARTIFACT_KIND,
+        TRACE_COMPAT_VERSION, TRACE_SCHEMA_VERSION,
+    };
     use crate::json::JsonValue;
     use std::collections::BTreeMap;
     use std::fs;
@@ -445,6 +532,9 @@ mod tests {
 
     fn sample_trace() -> TraceLedger {
         TraceLedger {
+            artifact_kind: TRACE_ARTIFACT_KIND.to_string(),
+            schema_version: TRACE_SCHEMA_VERSION,
+            compat_version: TRACE_COMPAT_VERSION.to_string(),
             trace_id: "trace-1".to_string(),
             session_id: "session-1".to_string(),
             root_task_id: "task-1".to_string(),
@@ -479,6 +569,12 @@ mod tests {
                     1_700_000_000_070,
                     BTreeMap::new(),
                 ),
+                TraceEvent::new(
+                    5,
+                    TraceEventType::WebExecutionCompleted,
+                    1_700_000_000_080,
+                    BTreeMap::from([("degraded".to_string(), JsonValue::Bool(true))]),
+                ),
             ],
         }
     }
@@ -509,7 +605,7 @@ mod tests {
         assert!(summary.contains("session=session-1"));
         assert!(summary.contains("task=task-1"));
         assert!(summary.contains("status=succeeded"));
-        assert!(summary.contains("events=4"));
+        assert!(summary.contains("events=5"));
     }
 
     #[test]
@@ -544,6 +640,8 @@ mod tests {
         assert_eq!(counters.retrieval_completions, 1);
         assert_eq!(counters.subqueries_started, 1);
         assert_eq!(counters.web_escalations, 1);
+        assert_eq!(counters.web_executions_completed, 1);
+        assert_eq!(counters.degraded_web_executions, 1);
     }
 
     #[test]
@@ -569,6 +667,14 @@ mod tests {
             trace_records[0].attributes.get("web_escalations"),
             Some(&serde_json::Value::from(1))
         );
+        assert_eq!(
+            trace_records[0].attributes.get("web_executions_completed"),
+            Some(&serde_json::Value::from(1))
+        );
+        assert_eq!(
+            trace_records[0].attributes.get("degraded_web_executions"),
+            Some(&serde_json::Value::from(1))
+        );
         assert!(trace_records.iter().any(|record| {
             record.name == "recursive_trace_event"
                 && record.attributes.get("event_type")
@@ -577,5 +683,30 @@ mod tests {
                     ))
                 && record.attributes.get("hits") == Some(&serde_json::Value::from(7))
         }));
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+
+    #[test]
+    fn trace_reader_accepts_legacy_unversioned_artifact() {
+        let legacy = JsonValue::parse(
+            r#"{
+          "traceId":"trace-legacy",
+          "sessionId":"session-1",
+          "rootTaskId":"task-1",
+          "startedAtMs":1700000000000,
+          "finishedAtMs":1700000000111,
+          "finalStatus":"succeeded",
+          "events":[]
+        }"#,
+        )
+        .expect("legacy json");
+        let parsed = TraceLedger::from_json_value(&legacy).expect("parse legacy trace");
+        assert_eq!(parsed.schema_version, 0);
+        assert_eq!(parsed.artifact_kind, TRACE_ARTIFACT_KIND);
+        assert_eq!(parsed.compat_version, "0.0");
     }
 }

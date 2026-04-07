@@ -17,8 +17,9 @@ use crate::trace::{TraceEventType, TraceFinalStatus, TraceLedger};
 pub use finalization::{export_trace, render_trace_summary};
 use finalization::{finalize_empty_stop, finalize_failed_run, finalize_successful_run};
 use helpers::{
-    build_child_prompt, build_iteration_query, effective_child_web_policy, escalation_reason_label,
-    map_chunk, mode_label, next_iteration_stop_reason, now_ms, push_trace_event,
+    build_child_prompt, build_iteration_query, child_output_novelty_metrics,
+    effective_child_web_policy, escalation_reason_label, map_chunk, mode_label,
+    next_iteration_stop_reason, no_iteration_artifacts_stop_reason, now_ms, push_trace_event,
     should_stop_for_convergence, task_mentions_freshness, task_requests_web,
     web_access_decision_label, web_policy_label,
 };
@@ -193,6 +194,9 @@ where
         let mode = Self::select_mode(task, Some(self.corpus), &budget);
         let started_at_ms = now_ms();
         let mut trace = TraceLedger {
+            artifact_kind: crate::trace::TRACE_ARTIFACT_KIND.to_string(),
+            schema_version: crate::trace::TRACE_SCHEMA_VERSION,
+            compat_version: crate::trace::TRACE_COMPAT_VERSION.to_string(),
             trace_id: format!("trace-{}", started_at_ms),
             session_id: session_id.to_string(),
             root_task_id: task_id.to_string(),
@@ -292,11 +296,7 @@ where
             )? {
                 Some(artifacts) => artifacts,
                 None => {
-                    stop_reason = if child_outputs.is_empty() {
-                        RecursiveStopReason::NoChildCapacity
-                    } else {
-                        RecursiveStopReason::NoNewContext
-                    };
+                    stop_reason = no_iteration_artifacts_stop_reason(&child_outputs);
                     break;
                 }
             };
@@ -391,7 +391,62 @@ where
                     &child_output.web_evidence,
                 ));
             }
+            if let Some(execution) = child_output.web_execution.as_ref() {
+                push_trace_event(
+                    &mut trace,
+                    TraceEventType::WebExecutionCompleted,
+                    BTreeMap::from([
+                        (
+                            "subqueryId".to_string(),
+                            JsonValue::String(child_output.subquery_id.clone()),
+                        ),
+                        (
+                            "iteration".to_string(),
+                            JsonValue::Number(i64::from(iteration)),
+                        ),
+                        (
+                            "status".to_string(),
+                            JsonValue::String(execution.status.as_str().to_string()),
+                        ),
+                        ("approved".to_string(), JsonValue::Bool(execution.approved)),
+                        ("degraded".to_string(), JsonValue::Bool(execution.degraded)),
+                        (
+                            "evidenceCount".to_string(),
+                            JsonValue::Number(i64::from(execution.evidence_count)),
+                        ),
+                        (
+                            "query".to_string(),
+                            execution
+                                .query
+                                .clone()
+                                .map(JsonValue::String)
+                                .unwrap_or(JsonValue::Null),
+                        ),
+                        (
+                            "note".to_string(),
+                            execution
+                                .note
+                                .clone()
+                                .map(JsonValue::String)
+                                .unwrap_or(JsonValue::Null),
+                        ),
+                    ]),
+                );
+            }
             let web_evidence_count = child_output.web_evidence.len();
+            let mut outputs_with_current = child_outputs.clone();
+            outputs_with_current.push(child_output.clone());
+            let (
+                novel_citation_count,
+                novel_web_evidence_count,
+                novel_answer_token_count,
+                materially_novel,
+            ) = child_output_novelty_metrics(&outputs_with_current).unwrap_or((
+                child_output.citations.len(),
+                web_evidence_count,
+                0,
+                true,
+            ));
             push_trace_event(
                 &mut trace,
                 TraceEventType::SubqueryCompleted,
@@ -415,12 +470,75 @@ where
                         JsonValue::Number(i64::try_from(web_evidence_count).unwrap_or(i64::MAX)),
                     ),
                     (
+                        "novelCitationCount".to_string(),
+                        JsonValue::Number(i64::try_from(novel_citation_count).unwrap_or(i64::MAX)),
+                    ),
+                    (
+                        "novelWebEvidenceCount".to_string(),
+                        JsonValue::Number(
+                            i64::try_from(novel_web_evidence_count).unwrap_or(i64::MAX),
+                        ),
+                    ),
+                    (
+                        "novelAnswerTokenCount".to_string(),
+                        JsonValue::Number(
+                            i64::try_from(novel_answer_token_count).unwrap_or(i64::MAX),
+                        ),
+                    ),
+                    (
+                        "materiallyNovel".to_string(),
+                        JsonValue::Bool(materially_novel),
+                    ),
+                    (
+                        "answerPreview".to_string(),
+                        JsonValue::String(child_output.answer.chars().take(180).collect()),
+                    ),
+                    (
+                        "citations".to_string(),
+                        JsonValue::Array(
+                            child_output
+                                .citations
+                                .iter()
+                                .cloned()
+                                .map(JsonValue::String)
+                                .collect(),
+                        ),
+                    ),
+                    (
                         "webCollectionDegraded".to_string(),
                         JsonValue::Bool(
-                            matches!(request.web_policy.mode, WebAccessMode::On)
-                                && request.web_research_query.is_some()
-                                && web_evidence_count == 0,
+                            child_output
+                                .web_execution
+                                .as_ref()
+                                .is_some_and(|execution| execution.degraded),
                         ),
+                    ),
+                    (
+                        "webExecutionStatus".to_string(),
+                        child_output
+                            .web_execution
+                            .as_ref()
+                            .map(|execution| {
+                                JsonValue::String(execution.status.as_str().to_string())
+                            })
+                            .unwrap_or(JsonValue::Null),
+                    ),
+                    (
+                        "webApprovalState".to_string(),
+                        child_output
+                            .web_execution
+                            .as_ref()
+                            .map(|execution| {
+                                JsonValue::String(
+                                    if execution.approved {
+                                        "approved"
+                                    } else {
+                                        "not_approved"
+                                    }
+                                    .to_string(),
+                                )
+                            })
+                            .unwrap_or(JsonValue::Null),
                     ),
                     (
                         "webQuery".to_string(),
@@ -654,6 +772,7 @@ mod tests {
                     .map(|slice| slice.chunk_id.clone())
                     .collect(),
                 web_evidence: Vec::new(),
+                web_execution: Some(crate::WebExecutionOutcome::not_requested()),
                 web_execution_note: None,
                 prompt_tokens: 120,
                 completion_tokens: 40,
@@ -683,6 +802,7 @@ mod tests {
                 answer: "first child succeeded".to_string(),
                 citations: vec![request.slices[0].chunk_id.clone()],
                 web_evidence: Vec::new(),
+                web_execution: Some(crate::WebExecutionOutcome::not_requested()),
                 web_execution_note: None,
                 prompt_tokens: 80,
                 completion_tokens: 20,
@@ -739,6 +859,9 @@ mod tests {
             metadata: BTreeMap::new(),
         };
         CorpusManifest {
+            artifact_kind: crate::corpus::CORPUS_ARTIFACT_KIND.to_string(),
+            schema_version: crate::corpus::CORPUS_SCHEMA_VERSION,
+            compat_version: crate::corpus::CORPUS_COMPAT_VERSION.to_string(),
             corpus_id: "corpus-1".to_string(),
             roots: vec!["docs".to_string()],
             kind: CorpusKind::Docs,
@@ -754,6 +877,7 @@ mod tests {
             skip_summary: crate::corpus::CorpusSkipSummary::empty(),
             documents: vec![CorpusDocument {
                 document_id: doc_id,
+                source_root: "docs".to_string(),
                 path: "docs/spec.md".to_string(),
                 media_type: "text/markdown".to_string(),
                 language: Some("markdown".to_string()),
@@ -774,6 +898,7 @@ mod tests {
             RetrievalHit {
                 chunk_id: "chunk-a1".to_string(),
                 document_id: "doc-a".to_string(),
+                source_root: "docs".to_string(),
                 path: "docs/a.md".to_string(),
                 score: 12.0,
                 reason: "phrase:body".to_string(),
@@ -783,6 +908,7 @@ mod tests {
             RetrievalHit {
                 chunk_id: "chunk-a2".to_string(),
                 document_id: "doc-a".to_string(),
+                source_root: "docs".to_string(),
                 path: "docs/a.md".to_string(),
                 score: 11.5,
                 reason: "coverage:3/3".to_string(),
@@ -792,6 +918,7 @@ mod tests {
             RetrievalHit {
                 chunk_id: "chunk-b1".to_string(),
                 document_id: "doc-b".to_string(),
+                source_root: "docs".to_string(),
                 path: "docs/b.md".to_string(),
                 score: 10.0,
                 reason: "content:beta".to_string(),
@@ -801,6 +928,7 @@ mod tests {
             RetrievalHit {
                 chunk_id: "chunk-c1".to_string(),
                 document_id: "doc-c".to_string(),
+                source_root: "docs".to_string(),
                 path: "docs/c.md".to_string(),
                 score: 9.0,
                 reason: "content:gamma".to_string(),
@@ -959,6 +1087,14 @@ mod tests {
         let counters = result.trace.counters();
         assert_eq!(counters.retrieval_requests, 3);
         assert_eq!(counters.subqueries_completed, 2);
+        assert!(result.trace.events.iter().any(|event| {
+            event.event_type == TraceEventType::StopConditionReached
+                && event.data.get("stopReason")
+                    == Some(&JsonValue::String("no_new_context".to_string()))
+                && event.data.get("childCount") == Some(&JsonValue::Number(2))
+                && event.data.get("completedIterations") == Some(&JsonValue::Number(2))
+                && event.data.get("subcalls") == Some(&JsonValue::Number(2))
+        }));
     }
 
     #[test]
@@ -986,6 +1122,79 @@ mod tests {
         assert_eq!(result.child_outputs.len(), 2);
         assert_eq!(result.usage.iterations, 2);
         assert_eq!(result.usage.subcalls, 2);
+    }
+
+    #[test]
+    fn low_novelty_follow_up_results_also_converge() {
+        let corpus = sample_corpus();
+        let runtime = RecursiveConversationRuntime::new(
+            &corpus,
+            LowNoveltyExecutor {
+                calls: std::sync::Mutex::new(0),
+            },
+        );
+
+        let result = runtime
+            .run(
+                "session-1",
+                "task-low-novelty",
+                "trace aggregation export hidden",
+                RuntimeBudget {
+                    max_depth: Some(2),
+                    max_iterations: Some(4),
+                    max_subcalls: Some(4),
+                    max_runtime_ms: Some(30_000),
+                    ..RuntimeBudget::default()
+                },
+                None,
+            )
+            .expect("run should stop on low novelty");
+
+        assert_eq!(result.stop_reason, RecursiveStopReason::Converged);
+        assert_eq!(result.child_outputs.len(), 2);
+        assert!(result.trace.events.iter().any(|event| {
+            event.event_type == TraceEventType::SubqueryCompleted
+                && event.data.get("iteration") == Some(&JsonValue::Number(2))
+                && event.data.get("materiallyNovel") == Some(&JsonValue::Bool(false))
+                && event.data.get("novelCitationCount") == Some(&JsonValue::Number(0))
+        }));
+    }
+
+    #[test]
+    fn child_prompt_includes_validation_loop_and_prior_evidence() {
+        let slices = vec![RecursiveContextSlice {
+            chunk_id: "chunk-1".to_string(),
+            document_id: "doc-1".to_string(),
+            path: "docs/spec.md".to_string(),
+            ordinal: 0,
+            start_offset: 0,
+            end_offset: 42,
+            preview: "preview".to_string(),
+            metadata: BTreeMap::from([(
+                "text".to_string(),
+                JsonValue::String("actual text from slice".to_string()),
+            )]),
+        }];
+        let prior_outputs = vec![ChildSubqueryOutput {
+            subquery_id: "child-1".to_string(),
+            answer: "first pass found a likely workflow".to_string(),
+            citations: vec!["chunk-1".to_string()],
+            web_evidence: Vec::new(),
+            web_execution: Some(crate::WebExecutionOutcome::not_requested()),
+            web_execution_note: Some("needs manual validation".to_string()),
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            cost_usd: 0.0,
+        }];
+
+        let prompt = build_child_prompt("audit the workflow", 2, &prior_outputs, &slices);
+
+        assert!(prompt.contains("Validation loop"));
+        assert!(prompt.contains("Remaining gaps"));
+        assert!(prompt.contains("avoid repeating"));
+        assert!(prompt.contains("chunk-1"));
+        assert!(prompt.contains("needs manual validation"));
+        assert!(prompt.contains("Do not claim completion"));
     }
 
     #[test]
@@ -1077,6 +1286,14 @@ mod tests {
                 == Some(&JsonValue::String(
                     "child executor crashed on follow-up".to_string(),
                 ))));
+        assert!(result.trace.events.iter().any(|event| {
+            event.event_type == TraceEventType::StopConditionReached
+                && event.data.get("stopReason")
+                    == Some(&JsonValue::String("child_failed".to_string()))
+                && event.data.get("childCount") == Some(&JsonValue::Number(1))
+                && event.data.get("completedIterations") == Some(&JsonValue::Number(1))
+                && event.data.get("subcalls") == Some(&JsonValue::Number(1))
+        }));
     }
 
     #[test]
@@ -1157,6 +1374,17 @@ mod tests {
                     .map(|slice| slice.chunk_id.clone())
                     .collect(),
                 web_evidence: Vec::new(),
+                web_execution: Some(crate::WebExecutionOutcome::no_evidence(
+                    request
+                        .web_research_query
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    format!(
+                        "captured executor ran with web mode {} and query {:?}",
+                        web_policy_label(request.web_policy.mode),
+                        request.web_research_query
+                    ),
+                )),
                 web_execution_note: Some(format!(
                     "captured executor ran with web mode {} and query {:?}",
                     web_policy_label(request.web_policy.mode),
@@ -1181,7 +1409,38 @@ mod tests {
                 answer: "stable answer".to_string(),
                 citations: vec!["stable-citation".to_string()],
                 web_evidence: Vec::new(),
+                web_execution: Some(crate::WebExecutionOutcome::not_requested()),
                 web_execution_note: None,
+                prompt_tokens: 15,
+                completion_tokens: 5,
+                cost_usd: 0.0,
+            })
+        }
+    }
+
+    struct LowNoveltyExecutor {
+        calls: std::sync::Mutex<u32>,
+    }
+
+    impl ChildSubqueryExecutor for LowNoveltyExecutor {
+        fn execute(
+            &self,
+            request: &ChildSubqueryRequest,
+        ) -> Result<ChildSubqueryOutput, RecursiveRuntimeError> {
+            let mut calls = self.calls.lock().expect("lock should succeed");
+            *calls += 1;
+            let answer = if *calls == 1 {
+                "stable answer".to_string()
+            } else {
+                "stable answer again".to_string()
+            };
+            Ok(ChildSubqueryOutput {
+                subquery_id: request.subquery_id.clone(),
+                answer,
+                citations: vec!["stable-citation".to_string()],
+                web_evidence: Vec::new(),
+                web_execution: Some(crate::WebExecutionOutcome::not_requested()),
+                web_execution_note: Some("reran validation without new evidence".to_string()),
                 prompt_tokens: 15,
                 completion_tokens: 5,
                 cost_usd: 0.0,
@@ -1210,6 +1469,14 @@ mod tests {
                     score: None,
                     metadata: BTreeMap::new(),
                 }],
+                web_execution: Some(crate::WebExecutionOutcome::succeeded(
+                    request
+                        .web_research_query
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    1,
+                    Some("attached bounded external evidence".to_string()),
+                )),
                 web_execution_note: Some("attached bounded external evidence".to_string()),
                 prompt_tokens: 10,
                 completion_tokens: 5,
@@ -1306,6 +1573,12 @@ mod tests {
                     ))
                 && matches!(event.data.get("webExecutionNote"), Some(JsonValue::String(note)) if note.contains("captured executor ran with web mode on"))
         }));
+        assert!(result.trace.events.iter().any(|event| {
+            event.event_type == TraceEventType::WebExecutionCompleted
+                && event.data.get("status") == Some(&JsonValue::String("no_evidence".to_string()))
+                && event.data.get("approved") == Some(&JsonValue::Bool(true))
+                && event.data.get("degraded") == Some(&JsonValue::Bool(true))
+        }));
     }
 
     #[test]
@@ -1336,10 +1609,19 @@ mod tests {
         assert!(result.final_answer.contains("Web sources"));
         assert!(result.final_answer.contains("[W1] Example release notes"));
         assert!(result
+            .final_answer
+            .contains("Web execution summary: approved subqueries=1"));
+        assert!(result
             .trace
             .events
             .iter()
             .any(|event| event.event_type == TraceEventType::WebEvidenceAdded));
+        assert!(result.trace.events.iter().any(|event| {
+            event.event_type == TraceEventType::WebExecutionCompleted
+                && event.data.get("status") == Some(&JsonValue::String("succeeded".to_string()))
+                && event.data.get("evidenceCount") == Some(&JsonValue::Number(1))
+                && event.data.get("degraded") == Some(&JsonValue::Bool(false))
+        }));
     }
 
     #[test]
@@ -1387,6 +1669,7 @@ mod tests {
                 answer: format!("fallback via {reason}"),
                 citations: Vec::new(),
                 web_evidence: Vec::new(),
+                web_execution: Some(crate::WebExecutionOutcome::not_requested()),
                 web_execution_note: None,
                 prompt_tokens: 0,
                 completion_tokens: 0,
@@ -1424,6 +1707,7 @@ mod tests {
                 answer: reason.to_string(),
                 citations: Vec::new(),
                 web_evidence: Vec::new(),
+                web_execution: Some(crate::WebExecutionOutcome::not_requested()),
                 web_execution_note: None,
                 prompt_tokens: 0,
                 completion_tokens: 0,

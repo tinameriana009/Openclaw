@@ -15,12 +15,54 @@ use crate::ux::{Citation, ConfidenceLevel, ConfidenceNote, EvidenceProvenance, F
 use telemetry::SessionTracer;
 
 use super::helpers::{
-    escalation_reason_label, now_ms, push_trace_event, task_mentions_freshness, task_requests_web,
+    escalation_reason_label, now_ms, push_trace_event, stop_event_data, task_mentions_freshness,
+    task_requests_web,
 };
 use super::types::{
     ChildSubqueryOutput, RecursiveExecutionMode, RecursiveExecutionResult, RecursiveRuntimeError,
     RecursiveRuntimeState, RecursiveStopReason,
 };
+
+fn summarize_web_execution(child_outputs: &[ChildSubqueryOutput]) -> Option<String> {
+    let mut approved = 0usize;
+    let mut approval_required = 0usize;
+    let mut degraded = 0usize;
+    let mut succeeded = 0usize;
+    let mut with_evidence = 0usize;
+
+    for output in child_outputs {
+        let Some(execution) = output.web_execution.as_ref() else {
+            continue;
+        };
+        if execution.approved {
+            approved += 1;
+        }
+        if matches!(
+            execution.status,
+            crate::WebExecutionStatus::ApprovalRequired
+        ) {
+            approval_required += 1;
+        }
+        if execution.degraded {
+            degraded += 1;
+        }
+        if matches!(execution.status, crate::WebExecutionStatus::Succeeded) {
+            succeeded += 1;
+        }
+        if execution.evidence_count > 0 {
+            with_evidence += 1;
+        }
+    }
+
+    let total = approved + approval_required + degraded + succeeded + with_evidence;
+    if total == 0 {
+        return None;
+    }
+
+    Some(format!(
+        "Web execution summary: approved subqueries={approved}, approval-required subqueries={approval_required}, successful web fetches={succeeded}, subqueries with attached web evidence={with_evidence}, degraded web outcomes={degraded}.",
+    ))
+}
 
 fn format_recursive_answer(
     body: String,
@@ -86,6 +128,9 @@ fn format_recursive_answer(
             "Web escalation was allowed ({}) but no web evidence was attached by the child executor.",
             escalation_reason_label(escalation.reason)
         ));
+    }
+    if let Some(summary) = summarize_web_execution(child_outputs) {
+        gaps.push(summary);
     }
     for note in child_outputs
         .iter()
@@ -179,10 +224,7 @@ pub(super) fn finalize_successful_run(
     push_trace_event(
         &mut trace,
         TraceEventType::StopConditionReached,
-        BTreeMap::from([(
-            "stopReason".to_string(),
-            JsonValue::String(stop_reason.as_str().to_string()),
-        )]),
+        stop_event_data(stop_reason, &child_outputs, &state.usage),
     );
     trace.finished_at_ms = Some(now_ms());
     trace.final_status = stop_reason.trace_status();
@@ -233,10 +275,7 @@ pub(super) fn finalize_failed_run(
     push_trace_event(
         &mut trace,
         TraceEventType::StopConditionReached,
-        BTreeMap::from([(
-            "stopReason".to_string(),
-            JsonValue::String(stop_reason.as_str().to_string()),
-        )]),
+        stop_event_data(stop_reason, &child_outputs, &usage),
     );
     trace.finished_at_ms = Some(now_ms());
     trace.final_status = stop_reason.trace_status();
@@ -321,10 +360,7 @@ pub(super) fn finalize_empty_stop(
     push_trace_event(
         &mut trace,
         TraceEventType::StopConditionReached,
-        BTreeMap::from([(
-            "stopReason".to_string(),
-            JsonValue::String(reason.as_str().to_string()),
-        )]),
+        stop_event_data(reason, &[], &usage),
     );
     trace.finished_at_ms = Some(now_ms());
     trace.final_status = reason.trace_status();
