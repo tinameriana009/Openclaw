@@ -20,6 +20,7 @@ REQUIRED_FILES = [
     REPO_ROOT / 'tests' / 'validate_blender_demo.py',
     REPO_ROOT / 'tests' / 'validate_unreal_demo.py',
     REPO_ROOT / 'tests' / 'validate_repo_analysis_demo.py',
+    RUST_ROOT / 'scripts' / 'run-repo-analysis-demo.sh',
 ]
 
 
@@ -64,6 +65,11 @@ def main() -> int:
         'python3 ../tests/validate_operator_readiness.py',
         'rust/README.md does not mention the operator-readiness validator.',
     )
+    require_contains(
+        readme_text,
+        './scripts/run-repo-analysis-demo.sh',
+        'rust/README.md does not mention the repo-analysis demo runner.',
+    )
 
     for needle in [
         'python3 ../tests/validate_operator_readiness.py',
@@ -80,7 +86,7 @@ def main() -> int:
     workflow_expectations = {
         'blender workflow': (blender_workflow_text, ['does **not** directly run Blender UI interactions for you', 'Validate in Blender manually']),
         'unreal workflow': (unreal_workflow_text, ['does not do today', 'Manual validation loop']),
-        'repo-analysis workflow': (repo_workflow_text, ['Manual validation loop', 'python3 tests/validate_repo_analysis_demo.py']),
+        'repo-analysis workflow': (repo_workflow_text, ['Manual validation loop', 'python3 tests/validate_repo_analysis_demo.py', 'run-repo-analysis-demo.sh', '.demo-artifacts/repo-analysis-demo/']),
     }
     for label, (text, needles) in workflow_expectations.items():
         for needle in needles:
@@ -90,12 +96,18 @@ def main() -> int:
         'scene cleanup demo kit',
         'unreal runtime telemetry demo kit',
         'repo analysis demo kit',
+        'run-repo-analysis-demo.sh',
     ]:
         require_contains(workflow_index_lower, needle, f'Workflow index is missing readiness cue: {needle}')
     require_contains(
         workflow_index_text,
         'Always run the lightweight validators before trusting a showcase',
         'Workflow index is missing the showcase-validator reminder.',
+    )
+    require_contains(
+        workflow_index_text,
+        'best current end-to-end showcase path',
+        'Workflow index does not identify the best current showcase path.',
     )
 
     print('Operator readiness validation passed.')

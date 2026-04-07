@@ -21,7 +21,27 @@ That target is intentionally modest: it is large enough to require real repo ana
 
 ## Suggested command sequence
 
-From `rust/` after building `claw`:
+Fastest realistic path from `rust/` after building `claw`:
+
+```bash
+./scripts/run-repo-analysis-demo.sh
+```
+
+That helper:
+
+- runs the documented onboarding brief against `../src` and `../tests`
+- resumes the same session for the file-path follow-up
+- saves both responses under `.demo-artifacts/repo-analysis-demo/<timestamp>/`
+- prints the next validation/trace-review steps instead of pretending the run is self-certifying
+
+Optional overrides:
+
+```bash
+PROFILE=deep ./scripts/run-repo-analysis-demo.sh
+ARTIFACT_ROOT=/tmp/repo-demo ./scripts/run-repo-analysis-demo.sh
+```
+
+If you prefer the raw commands, they are:
 
 ```bash
 ./target/debug/claw --profile balanced \
@@ -37,7 +57,7 @@ Then tighten the ask:
   prompt "Now produce a file-level handoff note for someone changing the query, runtime, or execution-registry paths. Distinguish facts from inferences."
 ```
 
-If you want a richer reasoning trail, repeat with `--profile deep` or `--profile research`.
+If you want a richer reasoning trail, repeat with `PROFILE=deep` or `PROFILE=research` in the helper, or re-run the raw flow with `--profile deep` / `--profile research`.
 
 ## Validate the output
 

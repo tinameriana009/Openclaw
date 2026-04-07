@@ -20,6 +20,18 @@ This is the strongest current fit for the harness because it combines:
 
 ## Fastest useful start
 
+For the lowest-friction realistic demo path, use the helper wrapper first:
+
+```bash
+cd rust
+cargo build --workspace --locked
+./scripts/run-repo-analysis-demo.sh
+```
+
+That runs the documented two-step prompt flow, resumes the same session for the follow-up, and captures both responses under `.demo-artifacts/repo-analysis-demo/<timestamp>/` for later review.
+
+If you want the raw one-liner instead, use:
+
 ```bash
 cd rust
 ./target/debug/claw --profile balanced \
@@ -30,6 +42,8 @@ cd rust
 If the repository is large or the question is cross-cutting, bump to `deep` or `research`.
 
 If you want a more realistic operator path instead of a generic one-liner, use the repo analysis demo kit:
+
+- helper runner: [`../../rust/scripts/run-repo-analysis-demo.sh`](../../rust/scripts/run-repo-analysis-demo.sh)
 
 - [`../examples/repo-analysis-demo/README.md`](../examples/repo-analysis-demo/README.md)
 - [`../examples/repo-analysis-demo/brief.md`](../examples/repo-analysis-demo/brief.md)

@@ -18,6 +18,9 @@ Strongest current areas:
 - operator/release/trust docs
 - workflow demos for Blender, repo analysis, and Unreal
 
+Best current showcase path:
+- the repo-analysis flow, especially via `./scripts/run-repo-analysis-demo.sh`, because it exercises grounded local analysis, session resume, and trace review without depending on Blender or Unreal manual UI loops
+
 ## What ships today
 
 Operator trust/release docs added for this harness:
@@ -369,6 +372,16 @@ If you want concrete operator playbooks instead of raw command reference, see:
 - [`../docs/workflows/repo-analysis.md`](../docs/workflows/repo-analysis.md)
 
 Those recipes stay within the currently supported harness surface: profiles, local corpus attachment, grounded `/corpus answer ...` flows, sessions, and trace inspection.
+
+If you need one realistic end-to-end demo for an operator review, prefer the repo-analysis kit and run:
+
+```bash
+cd rust
+cargo build --workspace --locked
+./scripts/run-repo-analysis-demo.sh
+```
+
+That wrapper captures outputs into `.demo-artifacts/repo-analysis-demo/` so the review loop is less ephemeral.
 
 ## Minimal operator checklist
 

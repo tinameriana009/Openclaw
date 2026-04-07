@@ -13,6 +13,7 @@ REQUIRED_FILES = [
     DEMO_ROOT / 'trace-review-checklist.md',
     REPO_ROOT / 'docs' / 'workflows' / 'README.md',
     REPO_ROOT / 'docs' / 'workflows' / 'repo-analysis.md',
+    REPO_ROOT / 'rust' / 'scripts' / 'run-repo-analysis-demo.sh',
 ]
 
 
@@ -31,20 +32,22 @@ def main() -> int:
             return 1
 
     readme_text = (DEMO_ROOT / 'README.md').read_text()
-    if 'python3 tests/validate_repo_analysis_demo.py' not in readme_text:
-        print('Repo analysis demo README does not explain how to run validation.')
-        return 1
+    for needle in ['python3 tests/validate_repo_analysis_demo.py', './scripts/run-repo-analysis-demo.sh', '.demo-artifacts/repo-analysis-demo/']:
+        if needle not in readme_text:
+            print(f'Repo analysis demo README is missing required operator cue: {needle}')
+            return 1
 
     workflow_text = (REPO_ROOT / 'docs' / 'workflows' / 'repo-analysis.md').read_text()
-    for needle in ['repo-analysis-demo', 'manual-validation-checklist.md', 'trace-review-checklist.md']:
+    for needle in ['repo-analysis-demo', 'manual-validation-checklist.md', 'trace-review-checklist.md', 'run-repo-analysis-demo.sh', '.demo-artifacts/repo-analysis-demo/']:
         if needle not in workflow_text:
-            print(f'Repo analysis workflow does not mention required demo asset: {needle}')
+            print(f'Repo analysis workflow does not mention required demo asset/operator cue: {needle}')
             return 1
 
     index_text = (REPO_ROOT / 'docs' / 'workflows' / 'README.md').read_text().lower()
-    if 'repo analysis demo kit' not in index_text:
-        print('Workflow index does not mention the repo analysis demo kit.')
-        return 1
+    for needle in ['repo analysis demo kit', 'run-repo-analysis-demo.sh', 'best current end-to-end showcase path']:
+        if needle not in index_text:
+            print(f'Workflow index is missing required showcase cue: {needle}')
+            return 1
 
     print('Repo analysis demo validation passed.')
     return 0

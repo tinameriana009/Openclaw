@@ -61,6 +61,8 @@ Prompt templates live in [`../prompts/`](../prompts/).
 
 Starter example briefs live in [`../examples/`](../examples/).
 
+If you want the best current end-to-end showcase path, start with the repo analysis demo kit and its helper script in `rust/scripts/run-repo-analysis-demo.sh`. It stays closest to what the harness can genuinely do today: grounded local analysis, session resume, and trace review without pretending to drive an external GUI.
+
 If you want one especially concrete operator path, start with one of these demo kits:
 
 ### Blender scene cleanup demo kit
