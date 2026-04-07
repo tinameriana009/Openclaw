@@ -7,9 +7,11 @@ mod sse;
 mod types;
 
 pub use child::{
-    build_provider_child_executor, format_provider_child_init_reason,
+    build_provider_backed_child_executor, build_provider_child_executor,
+    build_provider_extractive_child_executor, format_provider_child_init_reason,
     format_provider_execution_fallback_reason, render_extractive_child_answer,
-    ProviderChildAuthResolver, ProviderChildBackend, ProviderChildExecutor, WebEvidenceCollector,
+    ProviderBackedChildExecutor, ProviderChildAuthResolver, ProviderChildBackend,
+    ProviderChildExecutor, ProviderFallbackRenderer, WebEvidenceCollector,
 };
 pub use client::{
     oauth_token_is_expired, read_base_url, read_xai_base_url, resolve_saved_oauth_token,

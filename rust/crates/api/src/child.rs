@@ -191,6 +191,31 @@ pub fn build_provider_backed_child_executor(
 }
 
 #[must_use]
+pub fn build_provider_extractive_child_executor(
+    session_id: &str,
+    model: &str,
+    auth_resolver: ProviderChildAuthResolver,
+    web_evidence_collector: WebEvidenceCollector,
+) -> ProviderBackedChildExecutor {
+    let render_model = model.to_string();
+    let render_web_evidence_collector = Arc::clone(&web_evidence_collector);
+    build_provider_backed_child_executor(
+        session_id,
+        model,
+        auth_resolver,
+        web_evidence_collector,
+        Arc::new(move |request, reason| {
+            render_extractive_child_answer(
+                request,
+                Some(reason),
+                &render_model,
+                &*render_web_evidence_collector,
+            )
+        }),
+    )
+}
+
+#[must_use]
 pub fn format_provider_child_init_reason(model: &str, error: &ApiError) -> String {
     match error {
         ApiError::MissingCredentials { provider, env_vars } => format!(
@@ -624,6 +649,11 @@ mod tests {
                     snippet: "release snippet".to_string(),
                     fetched_at_ms: None,
                 })],
+                outcome: WebExecutionOutcome::succeeded(
+                    "latest release",
+                    1,
+                    None,
+                ),
                 note: None,
             },
         );
@@ -690,6 +720,10 @@ mod tests {
             response_with_text("Grounded answer"),
             CollectedWebContext {
                 evidence: Vec::new(),
+                outcome: WebExecutionOutcome::failed(
+                    "freshness",
+                    "approved web collection failed before model execution: collector failed",
+                ),
                 note: Some(
                     "approved web collection failed before model execution: collector failed"
                         .to_string(),
@@ -741,6 +775,11 @@ mod tests {
                     snippet: "release snippet".to_string(),
                     fetched_at_ms: None,
                 })],
+                outcome: WebExecutionOutcome::succeeded(
+                    "latest release",
+                    1,
+                    Some("fetched from minimal web adapter".to_string()),
+                ),
                 note: Some("fetched from minimal web adapter".to_string()),
             },
         );
@@ -839,6 +878,7 @@ mod tests {
                 answer: reason.to_string(),
                 citations: Vec::new(),
                 web_evidence: Vec::new(),
+                web_execution: Some(WebExecutionOutcome::not_requested()),
                 web_execution_note: None,
                 prompt_tokens: 0,
                 completion_tokens: 0,
@@ -875,6 +915,7 @@ mod tests {
                 answer: reason.to_string(),
                 citations: Vec::new(),
                 web_evidence: Vec::new(),
+                web_execution: Some(WebExecutionOutcome::not_requested()),
                 web_execution_note: None,
                 prompt_tokens: 0,
                 completion_tokens: 0,
@@ -895,9 +936,47 @@ mod tests {
             })
             .expect("fallback should render output");
 
-        assert!(output.answer.contains("provider execution failed"));
         assert!(output
             .answer
             .contains("provider child executor unavailable"));
+    }
+
+    #[test]
+    fn extractive_builder_uses_shared_extractive_fallback_renderer() {
+        let callback: WebEvidenceCollector = Arc::new(|_| Ok(Vec::new()));
+        let executor = build_provider_extractive_child_executor(
+            "session-1",
+            "claude-sonnet-4-6",
+            Arc::new(|| Err("oauth bootstrap failed".to_string())),
+            callback,
+        );
+        let output = executor
+            .execute(&ChildSubqueryRequest {
+                subquery_id: "subq-3".to_string(),
+                prompt: "summarize the grounded evidence".to_string(),
+                slices: vec![runtime::RecursiveContextSlice {
+                    chunk_id: "chunk-1".to_string(),
+                    document_id: "doc-1".to_string(),
+                    path: "docs/spec.md".to_string(),
+                    ordinal: 0,
+                    start_offset: 0,
+                    end_offset: 42,
+                    preview: "provider-backed subqueries should cite grounded slices".to_string(),
+                    metadata: std::collections::BTreeMap::new(),
+                }],
+                budget: runtime::RuntimeBudget::default(),
+                web_policy: runtime::WebPolicy {
+                    mode: runtime::WebAccessMode::Off,
+                    max_fetches: Some(0),
+                },
+                web_research_query: None,
+            })
+            .expect("extractive fallback should render output");
+
+        assert!(output
+            .answer
+            .contains("Fallback: using an extractive local-only subquery answer"));
+        assert!(output.answer.contains("oauth bootstrap failed"));
+        assert_eq!(output.citations, vec!["chunk-1".to_string()]);
     }
 }

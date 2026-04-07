@@ -24,12 +24,12 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use api::{
-    format_provider_child_init_reason, format_provider_execution_fallback_reason,
+    build_provider_extractive_child_executor, format_provider_child_init_reason,
     render_extractive_child_answer, resolve_startup_auth_source, AnthropicClient, ApiError,
     AuthSource, ContentBlockDelta, InputContentBlock, InputMessage, MessageRequest,
-    MessageResponse, OutputContentBlock, PromptCache, ProviderChildAuthResolver,
-    ProviderChildBackend, ProviderClient, StreamEvent as ApiStreamEvent, ToolChoice,
-    ToolDefinition, ToolResultContentBlock, WebEvidenceCollector,
+    MessageResponse, OutputContentBlock, PromptCache, ProviderChildAuthResolver, ProviderClient,
+    StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition, ToolResultContentBlock,
+    WebEvidenceCollector,
 };
 
 use commands::{
@@ -1446,47 +1446,24 @@ fn run_corpus_command(
     Err("unsupported /corpus usage; try /corpus, /corpus attach <path>, /corpus search [<corpus-id> ::] <query>, /corpus answer [<corpus-id> ::] <query>, /corpus inspect <id>, or /corpus slice [<corpus-id> ::] <chunk-id>".into())
 }
 
-struct CorpusAnswerExecutor {
-    backend: runtime::FallbackChildSubqueryExecutor<ProviderChildBackend>,
-}
-
-impl CorpusAnswerExecutor {
-    fn from_runtime_config(
-        cwd: &Path,
-        session_id: Option<&str>,
-        active_model: Option<&str>,
-    ) -> Self {
-        let resolved_model = resolve_corpus_answer_model(cwd, active_model);
-        let backend =
-            build_corpus_answer_backend(session_id.unwrap_or("corpus-cli"), &resolved_model);
-        let model = backend.model().to_string();
-        let unavailable_reason = backend.unavailable_reason().map(ToOwned::to_owned);
-        Self {
-            backend: runtime::FallbackChildSubqueryExecutor::new(
-                backend,
-                model.clone(),
-                Arc::new(move || unavailable_reason.clone()),
-                Arc::new(format_provider_execution_fallback_reason),
-                Arc::new(move |request, reason| {
-                    render_extractive_child_answer(
-                        request,
-                        Some(reason),
-                        &model,
-                        &collect_minimal_web_evidence,
-                    )
-                }),
-            ),
-        }
-    }
-}
-
-impl runtime::ChildSubqueryExecutor for CorpusAnswerExecutor {
-    fn execute(
-        &self,
-        request: &runtime::ChildSubqueryRequest,
-    ) -> Result<runtime::ChildSubqueryOutput, runtime::RecursiveRuntimeError> {
-        self.backend.execute(request)
-    }
+fn build_corpus_answer_executor(
+    cwd: &Path,
+    session_id: Option<&str>,
+    active_model: Option<&str>,
+) -> api::ProviderBackedChildExecutor {
+    let resolved_model = resolve_corpus_answer_model(cwd, active_model);
+    let web_evidence_collector: WebEvidenceCollector = Arc::new(collect_minimal_web_evidence);
+    let auth_resolver: ProviderChildAuthResolver = Arc::new(|| {
+        resolve_cli_auth_source()
+            .map(Some)
+            .map_err(|error| error.to_string())
+    });
+    build_provider_extractive_child_executor(
+        session_id.unwrap_or("corpus-cli"),
+        &resolved_model,
+        auth_resolver,
+        web_evidence_collector,
+    )
 }
 
 fn run_corpus_answer(
@@ -1509,7 +1486,7 @@ fn run_corpus_answer(
     );
     let runtime = runtime::RecursiveConversationRuntime::new(
         &manifest,
-        CorpusAnswerExecutor::from_runtime_config(cwd, session_id, active_model),
+        build_corpus_answer_executor(cwd, session_id, active_model),
     );
     let result = runtime.run_with_tracer_and_policy(
         session_id.unwrap_or("corpus-cli"),
@@ -1569,21 +1546,6 @@ fn resolve_corpus_answer_model(cwd: &Path, active_model: Option<&str>) -> String
             .unwrap_or(DEFAULT_MODEL),
     )
     .to_string()
-}
-
-fn build_corpus_answer_backend(session_id: &str, model: &str) -> ProviderChildBackend {
-    let web_evidence_collector: WebEvidenceCollector = Arc::new(collect_minimal_web_evidence);
-    let auth_resolver: ProviderChildAuthResolver = Arc::new(|| {
-        resolve_cli_auth_source()
-            .map(Some)
-            .map_err(|error| error.to_string())
-    });
-    ProviderChildBackend::build_with_resolver(
-        session_id,
-        model,
-        auth_resolver,
-        web_evidence_collector,
-    )
 }
 
 fn collect_minimal_web_evidence(
