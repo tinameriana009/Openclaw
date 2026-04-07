@@ -72,10 +72,12 @@ Success criteria:
 Current state:
 - local RAG works and is one of the strongest current features
 - lexical retrieval will eventually limit quality on large/symbol-heavy tasks
+- recent work added schemaVersion-aware artifact direction and early chunk-neighbor retrieval priority as the next practical retrieval lift
 
 Next step:
 - add better multi-corpus UX/reporting
 - improve ranking explanations and skip telemetry
+- add chunk-neighbor retrieval / sibling expansion for better context continuity
 - investigate hybrid retrieval (lexical + semantic)
 - eventually add symbol-aware or structure-aware retrieval for code workflows
 

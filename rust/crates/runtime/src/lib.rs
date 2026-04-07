@@ -65,7 +65,7 @@ pub use hybrid::{
     normalize_local_evidence, summarize_local_evidence, web_evidence_trace_event,
     EscalationHeuristicInput, EscalationOutcome, EscalationReason, EvidenceKind, EvidenceRecord,
     HybridExecutionContext, LocalEvidenceSummary, WebAccessDecision, WebAccessMode,
-    WebEvidenceInput, WebPolicy,
+    WebEvidenceInput, WebExecutionOutcome, WebExecutionStatus, WebPolicy,
 };
 pub use mcp::{
     mcp_server_signature, mcp_tool_name, mcp_tool_prefix, normalize_name_for_mcp,

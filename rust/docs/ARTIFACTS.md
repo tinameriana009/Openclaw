@@ -9,7 +9,7 @@ Current operator-relevant artifact locations:
 - `.claw/trace/` — recursive trace ledgers
 - `.claw/telemetry/recursive-runtime.jsonl` — recursive runtime telemetry stream
 - `.claw/sessions/` — saved local sessions
-- `.claw/corpus/` — persisted corpus manifests
+- `.claw/corpora/` — persisted corpus manifests
 
 These files are useful for inspection, debugging, evaluation, and incident review.
 
@@ -29,12 +29,34 @@ Practical rule:
 - **Human inspection and internal tooling:** reasonable today
 - **Strict third-party parsers:** pin to a tagged version / commit and validate defensively
 
+## Artifact envelope metadata
+
+Trace ledgers and corpus manifests now carry a lightweight envelope:
+
+- `artifactKind` — identifies the artifact family (`claw.trace-ledger` or `claw.corpus-manifest`)
+- `schemaVersion` — artifact-specific schema version
+- `compatVersion` — coarse compatibility line for operator tooling
+
+Current values in `0.1.0`:
+
+- traces: `artifactKind=claw.trace-ledger`, `schemaVersion=1`, `compatVersion=0.1`
+- corpora: `artifactKind=claw.corpus-manifest`, `schemaVersion=1`, `compatVersion=0.1`
+
+Reader behavior today:
+
+- current runtime writes the envelope fields for new trace/corpus artifacts
+- current runtime still reads older unversioned trace/corpus JSON defensively
+- missing envelope fields should be interpreted as legacy local artifacts, not as proof of corruption
+
 ## Trace ledgers
 
 Trace ledgers are saved as JSON objects under `.claw/trace/`.
 
 From `runtime/src/trace.rs`, the top-level ledger currently contains:
 
+- `artifactKind`
+- `schemaVersion`
+- `compatVersion`
 - `traceId`
 - `sessionId`
 - `rootTaskId`
@@ -72,10 +94,13 @@ A trace ledger is a **structured event log**, not raw hidden chain-of-thought. I
 
 ## Corpus manifests
 
-Corpus manifests are saved as JSON objects under `.claw/corpus/`.
+Corpus manifests are saved as JSON objects under `.claw/corpora/`.
 
 Current top-level fields from `runtime/src/corpus.rs`:
 
+- `artifactKind`
+- `schemaVersion`
+- `compatVersion`
 - `corpusId`
 - `roots`
 - `kind`
@@ -83,6 +108,8 @@ Current top-level fields from `runtime/src/corpus.rs`:
 - `documentCount`
 - `chunkCount`
 - `estimatedBytes`
+- `rootSummaries`
+- `skipSummary`
 - `documents`
 
 Document records currently include:
@@ -140,16 +167,20 @@ They should not yet be treated as a durable public interchange format.
 
 ## Compatibility guidance
 
-Until explicit schema-version fields are introduced, the safest compatibility anchor is:
+The safest compatibility anchor is still:
 
 1. the git tag or commit
 2. the workspace version in `rust/Cargo.toml`
-3. defensive parsing that ignores unknown fields
+3. the artifact envelope (`artifactKind`, `schemaVersion`, `compatVersion`)
+4. defensive parsing that ignores unknown fields
 
 If you are building automation around `.claw/` artifacts, prefer this approach:
 
 - pin to a known release/tag
 - validate required keys
+- verify `artifactKind` before deeper parsing
+- branch on `schemaVersion` if you need strict logic
+- use `compatVersion` for coarse operator expectations
 - ignore additive keys
 - fail clearly on missing required keys or type changes
 
@@ -157,9 +188,9 @@ If you are building automation around `.claw/` artifacts, prefer this approach:
 
 Useful future upgrades that are **not** implemented yet:
 
-- explicit `schemaVersion` fields on trace and corpus artifacts
 - dedicated migration notes for session formats
 - stable machine-readable release manifests
+- built-in redaction or export-scrubbing helpers
 - signed release artifacts or packaged binaries
 
 Until then, use tagged builds and this document together as the practical trust boundary.

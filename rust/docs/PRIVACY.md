@@ -38,7 +38,8 @@ The safest sharing pattern is:
 1. start from the saved trace ledger
 2. redact path/content identifiers as needed
 3. include the workspace version / commit
-4. attach a short reproduction note instead of a whole session dump when possible
+4. include the trace `artifactKind`, `schemaVersion`, and `compatVersion` when relevant
+5. attach a short reproduction note instead of a whole session dump when possible
 
 ## Telemetry file handling
 
@@ -54,6 +55,13 @@ Corpus manifests can expose:
 - chunk previews
 
 That makes them especially sensitive on private repos or note collections.
+
+When sharing a manifest excerpt, prefer this order:
+
+1. keep the envelope fields (`artifactKind`, `schemaVersion`, `compatVersion`)
+2. keep only the minimum structural keys needed to explain the issue
+3. redact or replace `roots`, `path`, `headings`, previews, and free-text metadata where possible
+4. say whether the excerpt came from a private repo, docs tree, or notes corpus
 
 ## Recommended bug-report bundle
 

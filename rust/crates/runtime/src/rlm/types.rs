@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::budget::{BudgetStopReason, RuntimeBudget, RuntimeBudgetUsage};
 use crate::corpus::{CorpusManifest, RetrievalResult};
-use crate::hybrid::{EscalationOutcome, EvidenceRecord, WebPolicy};
+use crate::hybrid::{EscalationOutcome, EvidenceRecord, WebExecutionOutcome, WebPolicy};
 use crate::json::JsonValue;
 use crate::trace::{TraceFinalStatus, TraceLedger};
 
@@ -138,6 +138,7 @@ pub struct ChildSubqueryOutput {
     pub answer: String,
     pub citations: Vec<String>,
     pub web_evidence: Vec<EvidenceRecord>,
+    pub web_execution: Option<WebExecutionOutcome>,
     pub web_execution_note: Option<String>,
     pub prompt_tokens: u32,
     pub completion_tokens: u32,

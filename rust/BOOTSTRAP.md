@@ -108,6 +108,7 @@ Trace-enabled runs write artifacts under `.claw/`:
 
 - `.claw/trace/`
 - `.claw/telemetry/recursive-runtime.jsonl`
+- `.claw/corpora/`
 - `.claw/sessions/`
 
 Recommended path:
