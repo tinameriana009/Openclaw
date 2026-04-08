@@ -63,6 +63,17 @@ When sharing a manifest excerpt, prefer this order:
 3. redact or replace `roots`, `path`, `headings`, previews, and free-text metadata where possible
 4. say whether the excerpt came from a private repo, docs tree, or notes corpus
 
+## Release manifest sharing
+
+`.claw/release-artifacts/release-manifest.json` is safer to share than raw trace/corpus artifacts because it only records hash/byte metadata for the current binary/docs plus git/toolchain context. Even so, it can still reveal:
+
+- the exact commit hash
+- current branch naming
+- whether the tree was dirty when generated
+- the local release surfaces you chose to include
+
+For public bug reports, keep `artifactKind`, `schemaVersion`, `compatVersion`, artifact hashes, and workspace version, but consider redacting branch names if they expose private workflow details.
+
 ## Recommended bug-report bundle
 
 If you need to report a trace/runtime issue to another maintainer, prefer this bundle order:

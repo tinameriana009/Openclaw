@@ -10,6 +10,7 @@ Current operator-relevant artifact locations:
 - `.claw/telemetry/recursive-runtime.jsonl` — recursive runtime telemetry stream
 - `.claw/sessions/` — saved local sessions
 - `.claw/corpora/` — persisted corpus manifests
+- `.claw/release-artifacts/release-manifest.json` — machine-readable release/build artifact manifest for the current verified workspace
 
 These files are useful for inspection, debugging, evaluation, and incident review.
 
@@ -152,6 +153,37 @@ JSONL consumers should:
 - read line-by-line
 - ignore unknown fields
 - tolerate future event additions
+
+## Release artifact manifest
+
+`./scripts/generate-release-artifact-manifest.sh` writes `.claw/release-artifacts/release-manifest.json`.
+
+Its current purpose is modest but useful: after a fresh local build, it records the current workspace version, required toolchain, git commit/branch/dirty state, and SHA-256/byte metadata for the key operator-facing release artifacts:
+
+- `target/debug/claw`
+- `README.md`
+- `RELEASE.md`
+- `CHANGELOG.md`
+- `docs/ARTIFACTS.md`
+- `docs/PRIVACY.md`
+- `docs/RELEASE_CANDIDATE.md`
+- `scripts/release-verify.sh`
+
+Envelope fields:
+
+- `artifactKind=claw.release-manifest`
+- `schemaVersion=1`
+- `compatVersion=0.1`
+
+Validation path:
+
+```bash
+cd rust
+manifest_path=$(./scripts/generate-release-artifact-manifest.sh)
+python3 ../tests/validate_release_artifact_manifest.py "$manifest_path"
+```
+
+This is **not** signed provenance and it is **not** a packaged binary release format. It is a bounded trust aid: "these are the exact local release surfaces I just built and verified." That is better than source-only trust, but still intentionally short of a full artifact attestation system.
 
 ## Sessions
 

@@ -37,10 +37,11 @@ For RCs, do not leave `Compatibility or migration notes` blank. If nothing chang
 - Backward-compatible readers and regression tests so current builds still accept older unversioned trace/corpus artifacts.
 - Release-candidate discipline in `rust/scripts/release-verify.sh` via `RELEASE_CANDIDATE=1`, including clean-tree enforcement and explicit RC reminders.
 - Stronger artifact trust/privacy notes covering compatibility anchors and redaction-safe sharing.
+- A machine-readable release artifact manifest (`.claw/release-artifacts/release-manifest.json`) plus a verifier that re-hashes the current binary and trust/release docs.
 
 ### Changed
-- `rust/RELEASE.md` now distinguishes ordinary verification from stricter RC verification and documents the current migration baseline more honestly.
-- `rust/docs/ARTIFACTS.md` now documents the artifact envelope and the recommended parsing strategy for pre-1.0 automation.
+- `rust/RELEASE.md` now distinguishes ordinary verification from stricter RC verification, documents the current migration baseline more honestly, and includes the release-manifest generation/validation step.
+- `rust/docs/ARTIFACTS.md` now documents the artifact envelope, the recommended parsing strategy for pre-1.0 automation, and the bounded release-manifest contract.
 - `rust/docs/PRIVACY.md` now recommends preserving only envelope metadata while redacting sensitive path/content details from shared bug reports.
 
 ### Fixed

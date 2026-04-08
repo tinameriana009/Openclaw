@@ -15,6 +15,8 @@ REQUIRED_FILES = [
     RUST_ROOT / 'docs' / 'PRIVACY.md',
     RUST_ROOT / 'docs' / 'RELEASE_CANDIDATE.md',
     RUST_ROOT / 'scripts' / 'release-verify.sh',
+    RUST_ROOT / 'scripts' / 'generate-release-artifact-manifest.sh',
+    REPO_ROOT / 'tests' / 'validate_release_artifact_manifest.py',
 ]
 
 
@@ -69,6 +71,16 @@ def main() -> int:
         verify_text,
         'python3 ../tests/validate_release_candidate_readiness.py',
         'release-verify.sh does not run the RC readiness validator.',
+    )
+    require_contains(
+        verify_text,
+        './scripts/generate-release-artifact-manifest.sh',
+        'release-verify.sh does not generate a machine-readable release artifact manifest.',
+    )
+    require_contains(
+        verify_text,
+        'python3 ../tests/validate_release_artifact_manifest.py',
+        'release-verify.sh does not validate the generated release artifact manifest.',
     )
 
     for text, label in [

@@ -113,6 +113,10 @@ if missing:
 print('docs/ARTIFACTS.md mentions artifactKind/schemaVersion/compatVersion')
 PY
 
+manifest_path=$(./scripts/generate-release-artifact-manifest.sh)
+echo "release manifest: $manifest_path"
+python3 ../tests/validate_release_artifact_manifest.py "$manifest_path"
+
 if [[ "$release_candidate" == "1" ]]; then
   echo
   printf '== RC reminders ==\n'
