@@ -346,16 +346,16 @@ mod tests {
 
     #[test]
     fn search_hit_parser_decodes_duckduckgo_redirects() {
-        let html = r#"<a class=\"result__a\" href=\"//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.test%2Frelease\">Example Release</a>"#;
+        let html = r#"<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.test%2Frelease">Example Release</a>"#;
         let hits = extract_search_hits(html);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].title, "Example Release");
-        assert_eq!(hits[0].url, "https%3A%2F%2Fexample.test%2Frelease");
+        assert_eq!(hits[0].url, "https://example.test/release");
     }
 
     #[test]
     fn generic_link_parser_collects_absolute_urls() {
-        let html = r#"<a href=\"https://example.test/docs\">Docs</a>"#;
+        let html = r#"<a href="https://example.test/docs">Docs</a>"#;
         let hits = extract_search_hits_from_generic_links(html);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].url, "https://example.test/docs");

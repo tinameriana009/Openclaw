@@ -1712,7 +1712,7 @@ mod tests {
         assert!(result.final_answer.contains("[W1] Example release notes"));
         assert!(result
             .final_answer
-            .contains("Web execution summary: approved subqueries=1"));
+            .contains("Web execution summary: web-aware subqueries=1, approved subqueries=1"));
         assert!(result
             .trace
             .events

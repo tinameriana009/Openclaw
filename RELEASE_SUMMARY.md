@@ -25,6 +25,7 @@ It is no longer just a parity snapshot. The fork now includes substantial additi
 - less CLI-owned duplication
 - shared provider extractive child executor builder moved into the `api` crate
 - model resolution and bounded minimal web-evidence shaping were pushed further into shared `api` helpers
+- auth resolution and default bounded web adapter paths were pushed further into shared `api` helpers
 - better fallback messaging and backend availability reporting
 
 ### Local corpus RAG
@@ -34,23 +35,26 @@ It is no longer just a parity snapshot. The fork now includes substantial additi
 - root-aware retrieval provenance
 - per-root disambiguation for same-named files
 - symbol-aware query heuristics for code-heavy and multi-root retrieval
+- bounded semantic and structure-aware query signals for common repo/docs vocabulary
 - skip telemetry / per-root reporting improvements
 
 ### Web-aware behavior
 - explicit web execution completion events in traces
 - richer web counters/telemetry
 - child execution path now handles approved web evidence more honestly
+- ask-mode now preserves approval-required web query provenance more explicitly
 - degraded web collection is surfaced as explicit notes instead of silent failure or overclaiming
 - fetch-state-aware provenance distinguishes fetched pages from search-result snippets
-- final-answer web execution summaries are more honest
+- final-answer web execution summaries are more honest and more detailed
 - provenance handling is stronger
 
 ### Operator / product surface
 - stronger root and Rust README docs
 - bootstrap / quickstart guidance
-- release/trust docs (`CHANGELOG`, `RELEASE`, `ARTIFACTS`, `PRIVACY`)
+- release/trust docs (`CHANGELOG`, `RELEASE`, `ARTIFACTS`, `PRIVACY`, `RELEASE_CANDIDATE`)
 - production-readiness planning docs, checklist, scorecard, and implementation plan
-- domain workflow docs, prompt templates, demo kits, lightweight readiness validators, and a runnable repo-analysis showcase helper
+- stronger RC-readiness validation in tests and release verification flow
+- domain workflow docs, prompt templates, demo kits, lightweight readiness validators, a runnable repo-analysis showcase helper, and honest Blender/Unreal prep helpers
 
 ### Showcase workflows
 - Blender scene cleanup demo kit

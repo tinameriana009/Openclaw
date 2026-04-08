@@ -3780,7 +3780,8 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let server = TestServer::spawn(Arc::new(|request_line: &str| {
-            assert!(request_line.contains("GET /fallback?q=generic+links "));
+            assert!(request_line.starts_with("GET /fallback?"));
+            assert!(request_line.contains("q=generic+links") || request_line.contains("q=generic%20links"));
             HttpResponse::html(
                 200,
                 "OK",

@@ -25,7 +25,7 @@ Move the repository from **disciplined alpha** toward a more genuinely productio
 ### A. Make child execution runtime-native
 Current state:
 - provider-backed child execution exists and is materially better
-- shared `api` helpers now own more model resolution and bounded minimal web-evidence shaping
+- shared `api` helpers now own more model resolution, auth resolution, and bounded minimal web-evidence shaping
 - too much of the remaining behavior still lives in CLI-specific code
 
 Next step:
@@ -40,7 +40,7 @@ Success criteria:
 ### B. Add real web executor integration
 Current state:
 - web policy/provenance/escalation handling is much better
-- fetch-state-aware provenance and degraded-path notes are now substantially more honest
+- fetch-state-aware provenance, approval-required query preservation, and degraded-path notes are now substantially more honest
 - no full end-to-end web executor path is mature yet
 
 Next step:
@@ -75,7 +75,7 @@ Success criteria:
 Current state:
 - local RAG works and is one of the strongest current features
 - lexical retrieval will eventually limit quality on large/symbol-heavy tasks
-- recent work added schemaVersion-aware artifact direction, chunk-neighbor retrieval, root-aware provenance, and symbol-aware query heuristics as practical retrieval lifts
+- recent work added schemaVersion-aware artifact direction, chunk-neighbor retrieval, root-aware provenance, symbol-aware query heuristics, and bounded semantic/language-intent signals as practical retrieval lifts
 
 Next step:
 - add better multi-corpus UX/reporting
@@ -95,6 +95,7 @@ Success criteria:
 Current state:
 - repo analysis is now the best current runnable end-to-end showcase path
 - Blender still remains the strongest domain-specific alpha demo
+- Blender and Unreal now also have honest prep helpers for repeatable operator handoff
 - docs, prompt templates, example brief, and demo kit exist
 
 Next step:
