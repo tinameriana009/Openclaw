@@ -21,6 +21,10 @@ Strongest current areas:
 Best current showcase path:
 - the repo-analysis flow, especially via `./scripts/run-repo-analysis-demo.sh`, because it exercises grounded local analysis, session resume, and trace review without depending on Blender or Unreal manual UI loops
 
+Most realistic operator-prep helpers for the more manual workflows:
+- `./scripts/prepare-blender-demo.sh` validates the Blender demo kit, rebuilds the zip artifact, and stages a manual-review bundle under `.demo-artifacts/blender-demo/`
+- `./scripts/prepare-unreal-demo.sh` validates the Unreal demo kit and stages a plugin/checklist bundle under `.demo-artifacts/unreal-demo/`
+
 ## What ships today
 
 Operator trust/release docs added for this harness:
@@ -380,6 +384,16 @@ If you want concrete operator playbooks instead of raw command reference, see:
 - [`../docs/workflows/repo-analysis.md`](../docs/workflows/repo-analysis.md)
 
 Those recipes stay within the currently supported harness surface: profiles, local corpus attachment, grounded `/corpus answer ...` flows, sessions, and trace inspection.
+
+If you need honest prep helpers for the more operator-heavy demos, run one of these first:
+
+```bash
+cd rust
+./scripts/prepare-blender-demo.sh
+./scripts/prepare-unreal-demo.sh
+```
+
+Those helpers validate and stage demo bundles; they do not drive Blender or Unreal for you.
 
 If you need one realistic end-to-end demo for an operator review, prefer the repo-analysis kit and run:
 

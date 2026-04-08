@@ -109,6 +109,15 @@ Before handing the demo kit to someone else or asking the model to extend it, co
 python3 tests/validate_unreal_demo.py
 ```
 
+If you want a staged operator bundle instead of copying files by hand, use:
+
+```bash
+cd rust
+./scripts/prepare-unreal-demo.sh
+```
+
+That helper validates the demo kit and stages a review bundle under `.demo-artifacts/unreal-demo/` with the plugin skeleton, checklists, and an operator findings template.
+
 That only checks static coherence. It does **not** launch Unreal or compile the plugin.
 
 ### 6) Inspect trace artifacts when decisions matter

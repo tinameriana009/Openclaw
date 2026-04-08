@@ -74,6 +74,14 @@ def main() -> int:
     if 'python3 tests/validate_unreal_demo.py' not in readme_text:
         print('Unreal demo README does not explain how to run validation.')
         return 1
+    if 'prepare-unreal-demo.sh' not in readme_text or '.demo-artifacts/unreal-demo/' not in readme_text:
+        print('Unreal demo README does not mention the prep helper and staged artifact path.')
+        return 1
+
+    rust_readme_text = (REPO_ROOT / 'rust' / 'README.md').read_text()
+    if './scripts/prepare-unreal-demo.sh' not in rust_readme_text:
+        print('rust/README.md does not mention the Unreal demo prep helper.')
+        return 1
 
     workflow_text = (REPO_ROOT / 'docs' / 'workflows' / 'unreal-plugin.md').read_text()
     for needle in [

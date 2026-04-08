@@ -70,6 +70,7 @@ If you want one especially concrete operator path, start with one of these demo 
 - [`../examples/blender-scene-cleanup-demo/README.md`](../examples/blender-scene-cleanup-demo/README.md)
 - [`../examples/blender-scene-cleanup-demo/brief.md`](../examples/blender-scene-cleanup-demo/brief.md)
 - [`../examples/blender-scene-cleanup-demo/manual-test-checklist.md`](../examples/blender-scene-cleanup-demo/manual-test-checklist.md)
+- prep helper: `../../rust/scripts/prepare-blender-demo.sh`
 
 ### Repo analysis demo kit
 
@@ -84,6 +85,7 @@ If you want one especially concrete operator path, start with one of these demo 
 - [`../examples/unreal-runtime-telemetry-demo/brief.md`](../examples/unreal-runtime-telemetry-demo/brief.md)
 - [`../examples/unreal-runtime-telemetry-demo/manual-validation-checklist.md`](../examples/unreal-runtime-telemetry-demo/manual-validation-checklist.md)
 - [`../examples/unreal-runtime-telemetry-demo/trace-review-checklist.md`](../examples/unreal-runtime-telemetry-demo/trace-review-checklist.md)
+- prep helper: `../../rust/scripts/prepare-unreal-demo.sh`
 
 ## Quick validation commands
 

@@ -103,6 +103,15 @@ python3 tests/validate_blender_demo.py
 python3 docs/examples/blender-scene-cleanup-demo/tools/package_demo_addon.py
 ```
 
+If you want a staged operator bundle instead of running those steps manually, use:
+
+```bash
+cd rust
+./scripts/prepare-blender-demo.sh
+```
+
+That helper validates the demo kit, rebuilds the installable zip, and stages a review bundle under `.demo-artifacts/blender-demo/` with the checklist, baseline, and an operator findings template.
+
 This still does **not** validate behavior in Blender, but it catches missing files, broken Python syntax, and packaging regressions early.
 
 ### 6) Validate in Blender manually against a baseline

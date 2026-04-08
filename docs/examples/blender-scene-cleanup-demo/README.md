@@ -50,11 +50,12 @@ Then continue with narrower prompts such as:
 2. Read `validation-baseline.md` so you know what a correct scan should roughly report.
 3. Run `python3 tests/validate_blender_demo.py` to confirm the local kit is intact.
 4. Optionally build an installable zip with `python3 docs/examples/blender-scene-cleanup-demo/tools/package_demo_addon.py`.
-5. Install the zipped or copied add-on in Blender.
-6. Follow `manual-test-checklist.md` against a disposable scene.
-7. Feed any traceback, confusing UI wording, or mismatched counts back into the next prompt.
+5. If you want a cleaner handoff bundle, run `cd rust && ./scripts/prepare-blender-demo.sh` to stage artifacts under `.demo-artifacts/blender-demo/`.
+6. Install the zipped or copied add-on in Blender.
+7. Follow `manual-test-checklist.md` against a disposable scene.
+8. Feed any traceback, confusing UI wording, or mismatched counts back into the next prompt.
 
-That sequence gives you a more convincing first-run story: corpus → plan → static validation → installable artifact → manual Blender validation.
+That sequence gives you a more convincing first-run story: corpus → plan → static validation → installable artifact → staged operator bundle → manual Blender validation.
 
 ## Lightweight local validation
 

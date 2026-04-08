@@ -58,11 +58,12 @@ Then continue with narrower asks such as:
 2. Run `python3 tests/validate_unreal_demo.py` to confirm the local demo kit is intact.
 3. Compare the plugin skeleton against `expected-findings.md` so you know what a grounded answer should recover.
 4. Use `claw` with the demo corpus attached to ask for the architecture or next implementation slice.
-5. Copy the plugin into a disposable Unreal project or compare it against an existing plugin repo.
-6. Follow `manual-validation-checklist.md` for the real compile/editor/runtime loop.
-7. Feed any compiler error, reflection issue, missing module dependency, or confusing operator step back into the next prompt.
+5. If you want a cleaner handoff bundle, run `cd rust && ./scripts/prepare-unreal-demo.sh` to stage artifacts under `.demo-artifacts/unreal-demo/`.
+6. Copy the plugin into a disposable Unreal project or compare it against an existing plugin repo.
+7. Follow `manual-validation-checklist.md` for the real compile/editor/runtime loop.
+8. Feed any compiler error, reflection issue, missing module dependency, or confusing operator step back into the next prompt.
 
-That path is intentionally honest: corpus → plan → static validation → human build/editor validation → evidence-driven follow-up.
+That path is intentionally honest: corpus → plan → static validation → staged operator bundle → human build/editor validation → evidence-driven follow-up.
 
 ## Lightweight local validation
 

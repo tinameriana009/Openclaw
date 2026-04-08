@@ -70,12 +70,20 @@ def main() -> int:
         print('Workflow index does not mention the scene cleanup demo kit.')
         return 1
 
+    rust_readme_text = (REPO_ROOT / 'rust' / 'README.md').read_text()
+    if './scripts/prepare-blender-demo.sh' not in rust_readme_text:
+        print('rust/README.md does not mention the Blender demo prep helper.')
+        return 1
+
+    readme_text = (DEMO_ROOT / 'README.md').read_text()
+    if 'prepare-blender-demo.sh' not in readme_text or '.demo-artifacts/blender-demo/' not in readme_text:
+        print('Demo README does not mention the Blender prep helper and staged artifact path.')
+        return 1
+
     checklist_text = (DEMO_ROOT / 'manual-test-checklist.md').read_text()
     if 'duplicate materials = `1`' not in checklist_text or 'unapplied transforms = `3`' not in checklist_text:
         print('Manual checklist does not contain the expected validation counts.')
         return 1
-
-    readme_text = (DEMO_ROOT / 'README.md').read_text()
     if 'python3 tests/validate_blender_demo.py' not in readme_text:
         print('Demo README does not explain how to run validation.')
         return 1
