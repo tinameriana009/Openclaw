@@ -173,6 +173,7 @@ struct QueryIntent {
     implementation_lookup: bool,
     docs_lookup: bool,
     continuity_lookup: bool,
+    explanatory_lookup: bool,
     root_hint_tokens: Vec<String>,
 }
 
@@ -881,6 +882,13 @@ pub fn search_corpus_manifest(
                 .unwrap_or_default()
                 .to_ascii_lowercase();
             let preview_lower = chunk.text_preview.to_ascii_lowercase();
+            let chunk_heading = chunk
+                .metadata
+                .get("heading")
+                .and_then(JsonValue::as_str)
+                .unwrap_or_default();
+            let chunk_heading_lower = chunk_heading.to_ascii_lowercase();
+            let normalized_chunk_heading = normalize_for_match(chunk_heading);
             let normalized_body = normalize_for_match(&body);
             let compact_body = normalized_body.replace(' ', "");
             let mut score = 0.0_f64;
@@ -895,6 +903,7 @@ pub fn search_corpus_manifest(
                 let path_hit = path_lower.contains(token);
                 let root_hit = source_root_lower.contains(token);
                 let heading_hit = heading_text.contains(token);
+                let chunk_heading_hit = chunk_heading_lower.contains(token);
                 let root_name_hit = root_basename_lower.contains(token);
                 let normalized_token = normalize_for_match(token).replace(' ', "");
                 let compact_body_hit = normalized_token.len() >= 4
@@ -916,6 +925,7 @@ pub fn search_corpus_manifest(
                     || path_hit
                     || root_hit
                     || heading_hit
+                    || chunk_heading_hit
                     || root_name_hit
                     || compact_body_hit
                     || compact_path_hit
@@ -946,6 +956,10 @@ pub fn search_corpus_manifest(
                 if heading_hit {
                     score += 1.5 + idf * 1.5;
                     reasons.push(format!("heading:{token}@{idf:.2}"));
+                }
+                if chunk_heading_hit {
+                    score += 2.3 + idf * 1.7;
+                    reasons.push(format!("section-heading:{token}@{idf:.2}"));
                 }
                 if root_name_hit {
                     score += 2.4 + idf * 1.6;
@@ -993,6 +1007,12 @@ pub fn search_corpus_manifest(
                 if normalized_headings.contains(&normalized_query) {
                     score += 4.5;
                     reasons.push("phrase:heading".to_string());
+                }
+                if !normalized_chunk_heading.is_empty()
+                    && normalized_chunk_heading.contains(&normalized_query)
+                {
+                    score += 5.5;
+                    reasons.push("phrase:section-heading".to_string());
                 }
                 if normalized_path.contains(&normalized_query) {
                     score += 5.0;
@@ -1109,6 +1129,13 @@ pub fn search_corpus_manifest(
                         semantic.expanded_term, semantic.query_term
                     ));
                 }
+                if chunk_heading_lower.contains(&semantic.expanded_term) {
+                    score += 2.0;
+                    reasons.push(format!(
+                        "semantic-section-heading:{}<-{}",
+                        semantic.expanded_term, semantic.query_term
+                    ));
+                }
             }
             if query_features
                 .language_terms
@@ -1140,6 +1167,8 @@ pub fn search_corpus_manifest(
                 &source_root_lower,
                 &heading_text,
                 &doc.language,
+                &chunk_heading_lower,
+                &normalized_chunk_heading,
             );
             total_matching_chunks = total_matching_chunks.saturating_add(1);
             document_hits.push(ScoredChunkHit {
@@ -1713,6 +1742,17 @@ fn detect_query_intent(query: &str) -> QueryIntent {
     ]
     .iter()
     .any(|needle| lowered.contains(needle) || normalized.contains(needle));
+    let explanatory_lookup = [
+        "explain",
+        "overview",
+        "architecture",
+        "how does",
+        "how do",
+        "why",
+        "what happens",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle) || normalized.contains(needle));
     let root_hint_tokens = query
         .split_whitespace()
         .filter(|token| token.len() >= 3)
@@ -1744,6 +1784,7 @@ fn detect_query_intent(query: &str) -> QueryIntent {
         implementation_lookup,
         docs_lookup,
         continuity_lookup,
+        explanatory_lookup,
         root_hint_tokens,
     }
 }
@@ -1793,6 +1834,8 @@ fn apply_query_intent_boosts(
     source_root_lower: &str,
     heading_text: &str,
     language: &Option<String>,
+    chunk_heading_lower: &str,
+    normalized_chunk_heading: &str,
 ) {
     if intent.file_lookup && document_signal.path_hits > 0 {
         *score += 2.5 + document_signal.path_hits as f64 * 0.9;
@@ -1828,6 +1871,28 @@ fn apply_query_intent_boosts(
             "document-continuity:{}/{}",
             document_signal.matched_tokens, matched_tokens
         ));
+    }
+    if (intent.continuity_lookup || intent.explanatory_lookup) && !chunk_heading_lower.is_empty() {
+        *score += 1.2;
+        reasons.push("intent:section-context".to_string());
+        let section_matches = intent
+            .root_hint_tokens
+            .iter()
+            .filter(|token| chunk_heading_lower.contains(token.as_str()))
+            .count();
+        if section_matches > 0 {
+            *score += section_matches as f64 * 1.4;
+            reasons.push(format!("intent:section-hintx{section_matches}"));
+        }
+        if intent.explanatory_lookup
+            && (normalized_chunk_heading.contains("overview")
+                || normalized_chunk_heading.contains("architecture")
+                || normalized_chunk_heading.contains("flow")
+                || normalized_chunk_heading.contains("lifecycle"))
+        {
+            *score += 1.6;
+            reasons.push("intent:explainable-section".to_string());
+        }
     }
     let path_hint_matches = intent
         .root_hint_tokens
@@ -2751,6 +2816,108 @@ session lifecycle cleanup and revocation
             result.hits[0].reason.contains("root-name:rust")
                 || result.hits[0].reason.contains("language:rust")
         );
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+}
+
+#[cfg(test)]
+mod structure_aware_retrieval_tests {
+    use super::*;
+    use std::fs;
+    use std::time::UNIX_EPOCH;
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("claw-corpus-{name}-{nanos}"));
+        if path.exists() {
+            let _ = fs::remove_dir_all(&path);
+        }
+        fs::create_dir_all(&path).expect("create temp dir");
+        path
+    }
+
+    #[test]
+    fn search_prefers_matching_section_headings_for_explain_queries() {
+        let cwd = temp_dir("workspace-section-heading");
+        let root = cwd.join("docs");
+        fs::create_dir_all(&root).expect("mkdir");
+        fs::write(
+            root.join("auth.md"),
+            "# Overview
+General authentication introduction and glossary.
+
+## Token Lifecycle
+This section explains how refresh token rotation, session revocation, and token cleanup work.
+
+## Appendix
+Extra notes.
+",
+        )
+        .expect("write auth doc");
+
+        let manifest = attach_corpus(
+            &cwd,
+            &[root.clone()],
+            CorpusAttachOptions {
+                chunk_bytes: 110,
+                ..CorpusAttachOptions::default()
+            },
+        )
+        .expect("attach corpus");
+        let result = search_corpus(
+            &cwd,
+            &manifest.corpus_id,
+            "explain token lifecycle",
+            5,
+            None,
+        )
+        .expect("search");
+
+        assert_eq!(result.hits[0].path, "auth.md");
+        assert!(result.hits[0].reason.contains("section-heading:")
+            || result.hits[0].reason.contains("phrase:section-heading"));
+        assert!(result.hits[0].reason.contains("intent:section-context"));
+        assert!(result.hits[0].preview.to_ascii_lowercase().contains("token")
+            || result.hits[0].preview.to_ascii_lowercase().contains("rotation"));
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_uses_semantic_section_heading_matches_for_structure_aware_routing() {
+        let cwd = temp_dir("workspace-semantic-section-heading");
+        let root = cwd.join("docs");
+        fs::create_dir_all(&root).expect("mkdir");
+        fs::write(
+            root.join("identity.md"),
+            "# Authentication Overview
+Identity concepts.
+
+## Login Flow
+Credentials are validated before issuing session cookies.
+",
+        )
+        .expect("write identity doc");
+
+        let manifest = attach_corpus(
+            &cwd,
+            &[root.clone()],
+            CorpusAttachOptions {
+                chunk_bytes: 96,
+                ..CorpusAttachOptions::default()
+            },
+        )
+        .expect("attach corpus");
+        let result = search_corpus(&cwd, &manifest.corpus_id, "signin architecture", 5, None)
+            .expect("search");
+
+        assert_eq!(result.hits[0].path, "identity.md");
+        assert!(result.hits[0].reason.contains("semantic-section-heading:")
+            || result.hits[0].reason.contains("intent:explainable-section"));
 
         let _ = fs::remove_dir_all(cwd);
     }
