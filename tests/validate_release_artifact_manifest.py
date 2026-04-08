@@ -17,6 +17,8 @@ REQUIRED_TOP_LEVEL = [
     'workspaceVersion',
     'requiredToolchain',
     'git',
+    'build',
+    'verification',
     'artifacts',
 ]
 REQUIRED_ARTIFACT_PATHS = {
@@ -24,10 +26,25 @@ REQUIRED_ARTIFACT_PATHS = {
     'README.md',
     'RELEASE.md',
     'CHANGELOG.md',
+    'Cargo.lock',
     'docs/ARTIFACTS.md',
     'docs/PRIVACY.md',
     'docs/RELEASE_CANDIDATE.md',
     'scripts/release-verify.sh',
+    'scripts/generate-release-artifact-manifest.sh',
+}
+REQUIRED_VERIFICATION_COMMANDS = {
+    'cargo build --workspace --locked',
+    'cargo fmt --all --check',
+    'cargo clippy --workspace --all-targets --locked',
+    'cargo test --workspace --locked',
+    './target/debug/claw --help',
+    './target/debug/claw status',
+    'python3 ../tests/validate_operator_readiness.py',
+    'python3 ../tests/validate_blender_demo.py',
+    'python3 ../tests/validate_unreal_demo.py',
+    'python3 ../tests/validate_repo_analysis_demo.py',
+    'python3 ../tests/validate_release_artifact_manifest.py <manifest-path>',
 }
 
 
@@ -53,15 +70,54 @@ def main() -> int:
 
     if manifest['artifactKind'] != 'claw.release-manifest':
         return fail('Manifest artifactKind must be claw.release-manifest')
-    if manifest['schemaVersion'] != 1:
-        return fail('Manifest schemaVersion must be 1')
-    if manifest['compatVersion'] != '0.1':
-        return fail('Manifest compatVersion must be 0.1')
+    if manifest['schemaVersion'] != 2:
+        return fail('Manifest schemaVersion must be 2')
+    if manifest['compatVersion'] != '0.2':
+        return fail('Manifest compatVersion must be 0.2')
 
     git_section = manifest['git']
-    for key in ['commit', 'branch', 'dirty']:
+    for key in ['commit', 'branch', 'dirty', 'statusShort', 'remotes']:
         if key not in git_section:
             return fail(f'Manifest git section missing key: {key}')
+    if not isinstance(git_section['remotes'], list):
+        return fail('Manifest git remotes must be a list')
+
+    build_section = manifest['build']
+    for key in ['host', 'subject', 'materials']:
+        if key not in build_section:
+            return fail(f'Manifest build section missing key: {key}')
+    subject = build_section['subject']
+    for key in ['binary', 'binarySha256']:
+        if key not in subject:
+            return fail(f'Manifest build subject missing key: {key}')
+    if subject['binary'] != 'target/debug/claw':
+        return fail('Manifest build subject binary must be target/debug/claw')
+    if subject['binarySha256'] != sha256(RUST_ROOT / subject['binary']):
+        return fail('Manifest build subject binarySha256 does not match target/debug/claw')
+
+    materials = build_section['materials']
+    if not isinstance(materials, list) or not materials:
+        return fail('Manifest build materials must be a non-empty list')
+    missing_materials = sorted(REQUIRED_ARTIFACT_PATHS - set(materials))
+    if missing_materials:
+        return fail(f'Manifest build materials missing required entries: {", ".join(missing_materials)}')
+
+    verification = manifest['verification']
+    for key in ['model', 'scope', 'commands', 'notes']:
+        if key not in verification:
+            return fail(f'Manifest verification section missing key: {key}')
+    if verification['model'] != 'local-source-build':
+        return fail('Manifest verification model must be local-source-build')
+    commands = verification['commands']
+    if not isinstance(commands, list) or not commands:
+        return fail('Manifest verification commands must be a non-empty list')
+    missing_commands = sorted(REQUIRED_VERIFICATION_COMMANDS - set(commands))
+    if missing_commands:
+        return fail(
+            f'Manifest verification commands missing required entries: {", ".join(missing_commands)}'
+        )
+    if not isinstance(verification['notes'], list) or len(verification['notes']) < 2:
+        return fail('Manifest verification notes must include at least two explanatory entries')
 
     artifacts = manifest['artifacts']
     if not isinstance(artifacts, list) or not artifacts:

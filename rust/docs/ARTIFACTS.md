@@ -158,22 +158,24 @@ JSONL consumers should:
 
 `./scripts/generate-release-artifact-manifest.sh` writes `.claw/release-artifacts/release-manifest.json`.
 
-Its current purpose is modest but useful: after a fresh local build, it records the current workspace version, required toolchain, git commit/branch/dirty state, and SHA-256/byte metadata for the key operator-facing release artifacts:
+Its current purpose is still bounded but more provenance-aware: after a fresh local build, it records the current workspace version, required toolchain, git commit/branch/dirty state, remote hints, a compact local build environment snapshot, the intended verification command set, and SHA-256/byte metadata for the key operator-facing release artifacts:
 
 - `target/debug/claw`
 - `README.md`
 - `RELEASE.md`
 - `CHANGELOG.md`
+- `Cargo.lock`
 - `docs/ARTIFACTS.md`
 - `docs/PRIVACY.md`
 - `docs/RELEASE_CANDIDATE.md`
 - `scripts/release-verify.sh`
+- `scripts/generate-release-artifact-manifest.sh`
 
 Envelope fields:
 
 - `artifactKind=claw.release-manifest`
-- `schemaVersion=1`
-- `compatVersion=0.1`
+- `schemaVersion=2`
+- `compatVersion=0.2`
 
 Validation path:
 
@@ -183,7 +185,16 @@ manifest_path=$(./scripts/generate-release-artifact-manifest.sh)
 python3 ../tests/validate_release_artifact_manifest.py "$manifest_path"
 ```
 
-This is **not** signed provenance and it is **not** a packaged binary release format. It is a bounded trust aid: "these are the exact local release surfaces I just built and verified." That is better than source-only trust, but still intentionally short of a full artifact attestation system.
+Useful fields beyond the artifact hash list now include:
+
+- `git.statusShort` and `git.remotes` — local posture hints for the exact clone that produced the manifest
+- `build.host` — compact OS/toolchain/python context for the machine that built it
+- `build.subject` — explicit binding back to the produced `target/debug/claw` binary hash
+- `build.materials` — the specific release/trust surfaces this manifest expects operators to preserve together
+- `verification.commands` — the locked command set the local build is supposed to pass
+- `verification.notes` — explicit reminders that this is still a local/source-build trust aid, not a signed attestation chain
+
+This is **still not** signed provenance and it is **still not** a packaged binary release format. The upgrade here is narrower and more honest: the manifest now carries enough local build/verification context that a maintainer can reconstruct *what was trusted, from which clone, on which host/toolchain, and with which verification routine*. That is better than source-only trust, but still intentionally short of a full artifact attestation system.
 
 ## Sessions
 

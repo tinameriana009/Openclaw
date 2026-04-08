@@ -77,7 +77,7 @@ What is still missing:
 - no signed provenance or attestation
 - no packaged release artifact trust chain
 - no automatic fresh-run artifact verification pipeline end-to-end
-- trust is still mostly local/source-first rather than formal release provenance
+- trust is still mostly local/source-first rather than formal release provenance, even though the local manifest now carries better clone/build/verification context
 
 Why it still matters:
 - stronger release discipline improves confidence for reuse and handoff

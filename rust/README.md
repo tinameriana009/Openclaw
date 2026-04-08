@@ -337,8 +337,9 @@ Current baseline:
 
 - the workspace version is `0.1.0`
 - new trace ledgers and corpus manifests now carry `artifactKind`, `schemaVersion`, and `compatVersion`
+- the release artifact manifest now also carries a small local provenance envelope (`schemaVersion=2`, `compatVersion=0.2`) with remotes, host/toolchain snapshot, declared verification commands, and hashed release materials
 - trace and corpus artifact formats are documented, but still pre-1.0 contracts
-- there is not yet a dedicated migration layer for session / trace / corpus artifacts
+- there is not yet a dedicated migration layer for session / trace / corpus artifacts, and the release manifest is still an unsigned local trust aid rather than a portable attestation format
 - safest automation strategy today is pinning to a git tag or commit and parsing `.claw/` artifacts defensively
 
 If you build tooling around `.claw/trace/`, `.claw/corpus/`, or `.claw/telemetry/`, read [`docs/ARTIFACTS.md`](docs/ARTIFACTS.md) first.

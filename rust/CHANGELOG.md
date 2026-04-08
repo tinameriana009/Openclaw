@@ -38,6 +38,7 @@ For RCs, do not leave `Compatibility or migration notes` blank. If nothing chang
 - Release-candidate discipline in `rust/scripts/release-verify.sh` via `RELEASE_CANDIDATE=1`, including clean-tree enforcement and explicit RC reminders.
 - Stronger artifact trust/privacy notes covering compatibility anchors and redaction-safe sharing.
 - A machine-readable release artifact manifest (`.claw/release-artifacts/release-manifest.json`) plus a verifier that re-hashes the current binary and trust/release docs.
+- A richer local release-provenance envelope for that manifest: git remotes/status, host toolchain snapshot, explicit verification command set, `Cargo.lock`, and the manifest generator itself.
 
 ### Changed
 - `rust/RELEASE.md` now distinguishes ordinary verification from stricter RC verification, documents the current migration baseline more honestly, and includes the release-manifest generation/validation step.
