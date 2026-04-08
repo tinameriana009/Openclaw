@@ -41,6 +41,8 @@ echo "[2/2] Staging plugin and review docs..."
 cp "$REPO_ROOT/docs/examples/unreal-runtime-telemetry-demo/brief.md" "$RUN_DIR/brief.md"
 cp "$REPO_ROOT/docs/examples/unreal-runtime-telemetry-demo/expected-findings.md" "$RUN_DIR/expected-findings.md"
 cp "$REPO_ROOT/docs/examples/unreal-runtime-telemetry-demo/manual-validation-checklist.md" "$RUN_DIR/manual-validation-checklist.md"
+cp "$REPO_ROOT/docs/examples/unreal-runtime-telemetry-demo/error-feedback-playbook.md" "$RUN_DIR/error-feedback-playbook.md"
+cp "$REPO_ROOT/docs/examples/unreal-runtime-telemetry-demo/operator-session-template.md" "$RUN_DIR/operator-session-template.md"
 cp "$REPO_ROOT/docs/examples/unreal-runtime-telemetry-demo/trace-review-checklist.md" "$RUN_DIR/trace-review-checklist.md"
 cp -R "$REPO_ROOT/docs/examples/unreal-runtime-telemetry-demo/plugin/RuntimeTelemetry" "$PLUGIN_BUNDLE_DIR"
 
@@ -51,15 +53,18 @@ cat >"$REPORT_TEMPLATE" <<'EOF'
 - Unreal version:
 - OS:
 - Validation path: IDE build / UBT / Editor compile
+- Project path:
 
 ## Compile result
 - [ ] Project/plugin built successfully
+- Build command/path used:
 - Exact compiler or UHT errors:
 
 ## Editor result
 - [ ] Plugin enabled and loaded cleanly
 - [ ] RuntimeTelemetry subsystem discoverable
 - [ ] Blueprint library nodes visible if expected
+- Exact relevant log lines:
 - Notes:
 
 ## Runtime result
@@ -77,12 +82,26 @@ Next operator steps:
 1. Copy this staged plugin into a disposable Unreal project:
    $PLUGIN_BUNDLE_DIR
 2. Read expected-findings.md before asking for changes.
-3. Run through manual-validation-checklist.md in your real build/editor loop.
-4. Use trace-review-checklist.md if a model answer sounds overconfident.
-5. Record exact errors and observations in operator-findings-template.md.
+3. Fill in operator-session-template.md while you validate so version, logs, and runtime observations stay exact.
+4. Run through manual-validation-checklist.md in your real build/editor loop.
+5. Use error-feedback-playbook.md to turn any failure into the next grounded prompt.
+6. Use trace-review-checklist.md if a model answer sounds overconfident.
+7. Record final exact errors and observations in operator-findings-template.md.
 
 This helper only validates and stages the demo kit.
 It does not launch Unreal Editor, run UnrealBuildTool, or verify the plugin automatically.
+EOF
+
+cat >"$RUN_DIR/bundle-manifest.txt" <<EOF
+brief.md
+expected-findings.md
+manual-validation-checklist.md
+error-feedback-playbook.md
+operator-session-template.md
+trace-review-checklist.md
+operator-findings-template.md
+next-steps.txt
+RuntimeTelemetry/
 EOF
 
 echo

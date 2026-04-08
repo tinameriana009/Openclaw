@@ -44,6 +44,8 @@ If you want a concrete starting point instead of a blank prompt, begin with:
 - [`../examples/unreal-runtime-telemetry-demo/brief.md`](../examples/unreal-runtime-telemetry-demo/brief.md)
 - [`../examples/unreal-runtime-telemetry-demo/expected-findings.md`](../examples/unreal-runtime-telemetry-demo/expected-findings.md)
 - [`../examples/unreal-runtime-telemetry-demo/manual-validation-checklist.md`](../examples/unreal-runtime-telemetry-demo/manual-validation-checklist.md)
+- [`../examples/unreal-runtime-telemetry-demo/error-feedback-playbook.md`](../examples/unreal-runtime-telemetry-demo/error-feedback-playbook.md)
+- [`../examples/unreal-runtime-telemetry-demo/operator-session-template.md`](../examples/unreal-runtime-telemetry-demo/operator-session-template.md)
 - [`../examples/unreal-runtime-telemetry-demo/plugin/RuntimeTelemetry/`](../examples/unreal-runtime-telemetry-demo/plugin/RuntimeTelemetry/)
 
 ## Recommended flow
@@ -116,7 +118,7 @@ cd rust
 ./scripts/prepare-unreal-demo.sh
 ```
 
-That helper validates the demo kit and stages a review bundle under `.demo-artifacts/unreal-demo/` with the plugin skeleton, checklists, and an operator findings template.
+That helper validates the demo kit and stages a review bundle under `.demo-artifacts/unreal-demo/` with the plugin skeleton, checklists, an error-feedback playbook, an operator session worksheet, and an operator findings template.
 
 That only checks static coherence. It does **not** launch Unreal or compile the plugin.
 
@@ -147,8 +149,9 @@ After the model answers:
 
 1. compare the response against the anchors in [`../examples/unreal-runtime-telemetry-demo/expected-findings.md`](../examples/unreal-runtime-telemetry-demo/expected-findings.md)
 2. run through [`../examples/unreal-runtime-telemetry-demo/manual-validation-checklist.md`](../examples/unreal-runtime-telemetry-demo/manual-validation-checklist.md)
-3. inspect the saved trace using [`../examples/unreal-runtime-telemetry-demo/trace-review-checklist.md`](../examples/unreal-runtime-telemetry-demo/trace-review-checklist.md) when the answer sounds overconfident
-4. re-prompt with exact compile errors, reflection issues, or missing Blueprint nodes instead of vague follow-ups
+3. capture environment details, exact logs, and runtime observations in [`../examples/unreal-runtime-telemetry-demo/operator-session-template.md`](../examples/unreal-runtime-telemetry-demo/operator-session-template.md)
+4. use [`../examples/unreal-runtime-telemetry-demo/error-feedback-playbook.md`](../examples/unreal-runtime-telemetry-demo/error-feedback-playbook.md) to turn failures into the next prompt
+5. inspect the saved trace using [`../examples/unreal-runtime-telemetry-demo/trace-review-checklist.md`](../examples/unreal-runtime-telemetry-demo/trace-review-checklist.md) when the answer sounds overconfident
 
 You can also run a lightweight static asset check for the demo kit itself:
 

@@ -8,6 +8,8 @@ It gives operators:
 - a realistic brief to paste into `claw`
 - an expected-findings sheet to compare against
 - a manual validation checklist for the real editor/build loop
+- an error-feedback playbook for turning real Unreal failures into better follow-up prompts
+- an operator session template for capturing environment, logs, and runtime observations
 - a trace-review checklist for auditing how the answer was assembled
 - a tiny illustrative plugin skeleton you can inspect before asking for changes
 
@@ -16,6 +18,8 @@ It gives operators:
 - `brief.md` — a grounded task brief for a runtime telemetry plugin
 - `expected-findings.md` — facts the model should usually recover from the demo corpus
 - `manual-validation-checklist.md` — the operator loop for build/editor/runtime validation
+- `error-feedback-playbook.md` — prompt recipes for Build.cs, UHT, load, Blueprint, and runtime failures
+- `operator-session-template.md` — a lightweight worksheet for recording environment, logs, and next-prompt payloads
 - `trace-review-checklist.md` — how to review the saved reasoning trail when an answer feels suspicious
 - `plugin/RuntimeTelemetry/` — a minimal illustrative Unreal plugin layout with `.uplugin`, `Build.cs`, module bootstrapping, a subsystem, and a Blueprint-facing library
 
@@ -59,9 +63,10 @@ Then continue with narrower asks such as:
 3. Compare the plugin skeleton against `expected-findings.md` so you know what a grounded answer should recover.
 4. Use `claw` with the demo corpus attached to ask for the architecture or next implementation slice.
 5. If you want a cleaner handoff bundle, run `cd rust && ./scripts/prepare-unreal-demo.sh` to stage artifacts under `.demo-artifacts/unreal-demo/`.
-6. Copy the plugin into a disposable Unreal project or compare it against an existing plugin repo.
-7. Follow `manual-validation-checklist.md` for the real compile/editor/runtime loop.
-8. Feed any compiler error, reflection issue, missing module dependency, or confusing operator step back into the next prompt.
+6. Use `operator-session-template.md` while validating so environment details, logs, and runtime observations do not get lost.
+7. Copy the plugin into a disposable Unreal project or compare it against an existing plugin repo.
+8. Follow `manual-validation-checklist.md` for the real compile/editor/runtime loop.
+9. Use `error-feedback-playbook.md` to turn compiler errors, UHT issues, load failures, or Blueprint surprises into the next grounded prompt.
 
 That path is intentionally honest: corpus → plan → static validation → staged operator bundle → human build/editor validation → evidence-driven follow-up.
 

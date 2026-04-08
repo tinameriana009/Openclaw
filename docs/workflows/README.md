@@ -84,6 +84,8 @@ If you want one especially concrete operator path, start with one of these demo 
 - [`../examples/unreal-runtime-telemetry-demo/README.md`](../examples/unreal-runtime-telemetry-demo/README.md)
 - [`../examples/unreal-runtime-telemetry-demo/brief.md`](../examples/unreal-runtime-telemetry-demo/brief.md)
 - [`../examples/unreal-runtime-telemetry-demo/manual-validation-checklist.md`](../examples/unreal-runtime-telemetry-demo/manual-validation-checklist.md)
+- [`../examples/unreal-runtime-telemetry-demo/error-feedback-playbook.md`](../examples/unreal-runtime-telemetry-demo/error-feedback-playbook.md)
+- [`../examples/unreal-runtime-telemetry-demo/operator-session-template.md`](../examples/unreal-runtime-telemetry-demo/operator-session-template.md)
 - [`../examples/unreal-runtime-telemetry-demo/trace-review-checklist.md`](../examples/unreal-runtime-telemetry-demo/trace-review-checklist.md)
 - prep helper: `../../rust/scripts/prepare-unreal-demo.sh`
 

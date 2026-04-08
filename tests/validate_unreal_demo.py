@@ -14,6 +14,8 @@ REQUIRED_FILES = [
     DEMO_ROOT / 'brief.md',
     DEMO_ROOT / 'expected-findings.md',
     DEMO_ROOT / 'manual-validation-checklist.md',
+    DEMO_ROOT / 'error-feedback-playbook.md',
+    DEMO_ROOT / 'operator-session-template.md',
     DEMO_ROOT / 'trace-review-checklist.md',
     PLUGIN_ROOT / 'RuntimeTelemetry.uplugin',
     SOURCE_ROOT / 'RuntimeTelemetry.Build.cs',
@@ -71,12 +73,16 @@ def main() -> int:
         return 1
 
     readme_text = (DEMO_ROOT / 'README.md').read_text()
-    if 'python3 tests/validate_unreal_demo.py' not in readme_text:
-        print('Unreal demo README does not explain how to run validation.')
-        return 1
-    if 'prepare-unreal-demo.sh' not in readme_text or '.demo-artifacts/unreal-demo/' not in readme_text:
-        print('Unreal demo README does not mention the prep helper and staged artifact path.')
-        return 1
+    for needle, message in [
+        ('python3 tests/validate_unreal_demo.py', 'Unreal demo README does not explain how to run validation.'),
+        ('prepare-unreal-demo.sh', 'Unreal demo README does not mention the prep helper.'),
+        ('.demo-artifacts/unreal-demo/', 'Unreal demo README does not mention the staged artifact path.'),
+        ('error-feedback-playbook.md', 'Unreal demo README does not mention the error feedback playbook.'),
+        ('operator-session-template.md', 'Unreal demo README does not mention the operator session template.'),
+    ]:
+        if needle not in readme_text:
+            print(message)
+            return 1
 
     rust_readme_text = (REPO_ROOT / 'rust' / 'README.md').read_text()
     if './scripts/prepare-unreal-demo.sh' not in rust_readme_text:
@@ -87,6 +93,8 @@ def main() -> int:
     for needle in [
         'unreal-runtime-telemetry-demo',
         'manual-validation-checklist.md',
+        'error-feedback-playbook.md',
+        'operator-session-template.md',
         'trace-review-checklist.md',
         'python3 tests/validate_unreal_demo.py',
     ]:
