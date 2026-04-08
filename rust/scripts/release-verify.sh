@@ -114,8 +114,11 @@ print('docs/ARTIFACTS.md mentions artifactKind/schemaVersion/compatVersion')
 PY
 
 manifest_path=$(./scripts/generate-release-artifact-manifest.sh)
+attestation_path=.claw/release-artifacts/release-attestation.json
 echo "release manifest: $manifest_path"
+echo "release attestation: $attestation_path"
 python3 ../tests/validate_release_artifact_manifest.py "$manifest_path"
+python3 ../tests/validate_release_attestation.py "$attestation_path" "$manifest_path"
 
 if [[ "$release_candidate" == "1" ]]; then
   echo

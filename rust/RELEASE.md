@@ -35,7 +35,7 @@ cd rust
 RELEASE_CANDIDATE=1 ./scripts/release-verify.sh
 ```
 
-That RC mode keeps the same locked build/test gates, requires a clean working tree, runs `python3 ../tests/validate_release_candidate_readiness.py`, and emits a machine-readable release artifact manifest under `.claw/release-artifacts/release-manifest.json` that is immediately re-validated against the current binary/docs. That manifest now also captures local provenance cues such as git remotes/status, host toolchain snapshot, declared verification commands, `Cargo.lock`, and the manifest generator itself. That keeps the RC claim tied to current docs/trust notes and concrete artifact hashes rather than memory alone. See [`docs/RELEASE_CANDIDATE.md`](docs/RELEASE_CANDIDATE.md) for the bounded RC flow.
+That RC mode keeps the same locked build/test gates, requires a clean working tree, runs `python3 ../tests/validate_release_candidate_readiness.py`, and emits a machine-readable release artifact manifest under `.claw/release-artifacts/release-manifest.json` plus a paired `.claw/release-artifacts/release-attestation.json` statement. Both are immediately re-validated against the current binary/docs via `python3 ../tests/validate_release_artifact_manifest.py` and `python3 ../tests/validate_release_attestation.py`. The manifest still captures local provenance cues such as git remotes/status, host toolchain snapshot, declared verification commands, `Cargo.lock`, and the manifest generator itself; the new attestation sidecar binds the manifest hash and binary hash into a more formal statement shape without pretending it is signed provenance. That keeps the RC claim tied to current docs/trust notes and concrete artifact hashes rather than memory alone. See [`docs/RELEASE_CANDIDATE.md`](docs/RELEASE_CANDIDATE.md) for the bounded RC flow.
 
 Manual equivalent:
 
@@ -53,7 +53,9 @@ python3 ../tests/validate_unreal_demo.py
 python3 ../tests/validate_repo_analysis_demo.py
 python3 ../tests/validate_release_candidate_readiness.py  # when running an RC gate
 manifest_path=$(./scripts/generate-release-artifact-manifest.sh)
+attestation_path=.claw/release-artifacts/release-attestation.json
 python3 ../tests/validate_release_artifact_manifest.py "$manifest_path"
+python3 ../tests/validate_release_attestation.py "$attestation_path" "$manifest_path"
 ```
 
 ### Operator sanity checks

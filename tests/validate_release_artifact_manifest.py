@@ -45,6 +45,7 @@ REQUIRED_VERIFICATION_COMMANDS = {
     'python3 ../tests/validate_unreal_demo.py',
     'python3 ../tests/validate_repo_analysis_demo.py',
     'python3 ../tests/validate_release_artifact_manifest.py <manifest-path>',
+    'python3 ../tests/validate_release_attestation.py <attestation-path> <manifest-path>',
 }
 
 

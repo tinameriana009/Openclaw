@@ -6,6 +6,7 @@ RUST_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 REPO_ROOT=$(cd -- "$RUST_ROOT/.." && pwd)
 OUTPUT_DIR=${OUTPUT_DIR:-"$RUST_ROOT/.claw/release-artifacts"}
 OUTPUT_FILE=${OUTPUT_FILE:-"$OUTPUT_DIR/release-manifest.json"}
+ATTESTATION_FILE=${ATTESTATION_FILE:-"$OUTPUT_DIR/release-attestation.json"}
 CLAW_BIN=${CLAW_BIN:-"$RUST_ROOT/target/debug/claw"}
 
 mkdir -p "$OUTPUT_DIR"
@@ -22,7 +23,7 @@ EOF
   exit 2
 fi
 
-python3 - "$RUST_ROOT" "$REPO_ROOT" "$CLAW_BIN" "$OUTPUT_FILE" <<'PY'
+python3 - "$RUST_ROOT" "$REPO_ROOT" "$CLAW_BIN" "$OUTPUT_FILE" "$ATTESTATION_FILE" <<'PY'
 from __future__ import annotations
 
 import hashlib
@@ -39,6 +40,7 @@ rust_root = Path(sys.argv[1]).resolve()
 repo_root = Path(sys.argv[2]).resolve()
 claw_bin = Path(sys.argv[3]).resolve()
 out_file = Path(sys.argv[4]).resolve()
+attestation_file = Path(sys.argv[5]).resolve()
 
 cargo_toml = tomllib.loads((rust_root / 'Cargo.toml').read_text())
 workspace_version = cargo_toml['workspace']['package']['version']
@@ -79,6 +81,14 @@ def command_output(argv: list[str]) -> str | None:
         return None
 
 
+def sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def sha256_file(path: Path) -> str:
+    return sha256_bytes(path.read_bytes())
+
+
 cargo_version = command_output(['cargo', '--version'])
 rustc_version = command_output(['rustc', '--version'])
 python_version = sys.version.split()[0]
@@ -96,6 +106,7 @@ verification_commands = [
     'python3 ../tests/validate_unreal_demo.py',
     'python3 ../tests/validate_repo_analysis_demo.py',
     'python3 ../tests/validate_release_artifact_manifest.py <manifest-path>',
+    'python3 ../tests/validate_release_attestation.py <attestation-path> <manifest-path>',
 ]
 
 rc_note = (
@@ -109,11 +120,11 @@ def digest(path: Path) -> dict[str, object]:
     return {
         'path': path.relative_to(rust_root).as_posix(),
         'bytes': len(data),
-        'sha256': hashlib.sha256(data).hexdigest(),
+        'sha256': sha256_bytes(data),
     }
 
 
-binary_sha256 = hashlib.sha256(claw_bin.read_bytes()).hexdigest()
+binary_sha256 = sha256_file(claw_bin)
 artifacts = [
     digest(claw_bin),
     digest(rust_root / 'README.md'),
@@ -175,12 +186,98 @@ manifest = {
         'notes': [
             'This manifest records local provenance cues and hashed release surfaces for the current workspace.',
             'It is intentionally unsigned and should not be treated as a portable attestation chain.',
+            'A paired release-attestation.json now binds this manifest hash into a more formal statement shape, but it is still local and unsigned.',
             rc_note,
         ],
     },
     'artifacts': artifacts,
 }
 
-out_file.write_text(json.dumps(manifest, indent=2) + '\n')
+manifest_json = json.dumps(manifest, indent=2) + '\n'
+out_file.write_text(manifest_json)
+manifest_sha256 = sha256_bytes(manifest_json.encode())
+attestation = {
+    'artifactKind': 'claw.release-attestation',
+    'schemaVersion': 1,
+    'compatVersion': '0.1',
+    '_type': 'https://in-toto.io/Statement/v1',
+    'predicateType': 'https://claw.dev/attestation/local-source-build/v1',
+    'generatedAt': manifest['generatedAt'],
+    'subject': [
+        {
+            'name': 'target/debug/claw',
+            'digest': {'sha256': binary_sha256},
+        },
+        {
+            'name': out_file.relative_to(rust_root).as_posix(),
+            'digest': {'sha256': manifest_sha256},
+        },
+    ],
+    'predicate': {
+        'buildDefinition': {
+            'buildType': 'local-source-build',
+            'externalParameters': {
+                'workspaceVersion': workspace_version,
+                'requiredToolchain': required_toolchain,
+                'verificationCommands': verification_commands,
+            },
+            'internalParameters': {
+                'releaseCandidateModeSupported': True,
+                'sourceRoot': repo_root.as_posix(),
+                'rustRoot': rust_root.as_posix(),
+            },
+            'resolvedDependencies': [
+                {
+                    'uri': f'git+file://{repo_root.as_posix()}',
+                    'digest': {'gitCommit': commit},
+                    'annotations': {
+                        'branch': branch,
+                        'dirty': str(bool(status_short.strip())).lower(),
+                    },
+                },
+                {
+                    'uri': 'file://Cargo.lock',
+                    'digest': {'sha256': sha256_file(rust_root / 'Cargo.lock')},
+                },
+                {
+                    'uri': 'file://scripts/generate-release-artifact-manifest.sh',
+                    'digest': {'sha256': sha256_file(rust_root / 'scripts' / 'generate-release-artifact-manifest.sh')},
+                },
+            ],
+        },
+        'runDetails': {
+            'builder': {
+                'id': 'claw.local.release-verify',
+                'version': {
+                    'workspace': workspace_version,
+                    'cargo': cargo_version,
+                    'rustc': rustc_version,
+                    'python': python_version,
+                },
+            },
+            'metadata': {
+                'invocationId': f'{commit[:12]}:{manifest["generatedAt"]}',
+                'startedOn': manifest['generatedAt'],
+                'finishedOn': manifest['generatedAt'],
+            },
+            'byproducts': [
+                {
+                    'name': 'release-manifest',
+                    'path': out_file.relative_to(rust_root).as_posix(),
+                    'sha256': manifest_sha256,
+                },
+                {
+                    'name': 'release-materials',
+                    'count': len(artifacts),
+                },
+            ],
+        },
+        'notes': [
+            'This statement intentionally improves structure, not cryptographic trust.',
+            'It is unsigned local provenance and must be paired with source review and local verification.',
+        ],
+    },
+}
+attestation_file.write_text(json.dumps(attestation, indent=2) + '\n')
 print(out_file)
 PY

@@ -102,7 +102,7 @@ cd rust
 RELEASE_CANDIDATE=1 ./scripts/release-verify.sh
 ```
 
-That helper checks the active Rust toolchain first, then runs the locked workspace verification sequence. In RC mode it also runs the explicit release-candidate documentation gate, generates `.claw/release-artifacts/release-manifest.json`, and expects release notes/trust docs to stay aligned with the current `artifactKind` / `schemaVersion` / `compatVersion` contract.
+That helper checks the active Rust toolchain first, then runs the locked workspace verification sequence. In RC mode it also runs the explicit release-candidate documentation gate, generates `.claw/release-artifacts/release-manifest.json` plus `.claw/release-artifacts/release-attestation.json`, and expects release notes/trust docs to stay aligned with the current `artifactKind` / `schemaVersion` / `compatVersion` contract.
 
 Manual equivalent:
 
@@ -338,8 +338,9 @@ Current baseline:
 - the workspace version is `0.1.0`
 - new trace ledgers and corpus manifests now carry `artifactKind`, `schemaVersion`, and `compatVersion`
 - the release artifact manifest now also carries a small local provenance envelope (`schemaVersion=2`, `compatVersion=0.2`) with remotes, host/toolchain snapshot, declared verification commands, and hashed release materials
+- a paired `release-attestation.json` sidecar (`artifactKind=claw.release-attestation`, `schemaVersion=1`, `compatVersion=0.1`) binds the manifest hash and built binary hash into a more formal statement shape
 - trace and corpus artifact formats are documented, but still pre-1.0 contracts
-- there is not yet a dedicated migration layer for session / trace / corpus artifacts, and the release manifest is still an unsigned local trust aid rather than a portable attestation format
+- there is not yet a dedicated migration layer for session / trace / corpus artifacts, and the release attestation is still an unsigned local trust aid rather than a portable signed provenance format
 - safest automation strategy today is pinning to a git tag or commit and parsing `.claw/` artifacts defensively
 
 If you build tooling around `.claw/trace/`, `.claw/corpus/`, or `.claw/telemetry/`, read [`docs/ARTIFACTS.md`](docs/ARTIFACTS.md) first.

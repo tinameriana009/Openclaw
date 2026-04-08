@@ -17,6 +17,7 @@ REQUIRED_FILES = [
     RUST_ROOT / 'scripts' / 'release-verify.sh',
     RUST_ROOT / 'scripts' / 'generate-release-artifact-manifest.sh',
     REPO_ROOT / 'tests' / 'validate_release_artifact_manifest.py',
+    REPO_ROOT / 'tests' / 'validate_release_attestation.py',
 ]
 
 
@@ -48,9 +49,19 @@ def main() -> int:
         'rust/README.md does not link to the RC discipline guide.',
     )
     require_contains(
+        readme_text,
+        'release-attestation.json',
+        'rust/README.md does not mention the release attestation sidecar.',
+    )
+    require_contains(
         release_text,
         'python3 ../tests/validate_release_candidate_readiness.py',
         'rust/RELEASE.md does not mention the RC readiness validator.',
+    )
+    require_contains(
+        release_text,
+        'validate_release_attestation.py',
+        'rust/RELEASE.md does not mention the release attestation validator.',
     )
     require_contains(
         bootstrap_text,
@@ -82,6 +93,11 @@ def main() -> int:
         'python3 ../tests/validate_release_artifact_manifest.py',
         'release-verify.sh does not validate the generated release artifact manifest.',
     )
+    require_contains(
+        verify_text,
+        'python3 ../tests/validate_release_attestation.py',
+        'release-verify.sh does not validate the generated release attestation.',
+    )
 
     for text, label in [
         (readme_text, 'rust/README.md'),
@@ -97,6 +113,11 @@ def main() -> int:
             text,
             'compatVersion',
             f'{label} does not mention compatVersion in RC/release guidance.',
+        )
+        require_contains(
+            text,
+            'release-attestation.json',
+            f'{label} does not mention the release attestation sidecar in RC/release guidance.',
         )
 
     require_contains(

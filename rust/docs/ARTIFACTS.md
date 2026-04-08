@@ -11,6 +11,7 @@ Current operator-relevant artifact locations:
 - `.claw/sessions/` — saved local sessions
 - `.claw/corpora/` — persisted corpus manifests
 - `.claw/release-artifacts/release-manifest.json` — machine-readable release/build artifact manifest for the current verified workspace
+- `.claw/release-artifacts/release-attestation.json` — formal local provenance statement that binds the manifest hash to the built binary
 
 These files are useful for inspection, debugging, evaluation, and incident review.
 
@@ -182,7 +183,9 @@ Validation path:
 ```bash
 cd rust
 manifest_path=$(./scripts/generate-release-artifact-manifest.sh)
+attestation_path=.claw/release-artifacts/release-attestation.json
 python3 ../tests/validate_release_artifact_manifest.py "$manifest_path"
+python3 ../tests/validate_release_attestation.py "$attestation_path" "$manifest_path"
 ```
 
 Useful fields beyond the artifact hash list now include:
@@ -194,7 +197,22 @@ Useful fields beyond the artifact hash list now include:
 - `verification.commands` — the locked command set the local build is supposed to pass
 - `verification.notes` — explicit reminders that this is still a local/source-build trust aid, not a signed attestation chain
 
-This is **still not** signed provenance and it is **still not** a packaged binary release format. The upgrade here is narrower and more honest: the manifest now carries enough local build/verification context that a maintainer can reconstruct *what was trusted, from which clone, on which host/toolchain, and with which verification routine*. That is better than source-only trust, but still intentionally short of a full artifact attestation system.
+The paired `release-attestation.json` sidecar adds a more formal statement envelope:
+
+- `artifactKind=claw.release-attestation`
+- `schemaVersion=1`
+- `compatVersion=0.1`
+- `_type=https://in-toto.io/Statement/v1`
+- `predicateType=https://claw.dev/attestation/local-source-build/v1`
+
+It binds two subjects:
+
+- the built `target/debug/claw` binary hash
+- the generated `release-manifest.json` hash
+
+and records the local build definition, verification command set, and a few resolved dependencies such as the git commit, `Cargo.lock`, and the manifest generator script.
+
+This is **still not** signed provenance and it is **still not** a packaged binary release format. The upgrade here is narrower and more honest: the manifest now carries enough local build/verification context that a maintainer can reconstruct *what was trusted, from which clone, on which host/toolchain, and with which verification routine*, and the attestation sidecar packages that same claim into a more formal statement shape. That is better than source-only trust, but still intentionally short of a full artifact attestation system.
 
 ## Sessions
 

@@ -65,7 +65,7 @@ When sharing a manifest excerpt, prefer this order:
 
 ## Release manifest sharing
 
-`.claw/release-artifacts/release-manifest.json` is safer to share than raw trace/corpus artifacts because it only records hash/byte metadata for the current binary/docs plus git/toolchain context. Even so, it can still reveal:
+`.claw/release-artifacts/release-manifest.json` and `.claw/release-artifacts/release-attestation.json` are safer to share than raw trace/corpus artifacts because they only record hash/byte metadata for the current binary/docs plus git/toolchain context and a formal statement envelope. Even so, they can still reveal:
 
 - the exact commit hash
 - current branch naming

@@ -24,6 +24,7 @@ An RC pass here means all of the following are true:
 - the release docs still carry explicit compatibility/migration language
 - the artifact trust story still mentions `artifactKind`, `schemaVersion`, and `compatVersion`
 - a fresh machine-readable release manifest can be generated and re-validated against the current binary/docs
+- a paired `release-attestation.json` can be generated and validated as a formal-but-still-local provenance statement
 
 It does **not** mean every operator workflow is fully automated, every artifact is a permanent interchange contract, or the broader product is production-final.
 
@@ -34,7 +35,7 @@ It does **not** mean every operator workflow is fully automated, every artifact 
 3. Fill in **Compatibility or migration notes** explicitly, even if the answer is: `no schema change from prior RC`.
 4. If trace or corpus fields changed, explain the operator impact plainly.
 5. Do one grounded run against a fresh `.claw/` state before tagging.
-6. Generate and validate `.claw/release-artifacts/release-manifest.json` so the RC notes can point at exact current hashes/bytes for the binary and trust docs.
+6. Generate and validate `.claw/release-artifacts/release-manifest.json` and `.claw/release-artifacts/release-attestation.json` so the RC notes can point at exact current hashes/bytes for the binary and trust docs plus a formal statement envelope.
 
 ## Fresh-state rule
 

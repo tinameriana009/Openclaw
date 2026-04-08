@@ -39,9 +39,10 @@ For RCs, do not leave `Compatibility or migration notes` blank. If nothing chang
 - Stronger artifact trust/privacy notes covering compatibility anchors and redaction-safe sharing.
 - A machine-readable release artifact manifest (`.claw/release-artifacts/release-manifest.json`) plus a verifier that re-hashes the current binary and trust/release docs.
 - A richer local release-provenance envelope for that manifest: git remotes/status, host toolchain snapshot, explicit verification command set, `Cargo.lock`, and the manifest generator itself.
+- A paired `release-attestation.json` sidecar plus validator that binds the built binary hash and manifest hash into a formal in-toto-style statement shape while staying explicit that it is still unsigned local provenance.
 
 ### Changed
-- `rust/RELEASE.md` now distinguishes ordinary verification from stricter RC verification, documents the current migration baseline more honestly, and includes the release-manifest generation/validation step.
+- `rust/RELEASE.md` now distinguishes ordinary verification from stricter RC verification, documents the current migration baseline more honestly, and includes the release-manifest plus release-attestation generation/validation step.
 - `rust/docs/ARTIFACTS.md` now documents the artifact envelope, the recommended parsing strategy for pre-1.0 automation, and the bounded release-manifest contract.
 - `rust/docs/PRIVACY.md` now recommends preserving only envelope metadata while redacting sensitive path/content details from shared bug reports.
 
