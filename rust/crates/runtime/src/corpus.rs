@@ -162,6 +162,14 @@ struct QueryFeatures {
     tokens: Vec<String>,
     raw_terms: Vec<String>,
     compact_terms: Vec<String>,
+    semantic_terms: Vec<SemanticTerm>,
+    language_terms: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SemanticTerm {
+    query_term: String,
+    expanded_term: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -831,7 +839,13 @@ pub fn search_corpus_manifest(
             .and_then(|name| name.to_str())
             .unwrap_or_default()
             .to_ascii_lowercase();
+        let root_basename_lower = Path::new(&doc.source_root)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
         let normalized_basename = normalize_for_match(&basename_lower).replace(' ', "");
+        let normalized_root_basename = normalize_for_match(&root_basename_lower).replace(' ', "");
         let mut document_hits = Vec::new();
         for chunk in &doc.chunks {
             total_candidate_chunks = total_candidate_chunks.saturating_add(1);
@@ -856,6 +870,7 @@ pub fn search_corpus_manifest(
                 let path_hit = path_lower.contains(token);
                 let root_hit = source_root_lower.contains(token);
                 let heading_hit = heading_text.contains(token);
+                let root_name_hit = root_basename_lower.contains(token);
                 let normalized_token = normalize_for_match(token).replace(' ', "");
                 let compact_body_hit = normalized_token.len() >= 4
                     && !normalized_token.is_empty()
@@ -876,6 +891,7 @@ pub fn search_corpus_manifest(
                     || path_hit
                     || root_hit
                     || heading_hit
+                    || root_name_hit
                     || compact_body_hit
                     || compact_path_hit
                     || compact_root_hit
@@ -905,6 +921,10 @@ pub fn search_corpus_manifest(
                 if heading_hit {
                     score += 1.5 + idf * 1.5;
                     reasons.push(format!("heading:{token}@{idf:.2}"));
+                }
+                if root_name_hit {
+                    score += 2.4 + idf * 1.6;
+                    reasons.push(format!("root-name:{token}@{idf:.2}"));
                 }
                 if compact_body_hit {
                     score += 1.25 + idf * 0.9;
@@ -975,6 +995,12 @@ pub fn search_corpus_manifest(
                     score += 4.0;
                     reasons.push("filename-match".to_string());
                 }
+                if root_basename_lower.contains(filename_query)
+                    || normalized_root_basename.contains(filename_query)
+                {
+                    score += 4.4;
+                    reasons.push("root-match".to_string());
+                }
             }
             for raw_term in &query_features.raw_terms {
                 let raw_body_hits = count_occurrences(&body, raw_term);
@@ -1017,6 +1043,58 @@ pub fn search_corpus_manifest(
                     score += 1.8;
                     reasons.push(format!("symbol-compact-root:{compact_term}"));
                 }
+            }
+            for semantic in &query_features.semantic_terms {
+                if matched_terms
+                    .iter()
+                    .any(|term| term == &semantic.query_term)
+                {
+                    continue;
+                }
+                let body_semantic_hits = count_occurrences(&body, &semantic.expanded_term);
+                let path_semantic_hit = path_lower.contains(&semantic.expanded_term);
+                let root_semantic_hit = source_root_lower.contains(&semantic.expanded_term)
+                    || root_basename_lower.contains(&semantic.expanded_term);
+                let heading_semantic_hit = heading_text.contains(&semantic.expanded_term);
+                if body_semantic_hits > 0 {
+                    score += body_semantic_hits as f64 * 1.8;
+                    reasons.push(format!(
+                        "semantic-body:{}<-{}x{}",
+                        semantic.expanded_term, semantic.query_term, body_semantic_hits
+                    ));
+                }
+                if path_semantic_hit {
+                    score += 1.7;
+                    reasons.push(format!(
+                        "semantic-path:{}<-{}",
+                        semantic.expanded_term, semantic.query_term
+                    ));
+                }
+                if root_semantic_hit {
+                    score += 1.9;
+                    reasons.push(format!(
+                        "semantic-root:{}<-{}",
+                        semantic.expanded_term, semantic.query_term
+                    ));
+                }
+                if heading_semantic_hit {
+                    score += 1.6;
+                    reasons.push(format!(
+                        "semantic-heading:{}<-{}",
+                        semantic.expanded_term, semantic.query_term
+                    ));
+                }
+            }
+            if query_features
+                .language_terms
+                .iter()
+                .any(|language| doc.language.as_deref() == Some(language.as_str()))
+            {
+                score += 2.6;
+                reasons.push(format!(
+                    "language:{}",
+                    doc.language.as_deref().unwrap_or("unknown")
+                ));
             }
             if let Some(span) = minimum_term_span(&normalized_body, &tokens) {
                 if span <= 48 {
@@ -1509,6 +1587,8 @@ fn query_features(query: &str) -> QueryFeatures {
     let mut seen_tokens = std::collections::BTreeSet::new();
     let mut seen_raw = std::collections::BTreeSet::new();
     let mut seen_compact = std::collections::BTreeSet::new();
+    let mut seen_semantic = std::collections::BTreeSet::new();
+    let mut seen_languages = std::collections::BTreeSet::new();
     for raw in query
         .split_whitespace()
         .flat_map(|part| part.split("::"))
@@ -1530,6 +1610,18 @@ fn query_features(query: &str) -> QueryFeatures {
         let compact = normalize_for_match(raw).replace(' ', "");
         if compact.len() >= 5 && seen_compact.insert(compact.clone()) {
             features.compact_terms.push(compact);
+        }
+        let normalized_raw = normalize_for_match(raw);
+        for semantic in semantic_expansions(&normalized_raw) {
+            let key = format!("{}=>{}", semantic.query_term, semantic.expanded_term);
+            if seen_semantic.insert(key) {
+                features.semantic_terms.push(semantic);
+            }
+        }
+        if let Some(language) = language_hint_for_token(&normalized_raw) {
+            if seen_languages.insert(language.clone()) {
+                features.language_terms.push(language);
+            }
         }
         for token in expand_query_token(raw) {
             if seen_tokens.insert(token.clone()) {
@@ -1568,6 +1660,73 @@ fn expand_query_token(token: &str) -> Vec<String> {
     }
 
     expanded
+}
+
+fn semantic_expansions(token: &str) -> Vec<SemanticTerm> {
+    let expansions = match token {
+        "auth" => vec![
+            "authentication",
+            "authenticate",
+            "authorization",
+            "login",
+            "signin",
+            "callback",
+            "oauth",
+            "token",
+            "session",
+        ],
+        "authentication" | "authenticate" | "authorization" => {
+            vec!["auth", "login", "signin", "oauth", "token", "session"]
+        }
+        "login" | "logins" => vec!["signin", "auth", "authentication", "session", "token"],
+        "signin" | "sign-in" => vec!["login", "auth", "authentication", "session", "token"],
+        "config" | "configs" => vec![
+            "configuration",
+            "settings",
+            "option",
+            "options",
+            "profile",
+            "profiles",
+            "flag",
+            "flags",
+        ],
+        "configuration" | "settings" => vec![
+            "config", "option", "options", "profile", "profiles", "flag", "flags",
+        ],
+        "docs" | "doc" => vec!["documentation", "guide", "readme", "manual"],
+        "guide" | "readme" | "manual" => vec!["docs", "documentation"],
+        "deploy" | "deployment" => vec!["release", "rollout", "shipping"],
+        "build" => vec!["compile", "compilation", "cargo", "make"],
+        "test" | "tests" => vec!["testing", "unit", "integration", "regression"],
+        "search" => vec!["retrieval", "lookup", "index", "corpus"],
+        "retrieval" => vec!["search", "lookup", "index", "corpus"],
+        _ => Vec::new(),
+    };
+    expansions
+        .into_iter()
+        .map(|expanded_term| SemanticTerm {
+            query_term: token.to_string(),
+            expanded_term: expanded_term.to_string(),
+        })
+        .collect()
+}
+
+fn language_hint_for_token(token: &str) -> Option<String> {
+    match token {
+        "rust" | "rs" => Some("rust".to_string()),
+        "python" | "py" => Some("python".to_string()),
+        "typescript" | "ts" | "tsx" => Some("typescript".to_string()),
+        "javascript" | "js" => Some("javascript".to_string()),
+        "markdown" | "md" | "docs" | "doc" => Some("markdown".to_string()),
+        "shell" | "bash" | "sh" => Some("shell".to_string()),
+        "json" => Some("json".to_string()),
+        "yaml" | "yml" => Some("yaml".to_string()),
+        "toml" => Some("toml".to_string()),
+        "go" | "golang" => Some("go".to_string()),
+        "java" => Some("java".to_string()),
+        "cpp" | "c++" | "c" | "header" | "headers" => Some("cpp".to_string()),
+        _ => None,
+    }
 }
 
 fn split_identifier_parts(token: &str) -> Vec<String> {
@@ -2188,6 +2347,73 @@ mod tests {
             .expect("search guides root");
         assert_eq!(guides_result.hits[0].path, "guide.md");
         assert!(guides_result.hits[0].source_root.ends_with("guides"));
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_uses_semantic_expansion_for_common_repo_terms() {
+        let cwd = temp_dir("workspace-semantic-expansion");
+        let root = cwd.join("docs");
+        fs::create_dir_all(&root).expect("mkdir");
+        fs::write(
+            root.join("authentication.md"),
+            "# Identity\nLogin callback flow issues bearer tokens after credential verification.\n",
+        )
+        .expect("write semantic doc");
+        fs::write(
+            root.join("misc.md"),
+            "# Notes\nGeneral onboarding guide and release checklist.\n",
+        )
+        .expect("write misc doc");
+
+        let manifest = attach_corpus(&cwd, &[root.clone()], CorpusAttachOptions::default())
+            .expect("attach corpus");
+        let result =
+            search_corpus(&cwd, &manifest.corpus_id, "signin flow", 5, None).expect("search");
+
+        assert_eq!(result.hits[0].path, "authentication.md");
+        assert!(
+            result.hits[0].reason.contains("semantic-body:")
+                || result.hits[0].reason.contains("semantic-heading:")
+        );
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_uses_root_and_language_intent_to_disambiguate() {
+        let cwd = temp_dir("workspace-root-language-intent");
+        let rust_root = cwd.join("rust");
+        let docs_root = cwd.join("docs");
+        fs::create_dir_all(&rust_root).expect("mkdir rust");
+        fs::create_dir_all(&docs_root).expect("mkdir docs");
+        fs::write(
+            rust_root.join("config.rs"),
+            "pub fn load_configuration_profile() { /* rust config loader */ }\n",
+        )
+        .expect("write rust config");
+        fs::write(
+            docs_root.join("config.md"),
+            "# Config\nConfiguration profile reference for operators.\n",
+        )
+        .expect("write docs config");
+
+        let manifest = attach_corpus(
+            &cwd,
+            &[rust_root.clone(), docs_root.clone()],
+            CorpusAttachOptions::default(),
+        )
+        .expect("attach corpus");
+        let result =
+            search_corpus(&cwd, &manifest.corpus_id, "rust config", 5, None).expect("search");
+
+        assert_eq!(result.hits[0].path, "config.rs");
+        assert!(result.hits[0].source_root.ends_with("rust"));
+        assert!(
+            result.hits[0].reason.contains("root-name:rust")
+                || result.hits[0].reason.contains("language:rust")
+        );
 
         let _ = fs::remove_dir_all(cwd);
     }
