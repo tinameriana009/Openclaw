@@ -1255,6 +1255,7 @@ pub fn search_corpus_manifest(
                 full_coverage: matched_tokens == tokens.len(),
             });
         }
+        apply_evidence_set_rerank(doc, &query_features, &mut document_hits);
         expand_neighbor_hits(doc, &document_hits, &mut scored_hits);
         scored_hits.extend(document_hits);
     }
@@ -1834,10 +1835,7 @@ fn query_features(query: &str) -> QueryFeatures {
 fn route_query_strategy(query: &str, features: &QueryFeatures) -> QueryStrategy {
     let normalized = normalize_for_match(query);
     let symbolish_query = !features.raw_terms.is_empty()
-        || features
-            .compact_terms
-            .iter()
-            .any(|term| term.len() >= 8)
+        || features.compact_terms.iter().any(|term| term.len() >= 8)
         || query.contains("::")
         || query.contains("/")
         || query.contains("_");
@@ -2251,6 +2249,118 @@ fn apply_outline_path_rerank(
         *score += 0.8 + outline_path.len() as f64 * 0.25;
         reasons.push(format!("outline-ancestor-context:{}", outline_path.len()));
     }
+}
+
+fn apply_evidence_set_rerank(
+    doc: &CorpusDocument,
+    query_features: &QueryFeatures,
+    document_hits: &mut [ScoredChunkHit],
+) {
+    if document_hits.len() < 2 {
+        return;
+    }
+
+    let strong_hit_ordinals = document_hits
+        .iter()
+        .filter(|hit| hit.full_coverage || hit.matched_token_count >= 2 || hit.hit.score >= 12.0)
+        .map(|hit| hit.ordinal)
+        .collect::<std::collections::BTreeSet<_>>();
+    if strong_hit_ordinals.len() < 2 {
+        return;
+    }
+
+    let mut outline_support = std::collections::BTreeMap::<String, usize>::new();
+    for ordinal in &strong_hit_ordinals {
+        let Some(chunk) = doc.chunks.iter().find(|chunk| chunk.ordinal == *ordinal) else {
+            continue;
+        };
+        let outline_path = chunk
+            .metadata
+            .get("outlinePath")
+            .and_then(JsonValue::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(JsonValue::as_str)
+                    .map(normalize_for_match)
+                    .filter(|segment| !segment.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for depth in 1..=outline_path.len() {
+            let key = outline_path[..depth].join(" > ");
+            if !key.is_empty() {
+                *outline_support.entry(key).or_insert(0) += 1;
+            }
+        }
+    }
+
+    let cluster_bonus = 1.1 + strong_hit_ordinals.len() as f64 * 0.45;
+    for hit in document_hits.iter_mut() {
+        hit.hit.score += cluster_bonus;
+        let mut reasons = split_reason_tokens(&hit.hit.reason);
+        reasons.push(format!(
+            "evidence-set:doc-support:{}",
+            strong_hit_ordinals.len()
+        ));
+
+        let local_cluster = strong_hit_ordinals
+            .iter()
+            .filter(|ordinal| **ordinal != hit.ordinal && hit.ordinal.abs_diff(**ordinal) <= 2)
+            .count();
+        if local_cluster > 0 {
+            hit.hit.score += local_cluster as f64 * 0.9;
+            reasons.push(format!("evidence-set:local-cluster:{local_cluster}"));
+        }
+
+        let max_outline_support = doc
+            .chunks
+            .iter()
+            .find(|chunk| chunk.ordinal == hit.ordinal)
+            .and_then(|chunk| chunk.metadata.get("outlinePath"))
+            .and_then(JsonValue::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(JsonValue::as_str)
+                    .map(normalize_for_match)
+                    .filter(|segment| !segment.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+            .into_iter()
+            .scan(Vec::<String>::new(), |acc, segment| {
+                acc.push(segment);
+                Some(acc.join(" > "))
+            })
+            .filter_map(|key| outline_support.get(&key).copied())
+            .max()
+            .unwrap_or(0);
+        if max_outline_support >= 2 {
+            let outline_bonus = if query_features.intent.continuity_lookup
+                || query_features.intent.explanatory_lookup
+            {
+                1.2 + max_outline_support as f64 * 0.55
+            } else {
+                0.8 + max_outline_support as f64 * 0.4
+            };
+            hit.hit.score += outline_bonus;
+            reasons.push(format!(
+                "evidence-set:outline-support:{max_outline_support}"
+            ));
+        }
+
+        hit.hit.reason = reasons.join(", ");
+    }
+}
+
+fn split_reason_tokens(reason: &str) -> Vec<String> {
+    reason
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn expand_query_token(token: &str) -> Vec<String> {
@@ -3602,8 +3712,59 @@ mod retrieval_gap_regression_tests {
             "expected auth.rs to appear in the top hits"
         );
         assert!(
-            result.hits.iter().any(|hit| hit.reason.contains("strategy:symbol-first"))
-                || result.hits.iter().any(|hit| hit.reason.contains("strategy:code-first"))
+            result
+                .hits
+                .iter()
+                .any(|hit| hit.reason.contains("strategy:symbol-first"))
+                || result
+                    .hits
+                    .iter()
+                    .any(|hit| hit.reason.contains("strategy:code-first"))
+        );
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_prefers_documents_with_coherent_multi_chunk_evidence_sets() {
+        let cwd = temp_dir("workspace-evidence-set-rerank");
+        let root = cwd.join("docs");
+        fs::create_dir_all(&root).expect("mkdir docs");
+        fs::write(
+            root.join("runbook.md"),
+            "# Platform Guide\n\n## Authentication\nThe authentication layer issues short-lived access tokens.\n\n### Session Rotation\nSession rotation rotates refresh tokens and revokes stale sessions during token refresh.\n\n### Revocation Cleanup\nOperators clean up rotated refresh tokens, revoke stale sessions, and audit token refresh failures.\n",
+        )
+        .expect("write coherent doc");
+        fs::write(
+            root.join("glossary.md"),
+            "# Glossary\n\nToken refresh means renewing a token. Session rotation is a phrase used in some systems.\n",
+        )
+        .expect("write shallow doc");
+
+        let manifest = attach_corpus(
+            &cwd,
+            &[root.clone()],
+            CorpusAttachOptions {
+                chunk_bytes: 90,
+                ..CorpusAttachOptions::default()
+            },
+        )
+        .expect("attach corpus");
+        let result = search_corpus(
+            &cwd,
+            &manifest.corpus_id,
+            "explain session rotation token refresh revocation",
+            5,
+            None,
+        )
+        .expect("search");
+
+        assert_eq!(result.hits[0].path, "runbook.md");
+        assert!(
+            result.hits[0].reason.contains("evidence-set:doc-support:")
+                || result.hits[0]
+                    .reason
+                    .contains("evidence-set:outline-support:")
         );
 
         let _ = fs::remove_dir_all(cwd);
