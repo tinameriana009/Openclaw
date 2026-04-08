@@ -598,12 +598,22 @@ fn parse_trace_command(args: &[&str]) -> Result<SlashCommand, SlashCommandParseE
             "trace",
             "/trace replay <trace-file|approval-packet>",
         )),
+        ["resume", target] => Ok(SlashCommand::Trace {
+            action: Some("resume".to_string()),
+            target: Some((*target).to_string()),
+            destination: None,
+        }),
+        ["resume", ..] => Err(command_error(
+            "Unexpected arguments for /trace resume.",
+            "trace",
+            "/trace resume <trace-file|approval-packet>",
+        )),
         [action, ..] => Err(command_error(
             &format!(
-                "Unknown /trace action '{action}'. Use summary <trace-file>, export <trace-file> [destination], approve <trace-file>, or replay <trace-file|approval-packet>."
+                "Unknown /trace action '{action}'. Use summary <trace-file>, export <trace-file> [destination], approve <trace-file>, replay <trace-file|approval-packet>, or resume <trace-file|approval-packet>."
             ),
             "trace",
-            "/trace [summary <trace-file>|export <trace-file> [destination]|approve <trace-file>|replay <trace-file|approval-packet>]",
+            "/trace [summary <trace-file>|export <trace-file> [destination]|approve <trace-file>|replay <trace-file|approval-packet>|resume <trace-file|approval-packet>]",
         )),
     }
 }
@@ -2656,6 +2666,14 @@ mod tests {
             SlashCommand::parse("/trace replay trace.json"),
             Ok(Some(SlashCommand::Trace {
                 action: Some("replay".to_string()),
+                target: Some("trace.json".to_string()),
+                destination: None,
+            }))
+        );
+        assert_eq!(
+            SlashCommand::parse("/trace resume trace.json"),
+            Ok(Some(SlashCommand::Trace {
+                action: Some("resume".to_string()),
                 target: Some("trace.json".to_string()),
                 destination: None,
             }))

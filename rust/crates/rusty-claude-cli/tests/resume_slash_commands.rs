@@ -398,14 +398,16 @@ fn resumed_trace_replay_updates_review_artifacts_with_rerun_trace() {
     let temp_dir = unique_temp_dir("resume-trace-replay-review");
     let project_dir = temp_dir.join("project");
     fs::create_dir_all(project_dir.join(".claw").join("trace")).expect("trace dir should exist");
-    fs::create_dir_all(project_dir.join(".claw").join("corpora"))
-        .expect("corpus dir should exist");
+    fs::create_dir_all(project_dir.join(".claw").join("corpora")).expect("corpus dir should exist");
     fs::create_dir_all(project_dir.join(".claw").join("sessions"))
         .expect("sessions dir should exist");
     fs::create_dir_all(project_dir.join(".claw").join("web-approvals"))
         .expect("approvals dir should exist");
 
-    let session_path = project_dir.join(".claw").join("sessions").join("session.jsonl");
+    let session_path = project_dir
+        .join(".claw")
+        .join("sessions")
+        .join("session.jsonl");
     Session::new()
         .with_persistence_path(&session_path)
         .save_to_path(&session_path)
@@ -489,10 +491,17 @@ fn resumed_trace_replay_updates_review_artifacts_with_rerun_trace() {
     )
     .expect("packet should write");
 
-    let trace_command = format!("/trace replay {}", trace_path.to_str().expect("utf8 trace path"));
+    let trace_command = format!(
+        "/trace replay {}",
+        trace_path.to_str().expect("utf8 trace path")
+    );
     let output = run_claw(
         &project_dir,
-        &["--resume", session_path.to_str().expect("utf8 path"), &trace_command],
+        &[
+            "--resume",
+            session_path.to_str().expect("utf8 path"),
+            &trace_command,
+        ],
     );
     assert!(
         output.status.success(),
@@ -528,6 +537,148 @@ fn resumed_trace_replay_updates_review_artifacts_with_rerun_trace() {
         fs::read_to_string(&review_markdown_path).expect("review markdown should exist");
     assert!(review_markdown.contains("# Web approval review"));
     assert!(!review_markdown.contains("Replay trace: `not yet rerun`"));
+}
+
+#[test]
+fn resumed_trace_resume_approves_reruns_and_refreshes_review_index() {
+    let temp_dir = unique_temp_dir("resume-trace-approve-and-rerun");
+    let project_dir = temp_dir.join("project");
+    fs::create_dir_all(project_dir.join(".claw").join("trace")).expect("trace dir should exist");
+    fs::create_dir_all(project_dir.join(".claw").join("corpora")).expect("corpus dir should exist");
+    fs::create_dir_all(project_dir.join(".claw").join("sessions"))
+        .expect("sessions dir should exist");
+
+    let session_path = project_dir
+        .join(".claw")
+        .join("sessions")
+        .join("session.jsonl");
+    Session::new()
+        .with_persistence_path(&session_path)
+        .save_to_path(&session_path)
+        .expect("session should persist");
+
+    fs::write(
+        project_dir
+            .join(".claw")
+            .join("corpora")
+            .join("demo-corpus.json"),
+        r#"{
+          "artifactKind":"claw.corpus.manifest",
+          "schemaVersion":1,
+          "compatVersion":"1",
+          "corpusId":"demo-corpus",
+          "roots":[],
+          "kind":"docs",
+          "backend":"lexical",
+          "documentCount":0,
+          "chunkCount":0,
+          "estimatedBytes":0,
+          "rootSummaries":[],
+          "skipSummary":{"skippedRoots":0,"skippedFiles":0,"reasons":[]},
+          "documents":[]
+        }"#,
+    )
+    .expect("manifest should write");
+
+    let trace_path = project_dir.join(".claw").join("trace").join("trace.json");
+    fs::write(
+        &trace_path,
+        r#"{
+          "traceId":"trace-approval",
+          "sessionId":"session-1",
+          "rootTaskId":"task-1",
+          "startedAtMs":1,
+          "finishedAtMs":2,
+          "finalStatus":"succeeded",
+          "events":[{
+            "sequence":1,
+            "eventType":"task_started",
+            "timestampMs":1,
+            "data":{"task":"search the web for release status"}
+          },{
+            "sequence":2,
+            "eventType":"corpus_peeked",
+            "timestampMs":1,
+            "data":{"corpusId":"demo-corpus"}
+          },{
+            "sequence":3,
+            "eventType":"web_execution_completed",
+            "timestampMs":2,
+            "data":{
+              "status":"approval_required",
+              "approved":false,
+              "degraded":true,
+              "query":"search the web for release status"
+            }
+          }]
+        }"#,
+    )
+    .expect("trace should write");
+
+    let trace_command = format!(
+        "/trace resume {}",
+        trace_path.to_str().expect("utf8 trace path")
+    );
+    let output = run_claw(
+        &project_dir,
+        &[
+            "--resume",
+            session_path.to_str().expect("utf8 path"),
+            &trace_command,
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\n\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("Trace resume"));
+    assert!(stdout.contains("approval recorded and rerun executed"));
+    assert!(stdout.contains("Review Index JSON"));
+    assert!(stdout.contains("Review Index MD"));
+
+    let review_json_path = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("  Review JSON      "))
+        .map(PathBuf::from)
+        .expect("review json path should be printed");
+    let review_json: JsonValue = serde_json::from_str(
+        &fs::read_to_string(&review_json_path).expect("review json should exist"),
+    )
+    .expect("review json should parse");
+    assert_eq!(review_json["operatorState"], "rerun captured for review");
+    assert!(review_json["replayTrace"].as_str().is_some());
+
+    let index_json_path = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("  Review Index JSON "))
+        .map(PathBuf::from)
+        .expect("index json path should be printed");
+    let index_json: JsonValue = serde_json::from_str(
+        &fs::read_to_string(&index_json_path).expect("index json should exist"),
+    )
+    .expect("index json should parse");
+    let entries = index_json["entries"]
+        .as_array()
+        .expect("entries should be an array");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["traceId"], "trace-approval");
+    assert_eq!(entries[0]["operatorState"], "rerun captured for review");
+
+    let index_markdown_path = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("  Review Index MD  "))
+        .map(PathBuf::from)
+        .expect("index markdown path should be printed");
+    let index_markdown =
+        fs::read_to_string(&index_markdown_path).expect("index markdown should exist");
+    assert!(index_markdown.contains("# Web approval review index"));
+    assert!(index_markdown.contains("trace `trace-approval` — rerun captured for review"));
+    assert!(index_markdown.contains("not a browser UI or automation surface"));
 }
 
 #[test]
