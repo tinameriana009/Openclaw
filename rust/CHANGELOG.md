@@ -44,7 +44,8 @@ For RCs, do not leave `Compatibility or migration notes` blank. If nothing chang
 - Stronger artifact trust/privacy notes covering compatibility anchors and redaction-safe sharing.
 - A machine-readable release artifact manifest (`.claw/release-artifacts/release-manifest.json`) plus a verifier that re-hashes the current binary and trust/release docs.
 - A richer local release-provenance envelope for that manifest: git remotes/status, host toolchain snapshot, explicit verification command set, `Cargo.lock`, and the manifest generator itself.
-- A paired `release-attestation.json` sidecar plus validator that binds the built binary hash and manifest hash into a formal in-toto-style statement shape while staying explicit that it is still unsigned local provenance.
+- A paired `release-attestation.json` sidecar plus validator that binds the built binary hash and manifest hash into a formal in-toto-style statement shape while staying explicit that it is still local provenance.
+- Optional `release-provenance.json` + detached signature generation/validation so maintainers can publish a bounded signed provenance chain with an operator-managed PEM key instead of unsigned local attestation only.
 
 ### Changed
 - `rust/RELEASE.md` now distinguishes ordinary verification from stricter RC verification, documents the current migration baseline more honestly, and includes the release-manifest plus release-attestation generation/validation step.

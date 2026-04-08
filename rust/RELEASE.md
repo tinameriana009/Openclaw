@@ -35,7 +35,7 @@ cd rust
 RELEASE_CANDIDATE=1 ./scripts/release-verify.sh
 ```
 
-That RC mode keeps the same locked build/test gates, requires a clean working tree, runs `python3 ../tests/validate_release_candidate_readiness.py`, and emits a machine-readable release artifact manifest under `.claw/release-artifacts/release-manifest.json` plus a paired `.claw/release-artifacts/release-attestation.json` statement. Both are immediately re-validated against the current binary/docs via `python3 ../tests/validate_release_artifact_manifest.py` and `python3 ../tests/validate_release_attestation.py`. The manifest still captures local provenance cues such as git remotes/status, host toolchain snapshot, declared verification commands, `Cargo.lock`, and the manifest generator itself; the new attestation sidecar binds the manifest hash and binary hash into a more formal statement shape without pretending it is signed provenance. That keeps the RC claim tied to current docs/trust notes and concrete artifact hashes rather than memory alone. See [`docs/RELEASE_CANDIDATE.md`](docs/RELEASE_CANDIDATE.md) for the bounded RC flow.
+That RC mode keeps the same locked build/test gates, requires a clean working tree, runs `python3 ../tests/validate_release_candidate_readiness.py`, and emits a machine-readable release artifact manifest under `.claw/release-artifacts/release-manifest.json` plus a paired `.claw/release-artifacts/release-attestation.json` statement. Both are immediately re-validated against the current binary/docs via `python3 ../tests/validate_release_artifact_manifest.py` and `python3 ../tests/validate_release_attestation.py`. The manifest still captures local provenance cues such as git remotes/status, host toolchain snapshot, declared verification commands, `Cargo.lock`, and the manifest generator itself; the attestation sidecar binds the manifest hash and binary hash into a more formal statement shape. If you also provide `PROVENANCE_SIGNING_KEY=/path/to/private-key.pem`, `./scripts/release-verify.sh` will generate `.claw/release-artifacts/release-provenance.json` plus `.claw/release-artifacts/release-provenance.sig` and re-validate them with `python3 ../tests/validate_signed_release_provenance.py`. That is still operator-managed local signing, not a transparency-backed or keyless supply-chain system, but it gives a bounded signed provenance chain instead of unsigned local trust only. See [`docs/RELEASE_CANDIDATE.md`](docs/RELEASE_CANDIDATE.md) for the bounded RC flow.
 
 Manual equivalent:
 
@@ -56,6 +56,11 @@ manifest_path=$(./scripts/generate-release-artifact-manifest.sh)
 attestation_path=.claw/release-artifacts/release-attestation.json
 python3 ../tests/validate_release_artifact_manifest.py "$manifest_path"
 python3 ../tests/validate_release_attestation.py "$attestation_path" "$manifest_path"
+PROVENANCE_SIGNING_KEY=./keys/release-private.pem ./scripts/sign-release-provenance.sh
+python3 ../tests/validate_signed_release_provenance.py \
+  .claw/release-artifacts/release-provenance.json \
+  .claw/release-artifacts/release-provenance.sig \
+  .claw/release-artifacts/release-provenance.pub.pem
 ```
 
 ### Operator sanity checks

@@ -24,7 +24,8 @@ An RC pass here means all of the following are true:
 - the release docs still carry explicit compatibility/migration language
 - the artifact trust story still mentions `artifactKind`, `schemaVersion`, and `compatVersion`
 - a fresh machine-readable release manifest can be generated and re-validated against the current binary/docs
-- a paired `release-attestation.json` can be generated and validated as a formal-but-still-local provenance statement
+- a paired `release-attestation.json` can be generated and validated as a formal local provenance statement
+- if you provide `PROVENANCE_SIGNING_KEY`, a signed `release-provenance.json` + `.sig` bundle can be generated and validated as a bounded cryptographic chain over the binary/manifest/attestation set
 
 It does **not** mean every operator workflow is fully automated, every artifact is a permanent interchange contract, or the broader product is production-final.
 
@@ -36,6 +37,7 @@ It does **not** mean every operator workflow is fully automated, every artifact 
 4. If trace or corpus fields changed, explain the operator impact plainly.
 5. Do one grounded run against a fresh `.claw/` state before tagging.
 6. Generate and validate `.claw/release-artifacts/release-manifest.json` and `.claw/release-artifacts/release-attestation.json` so the RC notes can point at exact current hashes/bytes for the binary and trust docs plus a formal statement envelope.
+7. If you maintain a release key, set `PROVENANCE_SIGNING_KEY` and generate `.claw/release-artifacts/release-provenance.json` plus `.sig` to publish a bounded signed provenance chain instead of unsigned local attestation only.
 
 ## Fresh-state rule
 

@@ -120,6 +120,20 @@ echo "release attestation: $attestation_path"
 python3 ../tests/validate_release_artifact_manifest.py "$manifest_path"
 python3 ../tests/validate_release_attestation.py "$attestation_path" "$manifest_path"
 
+if [[ -n "${PROVENANCE_SIGNING_KEY:-}" ]]; then
+  echo
+  printf '== Optional signed provenance ==\n'
+  provenance_path=$(./scripts/sign-release-provenance.sh)
+  signature_path=.claw/release-artifacts/release-provenance.sig
+  public_key_path=.claw/release-artifacts/release-provenance.pub.pem
+  echo "signed provenance: $provenance_path"
+  echo "signed provenance signature: $signature_path"
+  echo "signed provenance public key: $public_key_path"
+  python3 ../tests/validate_signed_release_provenance.py "$provenance_path" "$signature_path" "$public_key_path"
+else
+  echo "optional signed provenance: skipped (set PROVENANCE_SIGNING_KEY to emit release-provenance.json + .sig)"
+fi
+
 if [[ "$release_candidate" == "1" ]]; then
   echo
   printf '== RC reminders ==\n'

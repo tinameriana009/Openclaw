@@ -18,6 +18,7 @@ REQUIRED_FILES = [
     RUST_ROOT / 'scripts' / 'generate-release-artifact-manifest.sh',
     REPO_ROOT / 'tests' / 'validate_release_artifact_manifest.py',
     REPO_ROOT / 'tests' / 'validate_release_attestation.py',
+    REPO_ROOT / 'tests' / 'validate_signed_release_provenance.py',
 ]
 
 
@@ -97,6 +98,21 @@ def main() -> int:
         verify_text,
         'python3 ../tests/validate_release_attestation.py',
         'release-verify.sh does not validate the generated release attestation.',
+    )
+    require_contains(
+        release_text,
+        'validate_signed_release_provenance.py',
+        'rust/RELEASE.md does not mention the signed provenance validator.',
+    )
+    require_contains(
+        verify_text,
+        'sign-release-provenance.sh',
+        'release-verify.sh does not mention the signed provenance generator.',
+    )
+    require_contains(
+        verify_text,
+        'python3 ../tests/validate_signed_release_provenance.py',
+        'release-verify.sh does not mention the signed provenance validator.',
     )
 
     for text, label in [

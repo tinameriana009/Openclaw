@@ -65,12 +65,13 @@ When sharing a manifest excerpt, prefer this order:
 
 ## Release manifest sharing
 
-`.claw/release-artifacts/release-manifest.json` and `.claw/release-artifacts/release-attestation.json` are safer to share than raw trace/corpus artifacts because they only record hash/byte metadata for the current binary/docs plus git/toolchain context and a formal statement envelope. Even so, they can still reveal:
+`.claw/release-artifacts/release-manifest.json`, `.claw/release-artifacts/release-attestation.json`, and optional signed provenance files such as `.claw/release-artifacts/release-provenance.json` / `.sig` are safer to share than raw trace/corpus artifacts because they only record hash/byte metadata for the current binary/docs plus git/toolchain context and a formal statement envelope. Even so, they can still reveal:
 
 - the exact commit hash
 - current branch naming
 - whether the tree was dirty when generated
 - the local release surfaces you chose to include
+- the signer identity or public-key fingerprint you chose to publish for signed provenance
 
 For public bug reports, keep `artifactKind`, `schemaVersion`, `compatVersion`, artifact hashes, and workspace version, but consider redacting branch names if they expose private workflow details.
 
