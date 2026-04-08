@@ -77,7 +77,13 @@ where
             aggregator: DefaultChildOutputAggregator,
         }
     }
+}
 
+impl<'a, E, A> RecursiveConversationRuntime<'a, E, A>
+where
+    E: ChildSubqueryExecutor,
+    A: ChildOutputAggregator,
+{
     pub fn run_task(
         &self,
         request: RecursiveTaskRunRequest<'_>,
