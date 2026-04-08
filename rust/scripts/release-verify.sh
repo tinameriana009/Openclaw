@@ -95,6 +95,12 @@ python3 ../tests/validate_blender_demo.py
 python3 ../tests/validate_unreal_demo.py
 python3 ../tests/validate_repo_analysis_demo.py
 
+if [[ "$release_candidate" == "1" ]]; then
+  echo
+  printf '== Release-candidate documentation gate ==\n'
+  python3 ../tests/validate_release_candidate_readiness.py
+fi
+
 echo
 printf '== Artifact contract spot-check ==\n'
 python3 - <<'PY'

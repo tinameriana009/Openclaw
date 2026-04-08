@@ -134,6 +134,13 @@ cd rust
 ./scripts/release-verify.sh
 ```
 
+If you are preparing a release candidate instead of doing a normal smoke pass, use:
+
+```bash
+cd rust
+RELEASE_CANDIDATE=1 ./scripts/release-verify.sh
+```
+
 If you want the expanded manual sequence instead of the helper script:
 
 ```bash

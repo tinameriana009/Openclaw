@@ -35,7 +35,7 @@ cd rust
 RELEASE_CANDIDATE=1 ./scripts/release-verify.sh
 ```
 
-That RC mode keeps the same locked build/test gates but also requires a clean working tree and prints explicit release-candidate reminders.
+That RC mode keeps the same locked build/test gates, requires a clean working tree, and runs `python3 ../tests/validate_release_candidate_readiness.py` so the RC claim depends on current docs/trust notes rather than memory alone. See [`docs/RELEASE_CANDIDATE.md`](docs/RELEASE_CANDIDATE.md) for the bounded RC flow.
 
 Manual equivalent:
 
@@ -51,6 +51,7 @@ python3 ../tests/validate_operator_readiness.py
 python3 ../tests/validate_blender_demo.py
 python3 ../tests/validate_unreal_demo.py
 python3 ../tests/validate_repo_analysis_demo.py
+python3 ../tests/validate_release_candidate_readiness.py  # when running an RC gate
 ```
 
 ### Operator sanity checks

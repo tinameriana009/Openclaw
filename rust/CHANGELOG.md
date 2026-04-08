@@ -6,6 +6,30 @@ This project is still pre-1.0. Until a packaged release flow exists, treat entri
 
 The format is intentionally lightweight and loosely follows Keep a Changelog.
 
+Release-note scaffold for new entries:
+
+```md
+### Added
+- 
+
+### Changed
+- 
+
+### Fixed
+- 
+
+### Removed
+- 
+
+### Operator notes
+- Build/install:
+- Auth:
+- Corpus / trace behavior:
+- Compatibility or migration notes:
+```
+
+For RCs, do not leave `Compatibility or migration notes` blank. If nothing changed, write `no schema change from prior RC` explicitly.
+
 ## [Unreleased]
 
 ### Added
