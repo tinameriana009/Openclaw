@@ -58,13 +58,13 @@ The repo now has one especially practical end-to-end showcase path:
 
 ## What Is Still Not Production-Ready
 ### 1. Web execution is still incomplete
-The repo now has more honest bounded web semantics, fetch-state-aware provenance, approval-required query preservation, dedicated operator-facing web execution summaries, resumed trace visibility for pending web approval work, and better degraded-path reporting, but it still lacks a fully mature end-to-end web retrieval/execution path for recursive corpus-answer flows.
+The repo now has more honest bounded web semantics, fetch-state-aware provenance, approval-required query preservation, dedicated operator-facing web execution summaries, resumed trace visibility for pending web approval work, `/trace approve` approval handoff support, and better degraded-path reporting, but it still lacks a fully mature end-to-end web retrieval/execution path for recursive corpus-answer flows.
 
 ### 2. Child execution is not fully runtime-native
-Provider-backed child execution has improved materially and more setup now lives in shared `api` abstractions, including more auth resolution, bounded web-adapter wiring, shared recursive runtime construction, and more shared recursive query orchestration. But some important seams still live in CLI-layer wiring instead of a cleaner shared runtime/provider abstraction.
+Provider-backed child execution has improved materially and more setup now lives in shared abstractions, including more auth resolution, bounded web-adapter wiring, shared recursive runtime construction, more shared recursive query orchestration, and a more runtime-owned generic task runner. But some important seams still live in CLI-layer wiring instead of a cleaner shared runtime/provider abstraction.
 
 ### 3. Retrieval quality ceiling
-Retrieval is no longer purely plain lexical: it now has stronger provenance, neighbor expansion, symbol-aware heuristics, bounded semantic/structure-aware query signals, query-intent/document-continuity lifts, and outline-aware section routing. But for very large codebases or symbol-heavy workflows, the absence of deeper semantic/structure-aware retrieval will still become a bottleneck.
+Retrieval is no longer purely plain lexical: it now has stronger provenance, neighbor expansion, symbol-aware heuristics, bounded semantic/structure-aware query signals, query-intent/document-continuity lifts, outline-aware section routing, and outline-path reranking. But for very large codebases or symbol-heavy workflows, the absence of deeper semantic/structure-aware retrieval will still become a bottleneck.
 
 ### 4. Recursive engine is still alpha
 The RLM path is much stronger than before, but it is not yet a deeply adaptive planner/executor. It remains a bounded alpha recursive engine rather than a mature production orchestrator.

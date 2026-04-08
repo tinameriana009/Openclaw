@@ -29,6 +29,7 @@ It is no longer just a parity snapshot. The fork now includes substantial additi
 - a shared provider recursive runtime builder now removes one more orchestration seam from the CLI layer
 - provider-backed recursive query orchestration now owns more budget/policy/telemetry/trace setup in shared `api` code
 - generic provider recursive task orchestration surfaces now exist alongside corpus-answer compatibility wrappers
+- the shared recursive task runner lifecycle now lives further down in the runtime layer instead of `api`
 - better fallback messaging and backend availability reporting
 
 ### Local corpus RAG
@@ -41,6 +42,7 @@ It is no longer just a parity snapshot. The fork now includes substantial additi
 - bounded semantic and structure-aware query signals for common repo/docs vocabulary
 - query-intent routing and document-continuity signals improve file/docs/implementation-style retrieval
 - outline-aware and section-aware scoring improve explain/architecture-style retrieval within documents
+- outline-path reranking now distinguishes flat heading matches from the right ancestor chain
 - skip telemetry / per-root reporting improvements
 
 ### Web-aware behavior
@@ -53,6 +55,7 @@ It is no longer just a parity snapshot. The fork now includes substantial additi
 - final answers now render a dedicated operator-facing `Web execution` section with per-subquery status/detail summaries
 - final-answer web execution summaries are more honest and more detailed
 - resumed `/trace` flows now surface pending approval-required web queries and next-step guidance more practically
+- `/trace approve <trace-file>` now produces an approval packet and exact replay guidance instead of a dead-end pending state
 - provenance handling is stronger
 
 ### Operator / product surface
@@ -61,8 +64,8 @@ It is no longer just a parity snapshot. The fork now includes substantial additi
 - release/trust docs (`CHANGELOG`, `RELEASE`, `ARTIFACTS`, `PRIVACY`, `RELEASE_CANDIDATE`)
 - production-readiness planning docs, checklist, scorecard, and implementation plan
 - stronger RC-readiness validation in tests and release verification flow
-- machine-readable release artifact manifests with local hashing/verification for key release surfaces
-- domain workflow docs, prompt templates, demo kits, lightweight readiness validators, a runnable repo-analysis showcase helper, honest Blender/Unreal prep helpers, and a stronger Unreal operator handoff runbook
+- richer machine-readable release artifact manifests with local hashing/verification for key release surfaces
+- domain workflow docs, prompt templates, demo kits, lightweight readiness validators, a runnable repo-analysis showcase helper, honest Blender/Unreal prep helpers, stronger Unreal operator handoff runbooks, and tighter next-prompt handoff loops for app-domain demos
 
 ### Showcase workflows
 - Blender scene cleanup demo kit
