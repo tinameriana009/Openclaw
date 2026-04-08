@@ -578,12 +578,22 @@ fn parse_trace_command(args: &[&str]) -> Result<SlashCommand, SlashCommandParseE
             "trace",
             "/trace export <trace-file> [destination]",
         )),
+        ["approve", target] => Ok(SlashCommand::Trace {
+            action: Some("approve".to_string()),
+            target: Some((*target).to_string()),
+            destination: None,
+        }),
+        ["approve", ..] => Err(command_error(
+            "Unexpected arguments for /trace approve.",
+            "trace",
+            "/trace approve <trace-file>",
+        )),
         [action, ..] => Err(command_error(
             &format!(
-                "Unknown /trace action '{action}'. Use summary <trace-file> or export <trace-file> [destination]."
+                "Unknown /trace action '{action}'. Use summary <trace-file>, export <trace-file> [destination], or approve <trace-file>."
             ),
             "trace",
-            "/trace [summary <trace-file>|export <trace-file> [destination]]",
+            "/trace [summary <trace-file>|export <trace-file> [destination]|approve <trace-file>]",
         )),
     }
 }
@@ -2216,9 +2226,9 @@ fn resolve_trace_path(cwd: &Path, input: &str) -> PathBuf {
 fn render_trace_usage(unexpected: Option<&str>) -> String {
     let mut lines = vec![
         "Trace".to_string(),
-        "  Usage            /trace [summary <trace-file>|export <trace-file> [destination]]"
+        "  Usage            /trace [summary <trace-file>|export <trace-file> [destination]|approve <trace-file>]"
             .to_string(),
-        "  Direct CLI       claw trace [summary <trace-file>|export <trace-file> [destination]]"
+        "  Direct CLI       claw trace [summary <trace-file>|export <trace-file> [destination]|approve <trace-file>]"
             .to_string(),
         "  Inputs           Trace ledger JSON files produced by the recursive runtime".to_string(),
     ];
@@ -3205,7 +3215,7 @@ mod tests {
         let usage = handle_trace_slash_command(Some("inspect trace.json"), &cwd)
             .expect("unexpected args should return usage");
         assert!(usage.contains(
-            "Usage            /trace [summary <trace-file>|export <trace-file> [destination]]"
+            "Usage            /trace [summary <trace-file>|export <trace-file> [destination]|approve <trace-file>]"
         ));
 
         let _ = fs::remove_dir_all(cwd);

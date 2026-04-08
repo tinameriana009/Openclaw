@@ -1480,6 +1480,134 @@ fn run_corpus_answer(
     ))
 }
 
+fn run_trace_command(
+    action: Option<&str>,
+    target: Option<&str>,
+    destination: Option<&str>,
+    cwd: &Path,
+    session_path: Option<&Path>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    match (action, target, destination) {
+        (Some("approve"), Some(target), None) => {
+            approve_trace_for_operator(target, cwd, session_path)
+        }
+        _ => {
+            let trace_args = match (action, target, destination) {
+                (None, _, _) => None,
+                (Some("summary"), Some(target), None) => Some(format!("summary {target}")),
+                (Some("export"), Some(target), None) => Some(format!("export {target}")),
+                (Some("export"), Some(target), Some(destination)) => {
+                    Some(format!("export {target} {destination}"))
+                }
+                _ => None,
+            };
+            Ok(handle_trace_slash_command(trace_args.as_deref(), cwd)?)
+        }
+    }
+}
+
+fn approve_trace_for_operator(
+    trace_target: &str,
+    cwd: &Path,
+    session_path: Option<&Path>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let trace_path = if Path::new(trace_target).is_absolute() {
+        PathBuf::from(trace_target)
+    } else {
+        cwd.join(trace_target)
+    };
+    let trace = runtime::TraceLedger::read_from_path(&trace_path)?;
+    let pending_queries = trace
+        .events
+        .iter()
+        .filter(|event| event.event_type == runtime::TraceEventType::WebExecutionCompleted)
+        .filter(|event| {
+            event.data.get("status").and_then(|value| value.as_str())
+                == Some("approval_required")
+        })
+        .filter_map(|event| event.data.get("query").and_then(|value| value.as_str()))
+        .map(str::trim)
+        .filter(|query| !query.is_empty())
+        .fold(Vec::<String>::new(), |mut queries, query| {
+            if !queries.iter().any(|existing| existing == query) {
+                queries.push(query.to_string());
+            }
+            queries
+        });
+    if pending_queries.is_empty() {
+        return Ok(format!(
+            "Trace approval\n  Result           no approval-required web queries were found\n  Trace            {}",
+            trace_path.display()
+        ));
+    }
+    let task = trace
+        .events
+        .iter()
+        .find(|event| event.event_type == runtime::TraceEventType::TaskStarted)
+        .and_then(|event| event.data.get("task"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|task| !task.is_empty())
+        .ok_or("trace approval requires a task_started event with the original task")?
+        .to_string();
+    let corpus_id = trace
+        .events
+        .iter()
+        .find(|event| event.event_type == runtime::TraceEventType::CorpusPeeked)
+        .and_then(|event| event.data.get("corpusId"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|corpus_id| !corpus_id.is_empty())
+        .ok_or("trace approval requires a corpus_peeked event with a corpusId")?
+        .to_string();
+    let _ = load_corpus(cwd, &corpus_id)?;
+    let session_ref = session_path
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| trace.session_id.clone());
+    let replay_command = format!(
+        "claw --resume {} \"/corpus answer {} :: {}\"",
+        shell_escape(&session_ref),
+        corpus_id,
+        task.replace('"', "\\\"")
+    );
+    let packet_dir = cwd.join(".claw").join("web-approvals");
+    fs::create_dir_all(&packet_dir)?;
+    let packet_path = packet_dir.join(format!("{}.json", trace.trace_id));
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis();
+    let packet = json!({
+        "schemaVersion": 1,
+        "traceId": trace.trace_id,
+        "sessionId": trace.session_id,
+        "task": task,
+        "corpusId": corpus_id,
+        "pendingQueries": pending_queries,
+        "approvedAtMs": now_ms,
+        "replayCommand": replay_command,
+        "operatorNote": "Approval has been recorded, but browser automation is still not available; rerun explicitly to collect bounded web evidence.",
+    });
+    fs::write(&packet_path, serde_json::to_string_pretty(&packet)?)?;
+    Ok(format!(
+        "Trace approval\n  Result           approval packet recorded\n  Trace            {}\n  Packet           {}\n  Pending queries  {}\n  Replay command   {}\n  Note             browser automation is still not available; rerun explicitly after approval",
+        trace_path.display(),
+        packet_path.display(),
+        packet["pendingQueries"].as_array().into_iter().flatten().filter_map(|value| value.as_str()).collect::<Vec<_>>().join("; "),
+        packet["replayCommand"].as_str().unwrap_or_default(),
+    ))
+}
+
+fn shell_escape(value: &str) -> String {
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-'))
+    {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn sanitize_session_segment(value: &str) -> String {
     let sanitized = value
@@ -1659,19 +1787,16 @@ fn run_resume_command(
             target,
             destination,
         } => {
-            let trace_args = match (action.as_deref(), target.as_deref(), destination.as_deref()) {
-                (None, _, _) => None,
-                (Some("summary"), Some(target), None) => Some(format!("summary {target}")),
-                (Some("export"), Some(target), None) => Some(format!("export {target}")),
-                (Some("export"), Some(target), Some(destination)) => {
-                    Some(format!("export {target} {destination}"))
-                }
-                _ => None,
-            };
-            let cwd = session_path.parent().unwrap_or_else(|| Path::new("."));
+            let cwd = env::current_dir()?;
             Ok(ResumeCommandOutcome {
                 session: session.clone(),
-                message: Some(handle_trace_slash_command(trace_args.as_deref(), cwd)?),
+                message: Some(run_trace_command(
+                    action.as_deref(),
+                    target.as_deref(),
+                    destination.as_deref(),
+                    &cwd,
+                    Some(session_path),
+                )?),
             })
         }
         SlashCommand::Unknown(name) => Err(format_unknown_slash_command(name).into()),
@@ -2223,8 +2348,22 @@ impl LiveCli {
                 );
                 false
             }
-            SlashCommand::Trace { .. } => {
-                println!("trace: repl support is not wired yet");
+            SlashCommand::Trace {
+                action,
+                target,
+                destination,
+            } => {
+                let cwd = env::current_dir()?;
+                println!(
+                    "{}",
+                    run_trace_command(
+                        action.as_deref(),
+                        target.as_deref(),
+                        destination.as_deref(),
+                        &cwd,
+                        Some(&self.session.path),
+                    )?
+                );
                 false
             }
             SlashCommand::Unknown(name) => {

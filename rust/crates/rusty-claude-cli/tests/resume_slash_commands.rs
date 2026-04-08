@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use runtime::ContentBlock;
 use runtime::Session;
+use serde_json::Value as JsonValue;
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -244,6 +245,128 @@ fn resumed_trace_summary_reads_workspace_trace_artifacts() {
     assert!(
         stdout.contains("Next step        approve web queries: search the web for release status")
     );
+}
+
+#[test]
+fn resumed_trace_approve_writes_operator_packet_and_rerun_guidance() {
+    let temp_dir = unique_temp_dir("resume-trace-approve");
+    let project_dir = temp_dir.join("project");
+    fs::create_dir_all(project_dir.join(".claw").join("trace")).expect("trace dir should exist");
+    fs::create_dir_all(project_dir.join(".claw").join("corpora"))
+        .expect("corpus dir should exist");
+
+    let sessions_dir = project_dir.join(".claw").join("sessions");
+    fs::create_dir_all(&sessions_dir).expect("sessions dir should exist");
+    let session_path = sessions_dir.join("session.jsonl");
+    Session::new()
+        .with_persistence_path(&session_path)
+        .save_to_path(&session_path)
+        .expect("session should persist");
+
+    let corpus_manifest_path = project_dir
+        .join(".claw")
+        .join("corpora")
+        .join("demo-corpus.json");
+    fs::write(
+        &corpus_manifest_path,
+        r#"{
+          "artifactKind":"claw.corpus.manifest",
+          "schemaVersion":1,
+          "compatVersion":"1",
+          "corpusId":"demo-corpus",
+          "roots":[],
+          "kind":"docs",
+          "backend":"lexical",
+          "documentCount":0,
+          "chunkCount":0,
+          "estimatedBytes":0,
+          "rootSummaries":[],
+          "skipSummary":{"skippedRoots":0,"skippedFiles":0,"reasons":[]},
+          "documents":[]
+        }"#,
+    )
+    .expect("manifest should write");
+
+    let trace_path = project_dir.join(".claw").join("trace").join("trace.json");
+    fs::write(
+        &trace_path,
+        r#"{
+          "traceId":"trace-approval",
+          "sessionId":"session-1",
+          "rootTaskId":"task-1",
+          "startedAtMs":1,
+          "finishedAtMs":2,
+          "finalStatus":"succeeded",
+          "events":[{
+            "sequence":1,
+            "eventType":"task_started",
+            "timestampMs":1,
+            "data":{"task":"search the web for release status"}
+          },{
+            "sequence":2,
+            "eventType":"corpus_peeked",
+            "timestampMs":1,
+            "data":{"corpusId":"demo-corpus"}
+          },{
+            "sequence":3,
+            "eventType":"web_execution_completed",
+            "timestampMs":2,
+            "data":{
+              "status":"approval_required",
+              "approved":false,
+              "degraded":true,
+              "query":"search the web for release status"
+            }
+          }]
+        }"#,
+    )
+    .expect("trace should write");
+
+    let trace_command = format!(
+        "/trace approve {}",
+        trace_path.to_str().expect("utf8 trace path")
+    );
+    let output = run_claw(
+        &project_dir,
+        &[
+            "--resume",
+            session_path.to_str().expect("utf8 path"),
+            &trace_command,
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\n\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("Trace approval"));
+    assert!(stdout.contains("Pending queries  search the web for release status"));
+    assert!(stdout.contains("Replay command   claw --resume"));
+    assert!(stdout.contains("/corpus answer demo-corpus :: search the web for release status"));
+    assert!(stdout.contains("browser automation is still not available"));
+
+    let packet_path = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("  Packet           "))
+        .map(PathBuf::from)
+        .expect("packet path should be printed");
+    let packet = fs::read_to_string(&packet_path).expect("packet should exist");
+    let packet_json: JsonValue = serde_json::from_str(&packet).expect("packet json should parse");
+    assert_eq!(packet_json["traceId"], "trace-approval");
+    assert_eq!(packet_json["corpusId"], "demo-corpus");
+    assert_eq!(packet_json["task"], "search the web for release status");
+    assert_eq!(
+        packet_json["pendingQueries"][0],
+        "search the web for release status"
+    );
+    assert!(packet_json["replayCommand"]
+        .as_str()
+        .expect("replay command should exist")
+        .contains("/corpus answer demo-corpus :: search the web for release status"));
 }
 
 #[test]
