@@ -449,8 +449,51 @@ pub fn render_trace_summary(trace: &TraceLedger) -> String {
         .and_then(JsonValue::as_str)
         .unwrap_or("unknown");
     let counters = trace.counters();
+    let pending_queries = trace
+        .events
+        .iter()
+        .filter(|event| event.event_type == TraceEventType::WebExecutionCompleted)
+        .filter(|event| {
+            event.data.get("status").and_then(JsonValue::as_str) == Some("approval_required")
+        })
+        .filter_map(|event| event.data.get("query").and_then(JsonValue::as_str))
+        .map(str::trim)
+        .filter(|query| !query.is_empty())
+        .fold(Vec::<String>::new(), |mut queries, query| {
+            if !queries.iter().any(|existing| existing == query) {
+                queries.push(query.to_string());
+            }
+            queries
+        });
+    let operator_state = if !pending_queries.is_empty() {
+        "awaiting approval"
+    } else if counters.web_execution_failed > 0 {
+        "review failures"
+    } else if counters.degraded_web_executions > 0 || counters.web_execution_no_evidence > 0 {
+        "review degraded web outcomes"
+    } else if counters.web_execution_succeeded > 0 {
+        "web evidence attached"
+    } else {
+        "local-only or no web activity"
+    };
+    let operator_next_step = if !pending_queries.is_empty() {
+        format!("approve web queries: {}", pending_queries.join("; "))
+    } else if counters.web_execution_failed > 0 {
+        "inspect failed web subqueries in the trace ledger".to_string()
+    } else if counters.degraded_web_executions > 0 || counters.web_execution_no_evidence > 0 {
+        "review degraded/no-evidence web paths before treating results as fresh".to_string()
+    } else if counters.web_execution_succeeded > 0 {
+        "inspect attached web evidence; browser automation is still not available".to_string()
+    } else {
+        "continue with local evidence or rerun with a web-capable profile if needed".to_string()
+    };
+    let pending_queries_line = if pending_queries.is_empty() {
+        "none".to_string()
+    } else {
+        pending_queries.join("; ")
+    };
     format!(
-        "Trace\n  Id               {}\n  Session          {}\n  Task             {}\n  Status           {}\n  Stop reason      {}\n  Events           {}\n  Retrievals       {} / {}\n  Subqueries       {} / {}\n  Web escalations  {}\n  Web executions   {}\n  Web approved     {}\n  Web pending      {}\n  Web succeeded    {}\n  Web no evidence  {}\n  Web failed       {}\n  Web skipped      {}\n  Web degraded     {}\n  Web evidence     {}",
+        "Trace\n  Id               {}\n  Session          {}\n  Task             {}\n  Status           {}\n  Stop reason      {}\n  Events           {}\n  Retrievals       {} / {}\n  Subqueries       {} / {}\n  Web escalations  {}\n  Web executions   {}\n  Web approved     {}\n  Web pending      {}\n  Web succeeded    {}\n  Web no evidence  {}\n  Web failed       {}\n  Web skipped      {}\n  Web degraded     {}\n  Web evidence     {}\n  Operator state   {}\n  Pending queries  {}\n  Next step        {}",
         trace.trace_id,
         trace.session_id,
         trace.root_task_id,
@@ -471,6 +514,9 @@ pub fn render_trace_summary(trace: &TraceLedger) -> String {
         counters.web_execution_skipped,
         counters.degraded_web_executions,
         counters.web_evidence_items,
+        operator_state,
+        pending_queries_line,
+        operator_next_step,
     )
 }
 

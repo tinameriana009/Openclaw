@@ -35,8 +35,9 @@ use api::{
 
 use commands::{
     handle_agents_slash_command, handle_mcp_slash_command, handle_plugins_slash_command,
-    handle_skills_slash_command, render_slash_command_help, resume_supported_slash_commands,
-    slash_command_specs, validate_slash_command_input, SlashCommand,
+    handle_skills_slash_command, handle_trace_slash_command, render_slash_command_help,
+    resume_supported_slash_commands, slash_command_specs, validate_slash_command_input,
+    SlashCommand,
 };
 use compat_harness::{extract_manifest, UpstreamPaths};
 use init::initialize_repo;
@@ -1653,10 +1654,26 @@ fn run_resume_command(
                 None,
             )?),
         }),
-        SlashCommand::Trace { .. } => Ok(ResumeCommandOutcome {
-            session: session.clone(),
-            message: Some("trace: resume mode support is not wired yet".to_string()),
-        }),
+        SlashCommand::Trace {
+            action,
+            target,
+            destination,
+        } => {
+            let trace_args = match (action.as_deref(), target.as_deref(), destination.as_deref()) {
+                (None, _, _) => None,
+                (Some("summary"), Some(target), None) => Some(format!("summary {target}")),
+                (Some("export"), Some(target), None) => Some(format!("export {target}")),
+                (Some("export"), Some(target), Some(destination)) => {
+                    Some(format!("export {target} {destination}"))
+                }
+                _ => None,
+            };
+            let cwd = session_path.parent().unwrap_or_else(|| Path::new("."));
+            Ok(ResumeCommandOutcome {
+                session: session.clone(),
+                message: Some(handle_trace_slash_command(trace_args.as_deref(), cwd)?),
+            })
+        }
         SlashCommand::Unknown(name) => Err(format_unknown_slash_command(name).into()),
         SlashCommand::Bughunter { .. }
         | SlashCommand::Commit { .. }

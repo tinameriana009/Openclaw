@@ -1688,6 +1688,12 @@ mod tests {
                         "search the web for the latest hidden behavior".to_string(),
                     ))
         }));
+        let summary = render_trace_summary(&result.trace);
+        assert!(summary.contains("Operator state   awaiting approval"));
+        assert!(summary.contains("Pending queries  search the web for the latest hidden behavior"));
+        assert!(summary.contains(
+            "Next step        approve web queries: search the web for the latest hidden behavior"
+        ));
     }
 
     #[test]

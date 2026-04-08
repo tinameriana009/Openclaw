@@ -175,6 +175,73 @@ fn resumed_config_command_loads_settings_files_end_to_end() {
 }
 
 #[test]
+fn resumed_trace_summary_reads_workspace_trace_artifacts() {
+    let temp_dir = unique_temp_dir("resume-trace-summary");
+    fs::create_dir_all(temp_dir.join(".claw").join("trace")).expect("trace dir should exist");
+
+    let session_path = temp_dir.join("session.jsonl");
+    Session::new()
+        .with_persistence_path(&session_path)
+        .save_to_path(&session_path)
+        .expect("session should persist");
+
+    fs::write(
+        temp_dir.join(".claw").join("trace").join("trace.json"),
+        r#"{
+          "traceId":"trace-approval",
+          "sessionId":"session-1",
+          "rootTaskId":"task-1",
+          "startedAtMs":1,
+          "finishedAtMs":2,
+          "finalStatus":"succeeded",
+          "events":[{
+            "sequence":1,
+            "eventType":"web_execution_completed",
+            "timestampMs":2,
+            "data":{
+              "status":"approval_required",
+              "approved":false,
+              "degraded":true,
+              "query":"search the web for release status"
+            }
+          },{
+            "sequence":2,
+            "eventType":"stop_condition_reached",
+            "timestampMs":2,
+            "data":{"stopReason":"completed"}
+          }]
+        }"#,
+    )
+    .expect("trace should write");
+
+    let output = run_claw(
+        &temp_dir,
+        &[
+            "--resume",
+            session_path.to_str().expect("utf8 path"),
+            "/trace",
+            "summary",
+            "trace.json",
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\n\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("Trace"));
+    assert!(stdout.contains("Operator state   awaiting approval"));
+    assert!(stdout.contains("Pending queries  search the web for release status"));
+    assert!(
+        stdout.contains("Next step        approve web queries: search the web for release status")
+    );
+}
+
+#[test]
 fn resume_latest_restores_the_most_recent_managed_session() {
     // given
     let temp_dir = unique_temp_dir("resume-latest");
