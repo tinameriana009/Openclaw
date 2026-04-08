@@ -104,14 +104,15 @@ pub use remote::{
     DEFAULT_SESSION_TOKEN_PATH, DEFAULT_SYSTEM_CA_BUNDLE, NO_PROXY_HOSTS, UPSTREAM_PROXY_ENV_KEYS,
 };
 pub use rlm::{
-    export_trace, prepare_recursive_task_run, render_trace_summary, ChildExecutionFallbackFormatter,
-    ChildExecutionFallbackRenderer, ChildOutputAggregator, ChildSubqueryExecutor,
-    ChildSubqueryOutput, ChildSubqueryRequest, DefaultChildOutputAggregator,
-    FallbackChildSubqueryExecutor, RecursiveContextSlice, RecursiveConversationRuntime,
-    RecursiveCorpusPeekResult, RecursiveExecutionMode, RecursiveExecutionResult,
-    PreparedRecursiveTaskRun, RecursiveIterationState, RecursiveProfileTaskRequest,
-    RecursiveRunArtifacts, RecursiveRuntimeError, RecursiveRuntimeState, RecursiveStopReason,
-    RecursiveTaskRunRequest, RecursiveTaskWorkspace,
+    export_trace, prepare_recursive_task_run, render_trace_summary,
+    ChildExecutionFallbackFormatter, ChildExecutionFallbackRenderer, ChildOutputAggregator,
+    ChildSubqueryExecutor, ChildSubqueryOutput, ChildSubqueryRequest, DefaultChildOutputAggregator,
+    FallbackChildSubqueryExecutor, PreparedRecursiveTaskRun, RecursiveContextSlice,
+    RecursiveConversationRuntime, RecursiveCorpusPeekResult, RecursiveExecutionMode,
+    RecursiveExecutionResult, RecursiveIterationState, RecursiveProfileTaskRequest,
+    RecursiveRunArtifacts, RecursiveRuntimeError, RecursiveRuntimeFactory, RecursiveRuntimeState,
+    RecursiveStopReason, RecursiveTaskEnvelope, RecursiveTaskRunRequest, RecursiveTaskWorkspace,
+    RecursiveTaskWorkspaceProvider,
 };
 pub use sandbox::{
     build_linux_sandbox_command, detect_container_environment, detect_container_environment_from,
