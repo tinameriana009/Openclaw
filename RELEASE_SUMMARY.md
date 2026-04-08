@@ -27,6 +27,8 @@ It is no longer just a parity snapshot. The fork now includes substantial additi
 - model resolution and bounded minimal web-evidence shaping were pushed further into shared `api` helpers
 - auth resolution and default bounded web adapter paths were pushed further into shared `api` helpers
 - a shared provider recursive runtime builder now removes one more orchestration seam from the CLI layer
+- provider-backed recursive query orchestration now owns more budget/policy/telemetry/trace setup in shared `api` code
+- generic provider recursive task orchestration surfaces now exist alongside corpus-answer compatibility wrappers
 - better fallback messaging and backend availability reporting
 
 ### Local corpus RAG
@@ -38,6 +40,7 @@ It is no longer just a parity snapshot. The fork now includes substantial additi
 - symbol-aware query heuristics for code-heavy and multi-root retrieval
 - bounded semantic and structure-aware query signals for common repo/docs vocabulary
 - query-intent routing and document-continuity signals improve file/docs/implementation-style retrieval
+- outline-aware and section-aware scoring improve explain/architecture-style retrieval within documents
 - skip telemetry / per-root reporting improvements
 
 ### Web-aware behavior
@@ -49,6 +52,7 @@ It is no longer just a parity snapshot. The fork now includes substantial additi
 - fetch-state-aware provenance distinguishes fetched pages from search-result snippets
 - final answers now render a dedicated operator-facing `Web execution` section with per-subquery status/detail summaries
 - final-answer web execution summaries are more honest and more detailed
+- resumed `/trace` flows now surface pending approval-required web queries and next-step guidance more practically
 - provenance handling is stronger
 
 ### Operator / product surface

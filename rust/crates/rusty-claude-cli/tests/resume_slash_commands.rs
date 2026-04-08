@@ -179,14 +179,17 @@ fn resumed_trace_summary_reads_workspace_trace_artifacts() {
     let temp_dir = unique_temp_dir("resume-trace-summary");
     fs::create_dir_all(temp_dir.join(".claw").join("trace")).expect("trace dir should exist");
 
-    let session_path = temp_dir.join("session.jsonl");
+    let sessions_dir = temp_dir.join(".claw").join("sessions");
+    fs::create_dir_all(&sessions_dir).expect("sessions dir should exist");
+    let session_path = sessions_dir.join("session.jsonl");
     Session::new()
         .with_persistence_path(&session_path)
         .save_to_path(&session_path)
         .expect("session should persist");
 
+    let trace_path = temp_dir.join(".claw").join("trace").join("trace.json");
     fs::write(
-        temp_dir.join(".claw").join("trace").join("trace.json"),
+        &trace_path,
         r#"{
           "traceId":"trace-approval",
           "sessionId":"session-1",
@@ -214,14 +217,16 @@ fn resumed_trace_summary_reads_workspace_trace_artifacts() {
     )
     .expect("trace should write");
 
+    let trace_command = format!(
+        "/trace summary {}",
+        trace_path.to_str().expect("utf8 trace path")
+    );
     let output = run_claw(
         &temp_dir,
         &[
             "--resume",
             session_path.to_str().expect("utf8 path"),
-            "/trace",
-            "summary",
-            "trace.json",
+            &trace_command,
         ],
     );
 
