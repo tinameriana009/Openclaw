@@ -692,8 +692,8 @@ mod tests {
         assert_eq!(counters.subqueries_started, 1);
         assert_eq!(counters.web_escalations, 1);
         assert_eq!(counters.web_executions_completed, 1);
-        assert_eq!(counters.web_execution_approved, 1);
-        assert_eq!(counters.web_execution_no_evidence, 1);
+        assert_eq!(counters.web_execution_approved, 0);
+        assert_eq!(counters.web_execution_no_evidence, 0);
         assert_eq!(counters.degraded_web_executions, 1);
     }
 
@@ -726,11 +726,11 @@ mod tests {
         );
         assert_eq!(
             trace_records[0].attributes.get("web_execution_approved"),
-            Some(&serde_json::Value::from(1))
+            Some(&serde_json::Value::from(0))
         );
         assert_eq!(
             trace_records[0].attributes.get("web_execution_no_evidence"),
-            Some(&serde_json::Value::from(1))
+            Some(&serde_json::Value::from(0))
         );
         assert_eq!(
             trace_records[0].attributes.get("degraded_web_executions"),

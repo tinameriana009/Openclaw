@@ -1056,6 +1056,8 @@ mod tests {
         let summary = render_trace_summary(&result.trace);
         assert!(summary.contains("Stop reason      subcall_cap"));
         assert!(summary.contains("Web executions"));
+        assert!(summary.contains("Web pending"));
+        assert!(summary.contains("Web no evidence"));
         assert!(summary.contains("Web degraded"));
 
         let exported = export_trace(&result.trace, &trace_dir.join("exported"))

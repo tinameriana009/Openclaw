@@ -26,6 +26,7 @@ It is no longer just a parity snapshot. The fork now includes substantial additi
 - shared provider extractive child executor builder moved into the `api` crate
 - model resolution and bounded minimal web-evidence shaping were pushed further into shared `api` helpers
 - auth resolution and default bounded web adapter paths were pushed further into shared `api` helpers
+- a shared provider recursive runtime builder now removes one more orchestration seam from the CLI layer
 - better fallback messaging and backend availability reporting
 
 ### Local corpus RAG
@@ -36,6 +37,7 @@ It is no longer just a parity snapshot. The fork now includes substantial additi
 - per-root disambiguation for same-named files
 - symbol-aware query heuristics for code-heavy and multi-root retrieval
 - bounded semantic and structure-aware query signals for common repo/docs vocabulary
+- query-intent routing and document-continuity signals improve file/docs/implementation-style retrieval
 - skip telemetry / per-root reporting improvements
 
 ### Web-aware behavior
@@ -45,6 +47,7 @@ It is no longer just a parity snapshot. The fork now includes substantial additi
 - ask-mode now preserves approval-required web query provenance more explicitly
 - degraded web collection is surfaced as explicit notes instead of silent failure or overclaiming
 - fetch-state-aware provenance distinguishes fetched pages from search-result snippets
+- final answers now render a dedicated operator-facing `Web execution` section with per-subquery status/detail summaries
 - final-answer web execution summaries are more honest and more detailed
 - provenance handling is stronger
 
@@ -54,7 +57,8 @@ It is no longer just a parity snapshot. The fork now includes substantial additi
 - release/trust docs (`CHANGELOG`, `RELEASE`, `ARTIFACTS`, `PRIVACY`, `RELEASE_CANDIDATE`)
 - production-readiness planning docs, checklist, scorecard, and implementation plan
 - stronger RC-readiness validation in tests and release verification flow
-- domain workflow docs, prompt templates, demo kits, lightweight readiness validators, a runnable repo-analysis showcase helper, and honest Blender/Unreal prep helpers
+- machine-readable release artifact manifests with local hashing/verification for key release surfaces
+- domain workflow docs, prompt templates, demo kits, lightweight readiness validators, a runnable repo-analysis showcase helper, honest Blender/Unreal prep helpers, and a stronger Unreal operator handoff runbook
 
 ### Showcase workflows
 - Blender scene cleanup demo kit
