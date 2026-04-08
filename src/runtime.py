@@ -1,16 +1,35 @@
 from __future__ import annotations
 
+import re
+from collections import Counter
 from dataclasses import dataclass
 
 from .commands import PORTED_COMMANDS
 from .context import PortContext, build_port_context, render_context
+from .execution_registry import build_execution_registry
 from .history import HistoryLog
 from .models import PermissionDenial, PortingModule
 from .query_engine import QueryEngineConfig, QueryEnginePort, TurnResult
 from .setup import SetupReport, WorkspaceSetup, run_setup
 from .system_init import build_system_init_message
 from .tools import PORTED_TOOLS
-from .execution_registry import build_execution_registry
+
+
+SEMANTIC_SYNONYMS: dict[str, tuple[str, ...]] = {
+    'review': ('audit', 'inspect', 'security', 'check'),
+    'audit': ('review', 'inspect', 'security', 'check'),
+    'search': ('find', 'lookup', 'query', 'discover'),
+    'find': ('search', 'lookup', 'query', 'discover'),
+    'tool': ('tools', 'utility'),
+    'tools': ('tool', 'utilities'),
+    'agent': ('agents', 'assistant'),
+    'agents': ('agent', 'assistants'),
+    'session': ('sessions', 'history', 'transcript'),
+    'sessions': ('session', 'history', 'transcript'),
+    'mcp': ('resource', 'resources', 'server', 'protocol'),
+}
+STOPWORDS = frozenset({'a', 'an', 'and', 'for', 'from', 'how', 'i', 'in', 'of', 'on', 'the', 'to', 'with'})
+TOKEN_PATTERN = re.compile(r'[A-Z]+(?=[A-Z][a-z]|\b)|[A-Z]?[a-z]+|\d+')
 
 
 @dataclass(frozen=True)
@@ -88,10 +107,11 @@ class RuntimeSession:
 
 class PortRuntime:
     def route_prompt(self, prompt: str, limit: int = 5) -> list[RoutedMatch]:
-        tokens = {token.lower() for token in prompt.replace('/', ' ').replace('-', ' ').split() if token}
+        query_tokens = self._normalize_text(prompt)
+        ordered_query_tokens = tuple(query_tokens)
         by_kind = {
-            'command': self._collect_matches(tokens, PORTED_COMMANDS, 'command'),
-            'tool': self._collect_matches(tokens, PORTED_TOOLS, 'tool'),
+            'command': self._collect_matches(query_tokens, PORTED_COMMANDS, 'command', ordered_query_tokens),
+            'tool': self._collect_matches(query_tokens, PORTED_TOOLS, 'tool', ordered_query_tokens),
         }
 
         selected: list[RoutedMatch] = []
@@ -173,20 +193,115 @@ class PortRuntime:
                 denials.append(PermissionDenial(tool_name=match.name, reason='destructive shell execution remains gated in the Python port'))
         return denials
 
-    def _collect_matches(self, tokens: set[str], modules: tuple[PortingModule, ...], kind: str) -> list[RoutedMatch]:
+    def _collect_matches(
+        self,
+        query_tokens: Counter[str],
+        modules: tuple[PortingModule, ...],
+        kind: str,
+        ordered_query_tokens: tuple[str, ...],
+    ) -> list[RoutedMatch]:
         matches: list[RoutedMatch] = []
         for module in modules:
-            score = self._score(tokens, module)
+            score = self._score(query_tokens, module, ordered_query_tokens, kind)
             if score > 0:
                 matches.append(RoutedMatch(kind=kind, name=module.name, source_hint=module.source_hint, score=score))
         matches.sort(key=lambda item: (-item.score, item.name))
         return matches
 
+    @classmethod
+    def _normalize_text(cls, text: str) -> Counter[str]:
+        normalized: Counter[str] = Counter()
+        lowered = text.replace('/', ' ').replace('\\', ' ').replace('-', ' ').replace('_', ' ')
+        for chunk in lowered.split():
+            for token in cls._split_token(chunk):
+                token = token.lower().strip()
+                if not token or token in STOPWORDS:
+                    continue
+                normalized[token] += 1
+                singular = cls._singularize(token)
+                if singular != token and singular not in STOPWORDS:
+                    normalized[singular] += 1
+                for synonym in SEMANTIC_SYNONYMS.get(token, ()):  # lightweight semantic expansion
+                    if synonym not in STOPWORDS:
+                        normalized[synonym] += 1
+        return normalized
+
     @staticmethod
-    def _score(tokens: set[str], module: PortingModule) -> int:
-        haystacks = [module.name.lower(), module.source_hint.lower(), module.responsibility.lower()]
+    def _split_token(token: str) -> tuple[str, ...]:
+        parts = TOKEN_PATTERN.findall(token)
+        return tuple(parts) if parts else (token,)
+
+    @staticmethod
+    def _singularize(token: str) -> str:
+        if len(token) <= 3:
+            return token
+        if token.endswith('ies'):
+            return f'{token[:-3]}y'
+        if token.endswith('ses'):
+            return token[:-2]
+        if token.endswith('s') and not token.endswith('ss'):
+            return token[:-1]
+        return token
+
+    @classmethod
+    def _score(
+        cls,
+        query_tokens: Counter[str],
+        module: PortingModule,
+        ordered_query_tokens: tuple[str, ...],
+        kind: str,
+    ) -> int:
+        name_tokens = cls._normalize_text(module.name)
+        path_tokens = cls._normalize_text(module.source_hint)
+        responsibility_tokens = cls._normalize_text(module.responsibility)
+        evidence_sets = (name_tokens, path_tokens, responsibility_tokens)
         score = 0
-        for token in tokens:
-            if any(token in haystack for haystack in haystacks):
-                score += 1
+        matched_sets = 0
+
+        for evidence in evidence_sets:
+            evidence_score = 0
+            for token, weight in query_tokens.items():
+                if token in evidence:
+                    evidence_score += 5 * min(weight, evidence[token])
+                    continue
+                if any(token in candidate or candidate in token for candidate in evidence):
+                    evidence_score += 2
+            if evidence_score:
+                matched_sets += 1
+                score += evidence_score
+
+        overlap = set(query_tokens) & set(name_tokens)
+        score += len(overlap) * 4
+
+        query_bigrams = cls._bigrams(query_tokens)
+        if query_bigrams:
+            score += 3 * len(query_bigrams & cls._bigrams(name_tokens))
+            score += 2 * len(query_bigrams & cls._bigrams(path_tokens))
+
+        if matched_sets >= 2:
+            score += 4
+        if matched_sets == 3:
+            score += 2
+
+        source_parts = [part for part in module.source_hint.split('/') if part]
+        if len(source_parts) >= 2:
+            parent = cls._normalize_text(source_parts[-2])
+            if set(query_tokens) & set(parent):
+                score += 4
+
+        if name_tokens and any(token == module.name.lower() for token in query_tokens):
+            score += 6
+
+        if ordered_query_tokens:
+            lead_token = ordered_query_tokens[0]
+            if lead_token in name_tokens:
+                score += 18 if kind == 'command' else 8
+            elif lead_token in path_tokens:
+                score += 8 if kind == 'command' else 4
+
         return score
+
+    @staticmethod
+    def _bigrams(tokens: Counter[str]) -> set[str]:
+        ordered = list(tokens)
+        return {f'{ordered[index]}::{ordered[index + 1]}' for index in range(len(ordered) - 1)}

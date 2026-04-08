@@ -101,6 +101,21 @@ class PortingWorkspaceTests(unittest.TestCase):
         self.assertIn('review', show_command.stdout.lower())
         self.assertIn('mcptool', show_tool.stdout.lower())
 
+    def test_route_normalizes_plural_and_session_language(self) -> None:
+        from src.runtime import PortRuntime
+
+        matches = PortRuntime().route_prompt('inspect sessions history', limit=5)
+        self.assertTrue(matches)
+        self.assertEqual(matches[0].kind, 'command')
+        self.assertIn(matches[0].name.lower(), {'session', 'generatesessionname', 'backfill-sessions'})
+
+    def test_route_uses_hierarchy_and_semantic_expansion_for_search_tooling(self) -> None:
+        from src.runtime import PortRuntime
+
+        matches = PortRuntime().route_prompt('find tools for lookup', limit=5)
+        tool_names = [match.name for match in matches if match.kind == 'tool']
+        self.assertIn('ToolSearchTool', tool_names)
+
     def test_bootstrap_cli_runs(self) -> None:
         result = subprocess.run(
             [sys.executable, '-m', 'src.main', 'bootstrap', 'review MCP tool', '--limit', '5'],
