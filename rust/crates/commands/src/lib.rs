@@ -214,8 +214,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "trace",
         aliases: &[],
-        summary: "Show a recursive trace summary or export a trace ledger",
-        argument_hint: Some("[summary <trace-file>|export <trace-file> [destination]]"),
+        summary: "Show, approve, or replay recursive trace-ledger web workflows",
+        argument_hint: Some("[summary <trace-file>|export <trace-file> [destination]|approve <trace-file>|replay <trace-file|approval-packet>]"),
         resume_supported: true,
     },
     SlashCommandSpec {
@@ -588,12 +588,22 @@ fn parse_trace_command(args: &[&str]) -> Result<SlashCommand, SlashCommandParseE
             "trace",
             "/trace approve <trace-file>",
         )),
+        ["replay", target] => Ok(SlashCommand::Trace {
+            action: Some("replay".to_string()),
+            target: Some((*target).to_string()),
+            destination: None,
+        }),
+        ["replay", ..] => Err(command_error(
+            "Unexpected arguments for /trace replay.",
+            "trace",
+            "/trace replay <trace-file|approval-packet>",
+        )),
         [action, ..] => Err(command_error(
             &format!(
-                "Unknown /trace action '{action}'. Use summary <trace-file>, export <trace-file> [destination], or approve <trace-file>."
+                "Unknown /trace action '{action}'. Use summary <trace-file>, export <trace-file> [destination], approve <trace-file>, or replay <trace-file|approval-packet>."
             ),
             "trace",
-            "/trace [summary <trace-file>|export <trace-file> [destination]|approve <trace-file>]",
+            "/trace [summary <trace-file>|export <trace-file> [destination]|approve <trace-file>|replay <trace-file|approval-packet>]",
         )),
     }
 }
@@ -2226,9 +2236,9 @@ fn resolve_trace_path(cwd: &Path, input: &str) -> PathBuf {
 fn render_trace_usage(unexpected: Option<&str>) -> String {
     let mut lines = vec![
         "Trace".to_string(),
-        "  Usage            /trace [summary <trace-file>|export <trace-file> [destination]|approve <trace-file>]"
+        "  Usage            /trace [summary <trace-file>|export <trace-file> [destination]|approve <trace-file>|replay <trace-file|approval-packet>]"
             .to_string(),
-        "  Direct CLI       claw trace [summary <trace-file>|export <trace-file> [destination]|approve <trace-file>]"
+        "  Direct CLI       claw trace [summary <trace-file>|export <trace-file> [destination]|approve <trace-file>|replay <trace-file|approval-packet>]"
             .to_string(),
         "  Inputs           Trace ledger JSON files produced by the recursive runtime".to_string(),
     ];
@@ -2643,6 +2653,14 @@ mod tests {
             }))
         );
         assert_eq!(
+            SlashCommand::parse("/trace replay trace.json"),
+            Ok(Some(SlashCommand::Trace {
+                action: Some("replay".to_string()),
+                target: Some("trace.json".to_string()),
+                destination: None,
+            }))
+        );
+        assert_eq!(
             SlashCommand::parse("/session switch abc123"),
             Ok(Some(SlashCommand::Session {
                 action: Some("switch".to_string()),
@@ -2818,7 +2836,7 @@ mod tests {
         assert!(help.contains("/diff"));
         assert!(help.contains("/version"));
         assert!(help.contains("/export [file]"));
-        assert!(help.contains("/trace [summary <trace-file>|export <trace-file> [destination]]"));
+        assert!(help.contains("/trace [summary <trace-file>|export <trace-file> [destination]|approve <trace-file>|replay <trace-file|approval-packet>]"));
         assert!(help.contains("/session [list|switch <session-id>|fork [branch-name]]"));
         assert!(help.contains("/sandbox"));
         assert!(help.contains(
@@ -3215,7 +3233,7 @@ mod tests {
         let usage = handle_trace_slash_command(Some("inspect trace.json"), &cwd)
             .expect("unexpected args should return usage");
         assert!(usage.contains(
-            "Usage            /trace [summary <trace-file>|export <trace-file> [destination]|approve <trace-file>]"
+            "Usage            /trace [summary <trace-file>|export <trace-file> [destination]|approve <trace-file>|replay <trace-file|approval-packet>]"
         ));
 
         let _ = fs::remove_dir_all(cwd);

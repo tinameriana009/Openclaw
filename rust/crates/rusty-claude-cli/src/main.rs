@@ -54,6 +54,7 @@ use runtime::{
     ResolvedPermissionMode, RuntimeError, Session, TokenUsage, ToolError, ToolExecutor,
     UsageTracker,
 };
+use serde::Deserialize;
 use serde_json::json;
 use tools::{minimal_web_research, GlobalToolRegistry};
 
@@ -1491,6 +1492,9 @@ fn run_trace_command(
         (Some("approve"), Some(target), None) => {
             approve_trace_for_operator(target, cwd, session_path)
         }
+        (Some("replay"), Some(target), None) => {
+            replay_trace_for_operator(target, cwd, session_path)
+        }
         _ => {
             let trace_args = match (action, target, destination) {
                 (None, _, _) => None,
@@ -1589,11 +1593,106 @@ fn approve_trace_for_operator(
     });
     fs::write(&packet_path, serde_json::to_string_pretty(&packet)?)?;
     Ok(format!(
-        "Trace approval\n  Result           approval packet recorded\n  Trace            {}\n  Packet           {}\n  Pending queries  {}\n  Replay command   {}\n  Note             browser automation is still not available; rerun explicitly after approval",
+        "Trace approval\n  Result           approval packet recorded\n  Trace            {}\n  Packet           {}\n  Pending queries  {}\n  Replay command   {}\n  Replay trace     /trace replay {}\n  Note             browser automation is still not available; rerun explicitly after approval",
         trace_path.display(),
         packet_path.display(),
         packet["pendingQueries"].as_array().into_iter().flatten().filter_map(|value| value.as_str()).collect::<Vec<_>>().join("; "),
         packet["replayCommand"].as_str().unwrap_or_default(),
+        trace_path.display(),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+struct WebApprovalPacket {
+    #[serde(rename = "schemaVersion")]
+    schema_version: u32,
+    #[serde(rename = "traceId")]
+    trace_id: String,
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    task: String,
+    #[serde(rename = "corpusId")]
+    corpus_id: String,
+    #[serde(rename = "pendingQueries")]
+    pending_queries: Vec<String>,
+    #[serde(rename = "approvedAtMs")]
+    approved_at_ms: u128,
+    #[serde(rename = "replayCommand")]
+    replay_command: String,
+    #[serde(rename = "operatorNote")]
+    operator_note: Option<String>,
+}
+
+fn resolve_trace_target_path(trace_target: &str, cwd: &Path) -> PathBuf {
+    if Path::new(trace_target).is_absolute() {
+        PathBuf::from(trace_target)
+    } else {
+        cwd.join(trace_target)
+    }
+}
+
+fn approval_packet_path_for_trace(trace_path: &Path, cwd: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let trace = runtime::TraceLedger::read_from_path(trace_path)?;
+    Ok(cwd
+        .join(".claw")
+        .join("web-approvals")
+        .join(format!("{}.json", trace.trace_id)))
+}
+
+fn load_web_approval_packet(target: &str, cwd: &Path) -> Result<(PathBuf, WebApprovalPacket), Box<dyn std::error::Error>> {
+    let requested_path = resolve_trace_target_path(target, cwd);
+    let packet_path = if requested_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|name| name.ends_with(".json"))
+        && requested_path.to_string_lossy().contains("web-approvals")
+    {
+        requested_path
+    } else {
+        approval_packet_path_for_trace(&requested_path, cwd)?
+    };
+    let packet_text = fs::read_to_string(&packet_path)?;
+    let packet: WebApprovalPacket = serde_json::from_str(&packet_text)?;
+    if packet.schema_version != 1 {
+        return Err(format!("unsupported web approval packet schema: {}", packet.schema_version).into());
+    }
+    Ok((packet_path, packet))
+}
+
+fn replay_trace_for_operator(
+    trace_target: &str,
+    cwd: &Path,
+    session_path: Option<&Path>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let (packet_path, packet) = load_web_approval_packet(trace_target, cwd)?;
+    let answer = run_corpus_answer(
+        cwd,
+        &packet.corpus_id,
+        &packet.task,
+        ExecutionProfile::Balanced,
+        session_path
+            .map(|_| packet.session_id.as_str())
+            .or(Some(packet.session_id.as_str())),
+        None,
+    )?;
+    let pending_queries = if packet.pending_queries.is_empty() {
+        "none".to_string()
+    } else {
+        packet.pending_queries.join("; ")
+    };
+    Ok(format!(
+        "Trace replay\n  Result           approved trace replay executed\n  Packet           {}\n  Trace            {}\n  Corpus           {}\n  Pending queries  {}\n  Approved at ms   {}\n  Original replay  {}\n  Note             {}\n\n{}",
+        packet_path.display(),
+        packet.trace_id,
+        packet.corpus_id,
+        pending_queries,
+        packet.approved_at_ms,
+        packet.replay_command,
+        packet
+            .operator_note
+            .as_deref()
+            .unwrap_or("browser automation is still not available; this rerun only executes the grounded recursive path"),
+        answer,
     ))
 }
 
@@ -7598,6 +7697,83 @@ mod corpus_answer_tests {
         assert!(output.answer.contains("Example result"));
         assert_eq!(output.web_evidence.len(), 1);
         std::env::remove_var("CLAWD_WEB_SEARCH_BASE_URL");
+    }
+
+    #[test]
+    fn load_web_approval_packet_resolves_from_trace_path() {
+        let root = temp_dir();
+        fs::create_dir_all(root.join(".claw").join("trace")).expect("trace dir");
+        fs::create_dir_all(root.join(".claw").join("web-approvals")).expect("packet dir");
+        let trace_path = root.join(".claw").join("trace").join("trace.json");
+        fs::write(
+            &trace_path,
+            r#"{
+              "traceId":"trace-123",
+              "sessionId":"session-1",
+              "rootTaskId":"task-1",
+              "startedAtMs":1,
+              "finishedAtMs":2,
+              "finalStatus":"succeeded",
+              "events":[]
+            }"#,
+        )
+        .expect("trace should write");
+        let packet_path = root.join(".claw").join("web-approvals").join("trace-123.json");
+        fs::write(
+            &packet_path,
+            r#"{
+              "schemaVersion":1,
+              "traceId":"trace-123",
+              "sessionId":"session-1",
+              "task":"search the web for release status",
+              "corpusId":"demo-corpus",
+              "pendingQueries":["search the web for release status"],
+              "approvedAtMs":42,
+              "replayCommand":"claw --resume latest \"/corpus answer demo-corpus :: search the web for release status\"",
+              "operatorNote":"bounded rerun only"
+            }"#,
+        )
+        .expect("packet should write");
+
+        let (resolved_path, packet) =
+            load_web_approval_packet(trace_path.to_str().expect("utf8 path"), &root)
+                .expect("packet should load from trace path");
+        assert_eq!(resolved_path, packet_path);
+        assert_eq!(packet.trace_id, "trace-123");
+        assert_eq!(packet.corpus_id, "demo-corpus");
+        assert_eq!(packet.pending_queries.len(), 1);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn load_web_approval_packet_accepts_packet_path_directly() {
+        let root = temp_dir();
+        fs::create_dir_all(root.join(".claw").join("web-approvals")).expect("packet dir");
+        let packet_path = root.join(".claw").join("web-approvals").join("trace-abc.json");
+        fs::write(
+            &packet_path,
+            r#"{
+              "schemaVersion":1,
+              "traceId":"trace-abc",
+              "sessionId":"session-1",
+              "task":"query",
+              "corpusId":"demo-corpus",
+              "pendingQueries":[],
+              "approvedAtMs":7,
+              "replayCommand":"claw --resume latest \"/corpus answer demo-corpus :: query\""
+            }"#,
+        )
+        .expect("packet should write");
+
+        let (resolved_path, packet) =
+            load_web_approval_packet(packet_path.to_str().expect("utf8 path"), &root)
+                .expect("packet should load directly");
+        assert_eq!(resolved_path, packet_path);
+        assert_eq!(packet.trace_id, "trace-abc");
+        assert!(packet.operator_note.is_none());
+
+        let _ = fs::remove_dir_all(root);
     }
 }
 

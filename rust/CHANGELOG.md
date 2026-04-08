@@ -2,6 +2,11 @@
 
 All notable operator-facing changes in the Rust harness should be recorded here.
 
+## Unreleased
+- Added `/trace replay <trace-file|approval-packet>` so the operator-facing trace flow can continue from a recorded web-approval packet instead of stopping at `/trace approve` handoff only.
+- `/trace approve <trace-file>` now prints both the existing `claw --resume ... "/corpus answer ..."` replay command and an explicit `/trace replay <trace-file>` follow-up for a more bounded approve-and-rerun loop.
+- Added packet-loading coverage for resolving replay state from either the original trace path or the generated `.claw/web-approvals/*.json` packet path.
+
 This project is still pre-1.0. Until a packaged release flow exists, treat entries here as the canonical release-notes scaffold for source builds and tagged snapshots.
 
 The format is intentionally lightweight and loosely follows Keep a Changelog.

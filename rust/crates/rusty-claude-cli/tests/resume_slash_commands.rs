@@ -346,6 +346,7 @@ fn resumed_trace_approve_writes_operator_packet_and_rerun_guidance() {
     assert!(stdout.contains("Trace approval"));
     assert!(stdout.contains("Pending queries  search the web for release status"));
     assert!(stdout.contains("Replay command   claw --resume"));
+    assert!(stdout.contains("Replay trace     /trace replay"));
     assert!(stdout.contains("/corpus answer demo-corpus :: search the web for release status"));
     assert!(stdout.contains("browser automation is still not available"));
 
