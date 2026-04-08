@@ -312,6 +312,25 @@ pub fn build_runtime_configured_provider_extractive_child_executor(
     )
 }
 
+#[must_use]
+pub fn build_runtime_configured_provider_recursive_runtime<'a>(
+    cwd: &Path,
+    corpus: &'a runtime::CorpusManifest,
+    session_id: &str,
+    active_model: Option<&str>,
+    default_model: &str,
+) -> runtime::RecursiveConversationRuntime<'a, ProviderBackedChildExecutor> {
+    runtime::RecursiveConversationRuntime::new(
+        corpus,
+        build_runtime_configured_provider_extractive_child_executor(
+            cwd,
+            session_id,
+            active_model,
+            default_model,
+        ),
+    )
+}
+
 pub fn collect_minimal_web_evidence(
     request: &ChildSubqueryRequest,
     web_fetcher: &dyn Fn(&str, usize) -> Result<Vec<MinimalWebEvidence>, String>,
@@ -855,6 +874,74 @@ mod tests {
         let resolved =
             resolve_provider_child_model(&cwd, Some("claude-sonnet-4-6"), "claude-opus-4-6");
         assert_eq!(resolved, "claude-haiku-4-5-20251213");
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn recursive_runtime_builder_uses_shared_runtime_configured_executor() {
+        let cwd = temp_dir("recursive-runtime-builder");
+        fs::create_dir_all(cwd.join(".claw")).expect("config dir");
+        fs::write(
+            cwd.join(".claw").join("settings.json"),
+            r#"{"model":"claude-opus-4-6","rlm":{"subcallModel":"haiku"}}"#,
+        )
+        .expect("write settings");
+
+        let corpus = runtime::CorpusManifest {
+            artifact_kind: "claw.corpus-manifest".to_string(),
+            schema_version: 1,
+            compat_version: "0.1".to_string(),
+            corpus_id: "corpus-1".to_string(),
+            roots: vec![".".to_string()],
+            kind: runtime::CorpusKind::Docs,
+            backend: runtime::CorpusBackend::Lexical,
+            document_count: 1,
+            chunk_count: 1,
+            estimated_bytes: 64,
+            root_summaries: vec![runtime::CorpusRootSummary {
+                root: ".".to_string(),
+                document_count: 1,
+                chunk_count: 1,
+            }],
+            skip_summary: runtime::CorpusSkipSummary {
+                skipped_directories: 0,
+                unsupported_files: 0,
+                oversized_files: 0,
+                binary_files: 0,
+                unreadable_files: 0,
+                empty_files: 0,
+            },
+            documents: vec![runtime::CorpusDocument {
+                document_id: "doc-1".to_string(),
+                source_root: ".".to_string(),
+                path: "docs/guide.md".to_string(),
+                media_type: "text/markdown".to_string(),
+                language: Some("markdown".to_string()),
+                headings: vec!["Guide".to_string()],
+                bytes: 64,
+                modified_at_ms: None,
+                chunks: vec![runtime::CorpusChunk {
+                    chunk_id: "chunk-1".to_string(),
+                    document_id: "doc-1".to_string(),
+                    ordinal: 0,
+                    start_offset: 0,
+                    end_offset: 64,
+                    text_preview: "preview".to_string(),
+                    metadata: BTreeMap::new(),
+                }],
+            }],
+        };
+
+        let runtime = build_runtime_configured_provider_recursive_runtime(
+            &cwd,
+            &corpus,
+            "session-1",
+            Some("claude-sonnet-4-6"),
+            "claude-opus-4-6",
+        );
+
+        assert_eq!(runtime.child_executor().model(), "claude-haiku-4-5-20251213");
 
         let _ = fs::remove_dir_all(cwd);
     }

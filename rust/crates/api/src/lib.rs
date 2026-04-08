@@ -10,7 +10,8 @@ mod web;
 pub use child::{
     build_configured_provider_extractive_child_executor, build_provider_backed_child_executor,
     build_provider_child_executor, build_provider_extractive_child_executor,
-    build_runtime_configured_provider_extractive_child_executor, collect_minimal_web_evidence,
+    build_runtime_configured_provider_extractive_child_executor,
+    build_runtime_configured_provider_recursive_runtime, collect_minimal_web_evidence,
     format_provider_child_init_reason, format_provider_execution_fallback_reason,
     render_extractive_child_answer, resolve_provider_child_model,
     resolve_runtime_provider_child_auth, runtime_minimal_web_evidence_fetcher,

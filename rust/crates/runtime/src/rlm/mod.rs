@@ -87,6 +87,11 @@ where
     }
 
     #[must_use]
+    pub fn child_executor(&self) -> &E {
+        &self.executor
+    }
+
+    #[must_use]
     pub fn select_mode(
         task: &str,
         corpus: Option<&CorpusManifest>,

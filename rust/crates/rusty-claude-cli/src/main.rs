@@ -24,7 +24,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use api::{
-    build_runtime_configured_provider_extractive_child_executor, collect_minimal_web_evidence,
+    build_runtime_configured_provider_recursive_runtime, collect_minimal_web_evidence,
     format_provider_child_init_reason, render_extractive_child_answer,
     resolve_provider_child_model, resolve_runtime_provider_child_auth, resolve_startup_auth_source,
     AnthropicClient, ApiError, AuthSource, ContentBlockDelta, InputContentBlock, InputMessage,
@@ -1446,19 +1446,6 @@ fn run_corpus_command(
     Err("unsupported /corpus usage; try /corpus, /corpus attach <path>, /corpus search [<corpus-id> ::] <query>, /corpus answer [<corpus-id> ::] <query>, /corpus inspect <id>, or /corpus slice [<corpus-id> ::] <chunk-id>".into())
 }
 
-fn build_corpus_answer_executor(
-    cwd: &Path,
-    session_id: Option<&str>,
-    active_model: Option<&str>,
-) -> api::ProviderBackedChildExecutor {
-    build_runtime_configured_provider_extractive_child_executor(
-        cwd,
-        session_id.unwrap_or("corpus-cli"),
-        active_model,
-        DEFAULT_MODEL,
-    )
-}
-
 fn run_corpus_answer(
     cwd: &Path,
     corpus_id: &str,
@@ -1477,9 +1464,12 @@ fn run_corpus_answer(
         session_id.unwrap_or("corpus-cli"),
         std::sync::Arc::new(JsonlTelemetrySink::new(&telemetry_path)?),
     );
-    let runtime = runtime::RecursiveConversationRuntime::new(
+    let runtime = build_runtime_configured_provider_recursive_runtime(
+        cwd,
         &manifest,
-        build_corpus_answer_executor(cwd, session_id, active_model),
+        session_id.unwrap_or("corpus-cli"),
+        active_model,
+        DEFAULT_MODEL,
     );
     let result = runtime.run_with_tracer_and_policy(
         session_id.unwrap_or("corpus-cli"),
