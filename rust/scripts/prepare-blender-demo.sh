@@ -11,6 +11,8 @@ ZIP_SOURCE="$REPO_ROOT/docs/examples/blender-scene-cleanup-demo/dist/scene_clean
 ZIP_ARTIFACT="$RUN_DIR/scene_cleanup_helper_demo.zip"
 NEXT_STEPS="$RUN_DIR/next-steps.txt"
 REPORT_TEMPLATE="$RUN_DIR/operator-findings-template.md"
+SUMMARY_JSON="$RUN_DIR/bundle-summary.json"
+CHECKSUMS="$RUN_DIR/bundle-checksums.txt"
 
 if [[ $# -gt 0 ]]; then
   cat <<EOF
@@ -99,7 +101,52 @@ next-prompt-template.md
 operator-findings-template.md
 next-steps.txt
 scene_cleanup_helper_demo.zip
+bundle-summary.json
+bundle-checksums.txt
 EOF
+
+python3 - <<PY
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+run_dir = Path(${RUN_DIR@Q})
+summary_path = Path(${SUMMARY_JSON@Q})
+manifest_entries = [
+    line.strip()
+    for line in (run_dir / 'bundle-manifest.txt').read_text().splitlines()
+    if line.strip()
+]
+summary = {
+    'workflow': 'blender-demo',
+    'generatedAtUtc': ${TIMESTAMP@Q},
+    'runDir': str(run_dir),
+    'validatorCommand': 'python3 tests/validate_blender_demo.py',
+    'packagingCommand': 'python3 docs/examples/blender-scene-cleanup-demo/tools/package_demo_addon.py',
+    'manualValidationRequired': True,
+    'bundleEntries': manifest_entries,
+    'externalToolRequired': 'Blender 4.x',
+    'operatorHandoffFiles': [
+        'manual-test-checklist.md',
+        'operator-findings-template.md',
+        'next-prompt-template.md',
+        'next-steps.txt',
+    ],
+    'caveats': [
+        'This helper only validates static demo coherence and stages artifacts.',
+        'It does not launch Blender or verify runtime behavior automatically.',
+    ],
+}
+summary_path.write_text(json.dumps(summary, indent=2) + '\n')
+PY
+
+(
+  cd "$RUN_DIR"
+  find . -type f ! -name "$(basename "$CHECKSUMS")" -print0 \
+    | sort -z \
+    | xargs -0 sha256sum >"$CHECKSUMS"
+)
 
 echo
 echo "[3/3] Staged operator review bundle."

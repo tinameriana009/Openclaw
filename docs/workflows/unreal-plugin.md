@@ -118,7 +118,7 @@ cd rust
 ./scripts/prepare-unreal-demo.sh
 ```
 
-That helper validates the demo kit and stages a review bundle under `.demo-artifacts/unreal-demo/` with the plugin skeleton, checklists, an error-feedback playbook, an operator session worksheet, a follow-up prompt template, an operator findings template, and a bundle manifest.
+That helper validates the demo kit and stages a review bundle under `.demo-artifacts/unreal-demo/` with the plugin skeleton, checklists, an error-feedback playbook, an operator session worksheet, a follow-up prompt template, an operator findings template, a bundle manifest, a machine-readable `bundle-summary.json`, and `bundle-checksums.txt` for repeatable handoff.
 
 That only checks static coherence. It does **not** launch Unreal or compile the plugin.
 

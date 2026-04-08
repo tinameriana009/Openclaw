@@ -10,6 +10,8 @@ RUN_DIR="$ARTIFACT_ROOT/$TIMESTAMP"
 NEXT_STEPS="$RUN_DIR/next-steps.txt"
 REPORT_TEMPLATE="$RUN_DIR/operator-findings-template.md"
 PLUGIN_BUNDLE_DIR="$RUN_DIR/RuntimeTelemetry"
+SUMMARY_JSON="$RUN_DIR/bundle-summary.json"
+CHECKSUMS="$RUN_DIR/bundle-checksums.txt"
 
 if [[ $# -gt 0 ]]; then
   cat <<EOF
@@ -105,7 +107,52 @@ trace-review-checklist.md
 operator-findings-template.md
 next-steps.txt
 RuntimeTelemetry/
+bundle-summary.json
+bundle-checksums.txt
 EOF
+
+python3 - <<PY
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+run_dir = Path(${RUN_DIR@Q})
+summary_path = Path(${SUMMARY_JSON@Q})
+manifest_entries = [
+    line.strip()
+    for line in (run_dir / 'bundle-manifest.txt').read_text().splitlines()
+    if line.strip()
+]
+summary = {
+    'workflow': 'unreal-demo',
+    'generatedAtUtc': ${TIMESTAMP@Q},
+    'runDir': str(run_dir),
+    'validatorCommand': 'python3 tests/validate_unreal_demo.py',
+    'manualValidationRequired': True,
+    'bundleEntries': manifest_entries,
+    'externalToolRequired': 'Unreal Editor / UnrealBuildTool',
+    'operatorHandoffFiles': [
+        'manual-validation-checklist.md',
+        'operator-findings-template.md',
+        'operator-session-template.md',
+        'next-prompt-template.md',
+        'next-steps.txt',
+    ],
+    'caveats': [
+        'This helper only validates static demo coherence and stages artifacts.',
+        'It does not launch Unreal Editor, UnrealBuildTool, or verify plugin behavior automatically.',
+    ],
+}
+summary_path.write_text(json.dumps(summary, indent=2) + '\n')
+PY
+
+(
+  cd "$RUN_DIR"
+  find . -type f ! -name "$(basename "$CHECKSUMS")" -print0 \
+    | sort -z \
+    | xargs -0 sha256sum >"$CHECKSUMS"
+)
 
 echo
 echo "Staged operator review bundle."

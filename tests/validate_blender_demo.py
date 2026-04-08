@@ -83,6 +83,9 @@ def main() -> int:
     if 'next-prompt-template.md' not in readme_text or 'operator-findings-template.md' not in readme_text:
         print('Demo README does not mention the staged handoff templates.')
         return 1
+    if 'bundle-summary.json' not in readme_text or 'bundle-checksums.txt' not in readme_text:
+        print('Demo README does not mention the staged bundle metadata/checksum files.')
+        return 1
 
     checklist_text = (DEMO_ROOT / 'manual-test-checklist.md').read_text()
     if 'duplicate materials = `1`' not in checklist_text or 'unapplied transforms = `3`' not in checklist_text:

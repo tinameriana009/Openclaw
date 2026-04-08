@@ -52,10 +52,11 @@ Then continue with narrower prompts such as:
 3. Run `python3 tests/validate_blender_demo.py` to confirm the local kit is intact.
 4. Optionally build an installable zip with `python3 docs/examples/blender-scene-cleanup-demo/tools/package_demo_addon.py`.
 5. If you want a cleaner handoff bundle, run `cd rust && ./scripts/prepare-blender-demo.sh` to stage artifacts under `.demo-artifacts/blender-demo/`.
-6. Install the zipped or copied add-on in Blender.
-7. Follow `manual-test-checklist.md` against a disposable scene and record results in `operator-findings-template.md`.
-8. Use `next-prompt-template.md` so the next prompt carries forward exact environment details, counts, and tracebacks.
-9. Feed any traceback, confusing UI wording, or mismatched counts back into the next prompt.
+6. Inspect `bundle-summary.json` and `bundle-checksums.txt` in that staged directory so the next operator inherits the exact prep context and can verify the staged zip/docs were not accidentally changed before testing.
+7. Install the zipped or copied add-on in Blender.
+8. Follow `manual-test-checklist.md` against a disposable scene and record results in `operator-findings-template.md`.
+9. Use `next-prompt-template.md` so the next prompt carries forward exact environment details, counts, and tracebacks.
+10. Feed any traceback, confusing UI wording, or mismatched counts back into the next prompt.
 
 That sequence gives you a more convincing first-run story: corpus → plan → static validation → installable artifact → staged operator bundle → manual Blender validation → evidence-rich follow-up prompt.
 

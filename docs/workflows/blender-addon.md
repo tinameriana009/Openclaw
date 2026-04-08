@@ -110,7 +110,7 @@ cd rust
 ./scripts/prepare-blender-demo.sh
 ```
 
-That helper validates the demo kit, rebuilds the installable zip, and stages a review bundle under `.demo-artifacts/blender-demo/` with the checklist, baseline, operator findings template, follow-up prompt template, and a bundle manifest.
+That helper validates the demo kit, rebuilds the installable zip, and stages a review bundle under `.demo-artifacts/blender-demo/` with the checklist, baseline, operator findings template, follow-up prompt template, a bundle manifest, a machine-readable `bundle-summary.json`, and `bundle-checksums.txt` for repeatable handoff.
 
 This still does **not** validate behavior in Blender, but it catches missing files, broken Python syntax, and packaging regressions early.
 

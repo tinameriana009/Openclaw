@@ -81,6 +81,8 @@ def main() -> int:
         ('error-feedback-playbook.md', 'Unreal demo README does not mention the error feedback playbook.'),
         ('operator-session-template.md', 'Unreal demo README does not mention the operator session template.'),
         ('next-prompt-template.md', 'Unreal demo README does not mention the follow-up prompt template.'),
+        ('bundle-summary.json', 'Unreal demo README does not mention the staged bundle metadata file.'),
+        ('bundle-checksums.txt', 'Unreal demo README does not mention the staged checksum file.'),
     ]:
         if needle not in readme_text:
             print(message)

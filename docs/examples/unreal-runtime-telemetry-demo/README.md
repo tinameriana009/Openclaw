@@ -64,11 +64,12 @@ Then continue with narrower asks such as:
 3. Compare the plugin skeleton against `expected-findings.md` so you know what a grounded answer should recover.
 4. Use `claw` with the demo corpus attached to ask for the architecture or next implementation slice.
 5. If you want a cleaner handoff bundle, run `cd rust && ./scripts/prepare-unreal-demo.sh` to stage artifacts under `.demo-artifacts/unreal-demo/`.
-6. Use `operator-session-template.md` while validating so environment details, logs, and runtime observations do not get lost.
-7. Copy the plugin into a disposable Unreal project or compare it against an existing plugin repo.
-8. Follow `manual-validation-checklist.md` for the real compile/editor/runtime loop and capture final outcomes in `operator-findings-template.md`.
-9. Use `next-prompt-template.md` so the next prompt preserves exact build/editor/runtime evidence.
-10. Use `error-feedback-playbook.md` to turn compiler errors, UHT issues, load failures, or Blueprint surprises into the next grounded prompt.
+6. Inspect `bundle-summary.json` and `bundle-checksums.txt` in that staged directory so the next operator can confirm exactly what was staged before copying the plugin into a project.
+7. Use `operator-session-template.md` while validating so environment details, logs, and runtime observations do not get lost.
+8. Copy the plugin into a disposable Unreal project or compare it against an existing plugin repo.
+9. Follow `manual-validation-checklist.md` for the real compile/editor/runtime loop and capture final outcomes in `operator-findings-template.md`.
+10. Use `next-prompt-template.md` so the next prompt preserves exact build/editor/runtime evidence.
+11. Use `error-feedback-playbook.md` to turn compiler errors, UHT issues, load failures, or Blueprint surprises into the next grounded prompt.
 
 That path is intentionally honest: corpus → plan → static validation → staged operator bundle → human build/editor validation → evidence-driven follow-up with a structured handoff prompt.
 
