@@ -12,6 +12,7 @@ REPORT_TEMPLATE="$RUN_DIR/operator-findings-template.md"
 PLUGIN_BUNDLE_DIR="$RUN_DIR/RuntimeTelemetry"
 SUMMARY_JSON="$RUN_DIR/bundle-summary.json"
 CHECKSUMS="$RUN_DIR/bundle-checksums.txt"
+HANDOFF_JSON="$RUN_DIR/operator-handoff.json"
 
 if [[ $# -gt 0 ]]; then
   cat <<EOF
@@ -108,6 +109,7 @@ operator-findings-template.md
 next-steps.txt
 RuntimeTelemetry/
 bundle-summary.json
+operator-handoff.json
 bundle-checksums.txt
 EOF
 
@@ -119,6 +121,7 @@ from pathlib import Path
 
 run_dir = Path(${RUN_DIR@Q})
 summary_path = Path(${SUMMARY_JSON@Q})
+handoff_path = Path(${HANDOFF_JSON@Q})
 manifest_entries = [
     line.strip()
     for line in (run_dir / 'bundle-manifest.txt').read_text().splitlines()
@@ -145,6 +148,22 @@ summary = {
     ],
 }
 summary_path.write_text(json.dumps(summary, indent=2) + '\n')
+
+handoff = {
+    'workflow': 'unreal-demo',
+    'generatedAtUtc': ${TIMESTAMP@Q},
+    'runDir': str(run_dir),
+    'pluginBundle': 'RuntimeTelemetry',
+    'operatorChecklist': 'manual-validation-checklist.md',
+    'operatorFindingsTemplate': 'operator-findings-template.md',
+    'operatorSessionTemplate': 'operator-session-template.md',
+    'nextPromptTemplate': 'next-prompt-template.md',
+    'operatorNextStep': 'Copy the staged plugin into a disposable Unreal project, run the real build/editor loop, and capture exact logs or compiler errors before asking for changes.',
+    'automationStatus': 'staged-handoff-only',
+    'manualValidationRequired': True,
+    'externalToolRequired': 'Unreal Editor / UnrealBuildTool',
+}
+handoff_path.write_text(json.dumps(handoff, indent=2) + '\n')
 PY
 
 (

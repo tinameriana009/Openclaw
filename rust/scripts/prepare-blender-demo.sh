@@ -13,6 +13,7 @@ NEXT_STEPS="$RUN_DIR/next-steps.txt"
 REPORT_TEMPLATE="$RUN_DIR/operator-findings-template.md"
 SUMMARY_JSON="$RUN_DIR/bundle-summary.json"
 CHECKSUMS="$RUN_DIR/bundle-checksums.txt"
+HANDOFF_JSON="$RUN_DIR/operator-handoff.json"
 
 if [[ $# -gt 0 ]]; then
   cat <<EOF
@@ -102,6 +103,7 @@ operator-findings-template.md
 next-steps.txt
 scene_cleanup_helper_demo.zip
 bundle-summary.json
+operator-handoff.json
 bundle-checksums.txt
 EOF
 
@@ -113,6 +115,7 @@ from pathlib import Path
 
 run_dir = Path(${RUN_DIR@Q})
 summary_path = Path(${SUMMARY_JSON@Q})
+handoff_path = Path(${HANDOFF_JSON@Q})
 manifest_entries = [
     line.strip()
     for line in (run_dir / 'bundle-manifest.txt').read_text().splitlines()
@@ -139,6 +142,22 @@ summary = {
     ],
 }
 summary_path.write_text(json.dumps(summary, indent=2) + '\n')
+
+handoff = {
+    'workflow': 'blender-demo',
+    'generatedAtUtc': ${TIMESTAMP@Q},
+    'runDir': str(run_dir),
+    'installArtifact': 'scene_cleanup_helper_demo.zip',
+    'operatorChecklist': 'manual-test-checklist.md',
+    'operatorFindingsTemplate': 'operator-findings-template.md',
+    'nextPromptTemplate': 'next-prompt-template.md',
+    'validationBaseline': 'validation-baseline.md',
+    'operatorNextStep': 'Install the zip in Blender, recreate the disposable scene, compare observed counts with validation-baseline.md, and record exact mismatches or tracebacks.',
+    'automationStatus': 'staged-handoff-only',
+    'manualValidationRequired': True,
+    'externalToolRequired': 'Blender 4.x',
+}
+handoff_path.write_text(json.dumps(handoff, indent=2) + '\n')
 PY
 
 (

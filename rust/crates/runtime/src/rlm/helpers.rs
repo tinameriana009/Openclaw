@@ -17,6 +17,8 @@ pub(super) struct RetrievalPlan {
     pub strategy: &'static str,
     pub rationale: &'static str,
     pub anchor_terms: Vec<String>,
+    pub gap_terms: Vec<String>,
+    pub validation_terms: Vec<String>,
 }
 
 pub(super) fn map_chunk(path: &str, chunk: &CorpusChunk) -> RecursiveContextSlice {
@@ -113,15 +115,10 @@ fn is_stopword(token: &str) -> bool {
     )
 }
 
-fn collect_anchor_terms(task: &str, child_outputs: &[ChildSubqueryOutput]) -> Vec<String> {
+fn collect_terms<'a>(sources: impl IntoIterator<Item = &'a str>, limit: usize) -> Vec<String> {
     let mut terms = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
-    for source in std::iter::once(task).chain(
-        child_outputs
-            .iter()
-            .rev()
-            .map(|output| output.answer.as_str()),
-    ) {
+    for source in sources {
         for token in source
             .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-' && ch != '_')
             .filter(|token| token.len() >= 5)
@@ -136,12 +133,62 @@ fn collect_anchor_terms(task: &str, child_outputs: &[ChildSubqueryOutput]) -> Ve
                 continue;
             }
             terms.push(token);
-            if terms.len() >= 6 {
+            if terms.len() >= limit {
                 return terms;
             }
         }
     }
     terms
+}
+
+fn collect_anchor_terms(task: &str, child_outputs: &[ChildSubqueryOutput]) -> Vec<String> {
+    collect_terms(
+        std::iter::once(task).chain(
+            child_outputs
+                .iter()
+                .rev()
+                .map(|output| output.answer.as_str()),
+        ),
+        6,
+    )
+}
+
+fn extract_section_terms(answer: &str, heading: &str, limit: usize) -> Vec<String> {
+    let mut captured = Vec::new();
+    let mut in_section = false;
+    for raw_line in answer.lines() {
+        let trimmed = raw_line.trim();
+        let normalized = trimmed
+            .trim_start_matches(|ch: char| {
+                ch.is_ascii_digit() || ch == '.' || ch == ')' || ch == '-'
+            })
+            .trim();
+        let lower = normalized.to_ascii_lowercase();
+        if lower.starts_with(heading) {
+            in_section = true;
+            let remainder = normalized
+                .split_once(':')
+                .map(|(_, tail)| tail.trim())
+                .unwrap_or("");
+            if !remainder.is_empty() {
+                captured.push(remainder.to_string());
+            }
+            continue;
+        }
+        if in_section {
+            if lower.starts_with("findings:")
+                || lower.starts_with("evidence used:")
+                || lower.starts_with("validation loop:")
+                || lower.starts_with("remaining gaps:")
+            {
+                break;
+            }
+            if !normalized.is_empty() {
+                captured.push(normalized.to_string());
+            }
+        }
+    }
+    collect_terms(captured.iter().map(String::as_str), limit)
 }
 
 pub(super) fn build_iteration_plan(
@@ -154,10 +201,20 @@ pub(super) fn build_iteration_plan(
             strategy: "bootstrap",
             rationale: "start from the original task before any child evidence exists",
             anchor_terms: collect_anchor_terms(task, child_outputs),
+            gap_terms: Vec::new(),
+            validation_terms: Vec::new(),
         };
     }
 
     let anchor_terms = collect_anchor_terms(task, child_outputs);
+    let gap_terms = child_outputs
+        .last()
+        .map(|last| extract_section_terms(&last.answer, "remaining gaps", 4))
+        .unwrap_or_default();
+    let validation_terms = child_outputs
+        .last()
+        .map(|last| extract_section_terms(&last.answer, "validation loop", 4))
+        .unwrap_or_default();
     let mut query_parts = vec![task.to_string()];
     if let Some(last) = child_outputs.last() {
         query_parts.push(last.answer.clone());
@@ -165,16 +222,26 @@ pub(super) fn build_iteration_plan(
             query_parts.push(last.citations.join(" "));
         }
     }
+    if !gap_terms.is_empty() {
+        query_parts.push(format!("remaining gaps {}", gap_terms.join(" ")));
+    }
+    if !validation_terms.is_empty() {
+        query_parts.push(format!("validation {}", validation_terms.join(" ")));
+    }
     if !anchor_terms.is_empty() {
         query_parts.push(anchor_terms.join(" "));
     }
 
-    let strategy = if child_outputs.len() >= 2 {
+    let strategy = if !gap_terms.is_empty() {
+        "gap_targeted_followup"
+    } else if child_outputs.len() >= 2 {
         "gap_followup"
     } else {
         "evidence_followup"
     };
-    let rationale = if child_outputs.len() >= 2 {
+    let rationale = if !gap_terms.is_empty() {
+        "re-query by carrying forward explicit remaining-gap and validation-loop terms from the last child response instead of only replaying the summary"
+    } else if child_outputs.len() >= 2 {
         "re-query with prior findings plus stable anchor terms to chase remaining gaps instead of only echoing the last answer"
     } else {
         "re-query with the first child result and stable anchor terms to broaden evidence coverage"
@@ -185,6 +252,8 @@ pub(super) fn build_iteration_plan(
         strategy,
         rationale,
         anchor_terms,
+        gap_terms,
+        validation_terms,
     }
 }
 
@@ -573,5 +642,21 @@ mod tests {
         assert!(plan.anchor_terms.contains(&"scheduler".to_string()));
         assert!(plan.anchor_terms.contains(&"provenance".to_string()));
         assert!(plan.anchor_terms.contains(&"bundle".to_string()));
+    }
+
+    #[test]
+    fn gap_targeted_iteration_plan_extracts_remaining_gaps_and_validation_terms() {
+        let first = sample_child_output(
+            "Findings: grounded answer\nValidation loop: run cargo test -p runtime recursive_trace\nRemaining gaps: planner policy still lacks adaptive retry budgeting and stress coverage",
+        );
+        let plan = build_iteration_plan("audit recursive planner maturity", &[first]);
+
+        assert_eq!(plan.strategy, "gap_targeted_followup");
+        assert!(plan.gap_terms.contains(&"planner".to_string()));
+        assert!(plan.gap_terms.contains(&"adaptive".to_string()));
+        assert!(plan.validation_terms.contains(&"cargo".to_string()));
+        assert!(plan.validation_terms.contains(&"runtime".to_string()));
+        assert!(plan.query.contains("remaining gaps"));
+        assert!(plan.query.contains("validation"));
     }
 }

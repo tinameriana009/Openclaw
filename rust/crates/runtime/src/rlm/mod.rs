@@ -752,6 +752,26 @@ where
                             .collect(),
                     ),
                 ),
+                (
+                    "plannerGapTerms".to_string(),
+                    JsonValue::Array(
+                        plan.gap_terms
+                            .iter()
+                            .cloned()
+                            .map(JsonValue::String)
+                            .collect(),
+                    ),
+                ),
+                (
+                    "plannerValidationTerms".to_string(),
+                    JsonValue::Array(
+                        plan.validation_terms
+                            .iter()
+                            .cloned()
+                            .map(JsonValue::String)
+                            .collect(),
+                    ),
+                ),
             ]),
         );
         let retrieval = self.corpus_search(&plan.query, 6);
@@ -1300,6 +1320,14 @@ mod tests {
         assert!(matches!(
             retrieval_event.data.get("plannerAnchorTerms"),
             Some(JsonValue::Array(values)) if !values.is_empty()
+        ));
+        assert!(matches!(
+            retrieval_event.data.get("plannerGapTerms"),
+            Some(JsonValue::Array(values)) if values.is_empty()
+        ));
+        assert!(matches!(
+            retrieval_event.data.get("plannerValidationTerms"),
+            Some(JsonValue::Array(values)) if values.is_empty()
         ));
         assert!(retrieval_event.data.contains_key("plannerRationale"));
     }
@@ -2054,6 +2082,58 @@ mod tests {
             borrowed.trace_dir,
             workspace_root.join(".claw").join("trace")
         );
+    }
+
+    #[test]
+    fn recursive_task_envelope_reuses_shared_prepare_and_run_flow() {
+        #[derive(Clone)]
+        struct StubRuntimeFactory<'a> {
+            workspace: RecursiveTaskWorkspace<'a>,
+        }
+
+        impl<'a> RecursiveTaskWorkspaceProvider<'a> for StubRuntimeFactory<'a> {
+            fn workspace(&self) -> RecursiveTaskWorkspace<'a> {
+                self.workspace.clone()
+            }
+        }
+
+        impl<'a> RecursiveRuntimeFactory<'a> for StubRuntimeFactory<'a> {
+            type Executor = StubExecutor;
+            type Aggregator = DefaultChildOutputAggregator;
+
+            fn build_runtime(
+                &self,
+                corpus: &'a CorpusManifest,
+            ) -> RecursiveConversationRuntime<'a, Self::Executor, Self::Aggregator> {
+                RecursiveConversationRuntime::new(corpus, StubExecutor)
+            }
+        }
+
+        let corpus = sample_corpus();
+        let workspace_root = temp_trace_dir()
+            .parent()
+            .expect("trace dir parent")
+            .to_path_buf();
+        let request = RecursiveTaskEnvelope {
+            runtime: StubRuntimeFactory {
+                workspace: RecursiveTaskWorkspace {
+                    cwd: &workspace_root,
+                    session_id: "session-envelope",
+                },
+            },
+            corpus: &corpus,
+            task_id: "task-envelope",
+            task: "summarize recursive orchestration",
+            profile: ExecutionProfile::Balanced,
+        };
+
+        let prepared = request.prepare();
+        assert_eq!(prepared.session_id, "session-envelope");
+        assert_eq!(prepared.task_id, "task-envelope");
+
+        let (result, artifacts) = request.run().expect("shared envelope run should succeed");
+        assert!(artifacts.telemetry_path.is_file());
+        assert_eq!(result.stop_reason, RecursiveStopReason::NoChildCapacity);
     }
 
     struct AlwaysFailExecutor;

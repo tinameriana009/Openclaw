@@ -10,6 +10,8 @@ use crate::json::JsonValue;
 use crate::trace::{TraceFinalStatus, TraceLedger};
 use crate::ux::ExecutionProfile;
 
+use super::prepare_recursive_task_run;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecursiveExecutionMode {
     Direct,
@@ -215,6 +217,63 @@ impl PreparedRecursiveTaskRun {
     }
 }
 
+pub trait RecursiveRuntimeFactory<'a> {
+    type Executor: ChildSubqueryExecutor;
+    type Aggregator: ChildOutputAggregator;
+
+    fn build_runtime(
+        &self,
+        corpus: &'a CorpusManifest,
+    ) -> RecursiveConversationRuntime<'a, Self::Executor, Self::Aggregator>;
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecursiveTaskEnvelope<'a, F> {
+    pub runtime: F,
+    pub corpus: &'a CorpusManifest,
+    pub task_id: &'a str,
+    pub task: &'a str,
+    pub profile: ExecutionProfile,
+}
+
+impl<'a, F> RecursiveTaskEnvelope<'a, F>
+where
+    F: RecursiveRuntimeFactory<'a> + RecursiveTaskWorkspaceProvider<'a>,
+{
+    #[must_use]
+    pub fn prepare(&self) -> PreparedRecursiveTaskRun {
+        prepare_recursive_task_run(RecursiveProfileTaskRequest {
+            workspace: RecursiveTaskWorkspace {
+                cwd: self.workspace_cwd(),
+                session_id: self.workspace_session_id(),
+            },
+            task_id: self.task_id,
+            task: self.task,
+            profile: self.profile,
+        })
+    }
+
+    pub fn run(
+        &self,
+    ) -> Result<(RecursiveExecutionResult, RecursiveRunArtifacts), RecursiveRuntimeError> {
+        let prepared = self.prepare();
+        let runtime = self.runtime.build_runtime(self.corpus);
+        prepared.run_with(&runtime)
+    }
+
+    fn workspace_cwd(&self) -> &'a Path {
+        self.runtime.workspace().cwd
+    }
+
+    fn workspace_session_id(&self) -> &'a str {
+        self.runtime.workspace().session_id
+    }
+}
+
+pub trait RecursiveTaskWorkspaceProvider<'a> {
+    fn workspace(&self) -> RecursiveTaskWorkspace<'a>;
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecursiveTaskRunRequest<'a> {
     pub session_id: &'a str,
@@ -293,6 +352,45 @@ pub trait ChildOutputAggregator {
 #[derive(Debug, Clone)]
 pub struct DefaultChildOutputAggregator;
 
+fn extract_labeled_section(answer: &str, heading: &str) -> Option<String> {
+    let mut in_section = false;
+    let mut lines = Vec::new();
+    for raw_line in answer.lines() {
+        let trimmed = raw_line.trim();
+        let normalized = trimmed
+            .trim_start_matches(|ch: char| {
+                ch.is_ascii_digit() || ch == '.' || ch == ')' || ch == '-'
+            })
+            .trim();
+        let lower = normalized.to_ascii_lowercase();
+        if lower.starts_with(heading) {
+            in_section = true;
+            let remainder = normalized
+                .split_once(':')
+                .map(|(_, tail)| tail.trim())
+                .unwrap_or("");
+            if !remainder.is_empty() {
+                lines.push(remainder.to_string());
+            }
+            continue;
+        }
+        if in_section {
+            if lower.starts_with("findings:")
+                || lower.starts_with("evidence used:")
+                || lower.starts_with("validation loop:")
+                || lower.starts_with("remaining gaps:")
+            {
+                break;
+            }
+            if !normalized.is_empty() {
+                lines.push(normalized.to_string());
+            }
+        }
+    }
+
+    (!lines.is_empty()).then(|| lines.join(" "))
+}
+
 impl ChildOutputAggregator for DefaultChildOutputAggregator {
     fn aggregate(&self, task: &str, child_outputs: &[ChildSubqueryOutput]) -> String {
         if child_outputs.is_empty() {
@@ -300,6 +398,8 @@ impl ChildOutputAggregator for DefaultChildOutputAggregator {
         }
 
         let mut answer = format!("Task: {task}\n");
+        let mut validation_steps = Vec::new();
+        let mut remaining_gaps = Vec::new();
         for output in child_outputs {
             answer.push_str("\n");
             answer.push_str("- ");
@@ -308,6 +408,32 @@ impl ChildOutputAggregator for DefaultChildOutputAggregator {
                 answer.push_str(" [sources: ");
                 answer.push_str(&output.citations.join(", "));
                 answer.push(']');
+            }
+            if let Some(step) = extract_labeled_section(&output.answer, "validation loop") {
+                if !validation_steps.contains(&step) {
+                    validation_steps.push(step);
+                }
+            }
+            if let Some(gap) = extract_labeled_section(&output.answer, "remaining gaps") {
+                if !remaining_gaps.contains(&gap) {
+                    remaining_gaps.push(gap);
+                }
+            }
+        }
+        if !validation_steps.is_empty() {
+            answer.push_str("\n\nValidation steps to run next:\n");
+            for step in validation_steps.iter().take(3) {
+                answer.push_str("- ");
+                answer.push_str(step);
+                answer.push('\n');
+            }
+        }
+        if !remaining_gaps.is_empty() {
+            answer.push_str("\nRemaining gaps still called out:\n");
+            for gap in remaining_gaps.iter().take(3) {
+                answer.push_str("- ");
+                answer.push_str(gap);
+                answer.push('\n');
             }
         }
         answer
@@ -352,4 +478,47 @@ pub(super) struct IterationArtifacts {
     pub(super) selected_chunk_ids: Vec<String>,
     pub(super) slices: Vec<RecursiveContextSlice>,
     pub(super) escalation: EscalationOutcome,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_child(answer: &str, citations: &[&str]) -> ChildSubqueryOutput {
+        ChildSubqueryOutput {
+            subquery_id: "child-1".to_string(),
+            answer: answer.to_string(),
+            citations: citations.iter().map(|value| (*value).to_string()).collect(),
+            web_evidence: Vec::new(),
+            web_execution: None,
+            web_execution_note: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            cost_usd: 0.0,
+        }
+    }
+
+    #[test]
+    fn default_aggregator_surfaces_validation_steps_and_remaining_gaps() {
+        let aggregator = DefaultChildOutputAggregator;
+        let answer = aggregator.aggregate(
+            "tighten recursive planner follow-up",
+            &[
+                sample_child(
+                    "Findings: trace export is stable\nValidation loop: run cargo test -p runtime m5_regression\nRemaining gaps: adaptive retry policy is still heuristic-first",
+                    &["chunk-1"],
+                ),
+                sample_child(
+                    "Findings: blender handoff bundle is clearer\nValidation loop: open the staged bundle in Blender and compare counts with validation-baseline.md\nRemaining gaps: Blender still needs manual in-app verification",
+                    &["chunk-2"],
+                ),
+            ],
+        );
+
+        assert!(answer.contains("Validation steps to run next"));
+        assert!(answer.contains("run cargo test -p runtime m5_regression"));
+        assert!(answer.contains("Remaining gaps still called out"));
+        assert!(answer.contains("adaptive retry policy is still heuristic-first"));
+        assert!(answer.contains("Blender still needs manual in-app verification"));
+    }
 }
