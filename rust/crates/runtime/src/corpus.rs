@@ -895,6 +895,18 @@ pub fn search_corpus_manifest(
                 .get("outlineText")
                 .and_then(JsonValue::as_str)
                 .unwrap_or_default();
+            let outline_path = chunk
+                .metadata
+                .get("outlinePath")
+                .and_then(JsonValue::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(JsonValue::as_str)
+                        .map(ToOwned::to_owned)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
             let outline_text_lower = outline_text.to_ascii_lowercase();
             let normalized_outline = normalize_for_match(outline_text);
             let normalized_body = normalize_for_match(&body);
@@ -1198,6 +1210,13 @@ pub fn search_corpus_manifest(
                 &normalized_chunk_heading,
                 &outline_text_lower,
                 &normalized_outline,
+            );
+            apply_outline_path_rerank(
+                &query_features,
+                &outline_path,
+                &matched_terms,
+                &mut score,
+                &mut reasons,
             );
             total_matching_chunks = total_matching_chunks.saturating_add(1);
             document_hits.push(ScoredChunkHit {
@@ -1897,7 +1916,12 @@ fn summarize_document_signals(
     let outline_lower = doc
         .chunks
         .iter()
-        .filter_map(|chunk| chunk.metadata.get("outlineText").and_then(JsonValue::as_str))
+        .filter_map(|chunk| {
+            chunk
+                .metadata
+                .get("outlineText")
+                .and_then(JsonValue::as_str)
+        })
         .collect::<Vec<_>>()
         .join("\n")
         .to_ascii_lowercase();
@@ -2025,6 +2049,60 @@ fn apply_query_intent_boosts(
     if root_hint_matches > 0 && intent.file_lookup {
         *score += root_hint_matches as f64 * 0.9;
         reasons.push(format!("intent:root-hintx{root_hint_matches}"));
+    }
+}
+
+fn apply_outline_path_rerank(
+    query_features: &QueryFeatures,
+    outline_path: &[String],
+    matched_terms: &[String],
+    score: &mut f64,
+    reasons: &mut Vec<String>,
+) {
+    if outline_path.is_empty() {
+        return;
+    }
+
+    let normalized_levels = outline_path
+        .iter()
+        .map(|segment| normalize_for_match(segment))
+        .collect::<Vec<_>>();
+    let query_tokens = query_features
+        .tokens
+        .iter()
+        .filter(|token| token.len() >= 3)
+        .collect::<Vec<_>>();
+    if query_tokens.is_empty() {
+        return;
+    }
+
+    let mut distinct_levels = std::collections::BTreeSet::new();
+    let mut level_hits = 0usize;
+    for token in &query_tokens {
+        for (index, level) in normalized_levels.iter().enumerate() {
+            if level.contains(token.as_str()) {
+                distinct_levels.insert(index);
+                level_hits += 1;
+                break;
+            }
+        }
+    }
+
+    if distinct_levels.len() >= 2 {
+        *score += 2.4 + distinct_levels.len() as f64 * 0.9;
+        reasons.push(format!("outline-path-depth:{}", distinct_levels.len()));
+    }
+    if level_hits >= 2 {
+        *score += level_hits as f64 * 0.45;
+        reasons.push(format!("outline-path-hits:{level_hits}"));
+    }
+    if matched_terms.len() >= 2 && distinct_levels.len() >= matched_terms.len().min(3) {
+        *score += 1.6;
+        reasons.push("outline-path-coverage".to_string());
+    }
+    if query_features.intent.explanatory_lookup && outline_path.len() >= 2 {
+        *score += 0.8 + outline_path.len() as f64 * 0.25;
+        reasons.push(format!("outline-ancestor-context:{}", outline_path.len()));
     }
 }
 
@@ -3130,6 +3208,59 @@ Standalone notes without authentication context.
             result.hits[0].reason.contains("outline:")
                 || result.hits[0].reason.contains("phrase:outline")
                 || result.hits[0].reason.contains("intent:outline")
+        );
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_prefers_deeper_outline_paths_when_query_spans_ancestors_and_leaf_section() {
+        let cwd = temp_dir("workspace-outline-path-rerank");
+        let root = cwd.join("docs");
+        fs::create_dir_all(&root).expect("mkdir");
+        fs::write(
+            root.join("runbook.md"),
+            "# Platform Guide
+Intro.
+
+## Authentication
+General auth summary.
+
+### Session Revocation
+Operators revoke sessions and clean up leaked refresh tokens.
+",
+        )
+        .expect("write runbook");
+        fs::write(
+            root.join("revocation.md"),
+            "# Session Revocation
+Operators revoke sessions and clean up leaked refresh tokens.
+",
+        )
+        .expect("write flat doc");
+
+        let manifest = attach_corpus(
+            &cwd,
+            &[root.clone()],
+            CorpusAttachOptions {
+                chunk_bytes: 72,
+                ..CorpusAttachOptions::default()
+            },
+        )
+        .expect("attach corpus");
+        let result = search_corpus(
+            &cwd,
+            &manifest.corpus_id,
+            "authentication session revocation",
+            5,
+            None,
+        )
+        .expect("search");
+
+        assert_eq!(result.hits[0].path, "runbook.md");
+        assert!(
+            result.hits[0].reason.contains("outline-path-depth:")
+                || result.hits[0].reason.contains("outline-path-coverage")
         );
 
         let _ = fs::remove_dir_all(cwd);
