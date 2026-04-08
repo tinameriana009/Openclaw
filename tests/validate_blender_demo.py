@@ -16,6 +16,7 @@ REQUIRED_FILES = [
     DEMO_ROOT / 'README.md',
     DEMO_ROOT / 'brief.md',
     DEMO_ROOT / 'manual-test-checklist.md',
+    DEMO_ROOT / 'next-prompt-template.md',
     DEMO_ROOT / 'validation-baseline.md',
     ADDON_ROOT / '__init__.py',
     ADDON_ROOT / 'properties.py',
@@ -78,6 +79,9 @@ def main() -> int:
     readme_text = (DEMO_ROOT / 'README.md').read_text()
     if 'prepare-blender-demo.sh' not in readme_text or '.demo-artifacts/blender-demo/' not in readme_text:
         print('Demo README does not mention the Blender prep helper and staged artifact path.')
+        return 1
+    if 'next-prompt-template.md' not in readme_text or 'operator-findings-template.md' not in readme_text:
+        print('Demo README does not mention the staged handoff templates.')
         return 1
 
     checklist_text = (DEMO_ROOT / 'manual-test-checklist.md').read_text()

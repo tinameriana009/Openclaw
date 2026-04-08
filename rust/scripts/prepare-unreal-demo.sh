@@ -43,6 +43,7 @@ cp "$REPO_ROOT/docs/examples/unreal-runtime-telemetry-demo/expected-findings.md"
 cp "$REPO_ROOT/docs/examples/unreal-runtime-telemetry-demo/manual-validation-checklist.md" "$RUN_DIR/manual-validation-checklist.md"
 cp "$REPO_ROOT/docs/examples/unreal-runtime-telemetry-demo/error-feedback-playbook.md" "$RUN_DIR/error-feedback-playbook.md"
 cp "$REPO_ROOT/docs/examples/unreal-runtime-telemetry-demo/operator-session-template.md" "$RUN_DIR/operator-session-template.md"
+cp "$REPO_ROOT/docs/examples/unreal-runtime-telemetry-demo/next-prompt-template.md" "$RUN_DIR/next-prompt-template.md"
 cp "$REPO_ROOT/docs/examples/unreal-runtime-telemetry-demo/trace-review-checklist.md" "$RUN_DIR/trace-review-checklist.md"
 cp -R "$REPO_ROOT/docs/examples/unreal-runtime-telemetry-demo/plugin/RuntimeTelemetry" "$PLUGIN_BUNDLE_DIR"
 
@@ -85,8 +86,9 @@ Next operator steps:
 3. Fill in operator-session-template.md while you validate so version, logs, and runtime observations stay exact.
 4. Run through manual-validation-checklist.md in your real build/editor loop.
 5. Use error-feedback-playbook.md to turn any failure into the next grounded prompt.
-6. Use trace-review-checklist.md if a model answer sounds overconfident.
-7. Record final exact errors and observations in operator-findings-template.md.
+6. Use next-prompt-template.md so the follow-up prompt preserves exact environment details, logs, and runtime observations.
+7. Use trace-review-checklist.md if a model answer sounds overconfident.
+8. Record final exact errors and observations in operator-findings-template.md.
 
 This helper only validates and stages the demo kit.
 It does not launch Unreal Editor, run UnrealBuildTool, or verify the plugin automatically.
@@ -98,6 +100,7 @@ expected-findings.md
 manual-validation-checklist.md
 error-feedback-playbook.md
 operator-session-template.md
+next-prompt-template.md
 trace-review-checklist.md
 operator-findings-template.md
 next-steps.txt

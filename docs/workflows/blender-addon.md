@@ -110,7 +110,7 @@ cd rust
 ./scripts/prepare-blender-demo.sh
 ```
 
-That helper validates the demo kit, rebuilds the installable zip, and stages a review bundle under `.demo-artifacts/blender-demo/` with the checklist, baseline, and an operator findings template.
+That helper validates the demo kit, rebuilds the installable zip, and stages a review bundle under `.demo-artifacts/blender-demo/` with the checklist, baseline, operator findings template, follow-up prompt template, and a bundle manifest.
 
 This still does **not** validate behavior in Blender, but it catches missing files, broken Python syntax, and packaging regressions early.
 
@@ -139,6 +139,8 @@ Good follow-up evidence looks like:
 - Blender version-specific registration issues
 
 That keeps the workflow grounded in observed behavior instead of generic "make it better" iteration.
+
+If you used the staged bundle, start from `next-prompt-template.md` so the next operator or model turn inherits the exact Blender version, baseline mismatches, and traceback text instead of a memory-driven summary.
 
 ## Suggested corpus contents
 

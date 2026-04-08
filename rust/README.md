@@ -22,8 +22,8 @@ Best current showcase path:
 - the repo-analysis flow, especially via `./scripts/run-repo-analysis-demo.sh`, because it exercises grounded local analysis, session resume, and trace review without depending on Blender or Unreal manual UI loops
 
 Most realistic operator-prep helpers for the more manual workflows:
-- `./scripts/prepare-blender-demo.sh` validates the Blender demo kit, rebuilds the zip artifact, and stages a manual-review bundle under `.demo-artifacts/blender-demo/`
-- `./scripts/prepare-unreal-demo.sh` validates the Unreal demo kit and stages a plugin/checklist bundle under `.demo-artifacts/unreal-demo/`
+- `./scripts/prepare-blender-demo.sh` validates the Blender demo kit, rebuilds the zip artifact, and stages a manual-review bundle under `.demo-artifacts/blender-demo/` with findings/prompt templates for the next handoff
+- `./scripts/prepare-unreal-demo.sh` validates the Unreal demo kit and stages a plugin/checklist bundle under `.demo-artifacts/unreal-demo/` with findings/prompt templates for the next handoff
 
 ## What ships today
 
@@ -393,7 +393,7 @@ cd rust
 ./scripts/prepare-unreal-demo.sh
 ```
 
-Those helpers validate and stage demo bundles; they do not drive Blender or Unreal for you.
+Those helpers validate and stage demo bundles, including operator findings and next-prompt templates for repeatable handoff; they do not drive Blender or Unreal for you.
 
 If you need one realistic end-to-end demo for an operator review, prefer the repo-analysis kit and run:
 

@@ -16,6 +16,7 @@ REQUIRED_FILES = [
     DEMO_ROOT / 'manual-validation-checklist.md',
     DEMO_ROOT / 'error-feedback-playbook.md',
     DEMO_ROOT / 'operator-session-template.md',
+    DEMO_ROOT / 'next-prompt-template.md',
     DEMO_ROOT / 'trace-review-checklist.md',
     PLUGIN_ROOT / 'RuntimeTelemetry.uplugin',
     SOURCE_ROOT / 'RuntimeTelemetry.Build.cs',
@@ -79,6 +80,7 @@ def main() -> int:
         ('.demo-artifacts/unreal-demo/', 'Unreal demo README does not mention the staged artifact path.'),
         ('error-feedback-playbook.md', 'Unreal demo README does not mention the error feedback playbook.'),
         ('operator-session-template.md', 'Unreal demo README does not mention the operator session template.'),
+        ('next-prompt-template.md', 'Unreal demo README does not mention the follow-up prompt template.'),
     ]:
         if needle not in readme_text:
             print(message)
@@ -95,6 +97,7 @@ def main() -> int:
         'manual-validation-checklist.md',
         'error-feedback-playbook.md',
         'operator-session-template.md',
+        'next-prompt-template.md',
         'trace-review-checklist.md',
         'python3 tests/validate_unreal_demo.py',
     ]:

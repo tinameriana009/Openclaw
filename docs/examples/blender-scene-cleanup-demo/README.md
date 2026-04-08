@@ -11,6 +11,7 @@ It is meant to make the current harness feel more real without pretending it can
 - `validation-baseline.md` — a sample disposable scene recipe plus the counts you should expect after a scan
 - `addon/scene_cleanup_helper/` — a minimal illustrative add-on package you can inspect, compare against, or ask the model to extend
 - `tools/package_demo_addon.py` — a tiny helper that zips the demo add-on for Blender installation tests
+- `next-prompt-template.md` — a structured follow-up prompt for turning manual Blender findings into the next grounded request
 
 ## What this kit is for
 
@@ -52,10 +53,11 @@ Then continue with narrower prompts such as:
 4. Optionally build an installable zip with `python3 docs/examples/blender-scene-cleanup-demo/tools/package_demo_addon.py`.
 5. If you want a cleaner handoff bundle, run `cd rust && ./scripts/prepare-blender-demo.sh` to stage artifacts under `.demo-artifacts/blender-demo/`.
 6. Install the zipped or copied add-on in Blender.
-7. Follow `manual-test-checklist.md` against a disposable scene.
-8. Feed any traceback, confusing UI wording, or mismatched counts back into the next prompt.
+7. Follow `manual-test-checklist.md` against a disposable scene and record results in `operator-findings-template.md`.
+8. Use `next-prompt-template.md` so the next prompt carries forward exact environment details, counts, and tracebacks.
+9. Feed any traceback, confusing UI wording, or mismatched counts back into the next prompt.
 
-That sequence gives you a more convincing first-run story: corpus → plan → static validation → installable artifact → staged operator bundle → manual Blender validation.
+That sequence gives you a more convincing first-run story: corpus → plan → static validation → installable artifact → staged operator bundle → manual Blender validation → evidence-rich follow-up prompt.
 
 ## Lightweight local validation
 

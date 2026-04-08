@@ -48,6 +48,7 @@ cp "$ZIP_SOURCE" "$ZIP_ARTIFACT"
 cp "$REPO_ROOT/docs/examples/blender-scene-cleanup-demo/brief.md" "$RUN_DIR/brief.md"
 cp "$REPO_ROOT/docs/examples/blender-scene-cleanup-demo/validation-baseline.md" "$RUN_DIR/validation-baseline.md"
 cp "$REPO_ROOT/docs/examples/blender-scene-cleanup-demo/manual-test-checklist.md" "$RUN_DIR/manual-test-checklist.md"
+cp "$REPO_ROOT/docs/examples/blender-scene-cleanup-demo/next-prompt-template.md" "$RUN_DIR/next-prompt-template.md"
 
 cat >"$REPORT_TEMPLATE" <<'EOF'
 # Blender operator findings
@@ -83,10 +84,21 @@ Next operator steps:
 2. Recreate the disposable scene from validation-baseline.md.
 3. Run through manual-test-checklist.md.
 4. Record observations in operator-findings-template.md.
-5. Feed exact tracebacks, mismatched counts, or confusing UI wording back into the next prompt.
+5. Use next-prompt-template.md so the follow-up prompt preserves exact environment details, observed counts, and tracebacks.
+6. Feed exact tracebacks, mismatched counts, or confusing UI wording back into the next prompt.
 
 This helper only validates and stages the demo kit.
 It does not launch Blender or verify behavior automatically.
+EOF
+
+cat >"$RUN_DIR/bundle-manifest.txt" <<EOF
+brief.md
+validation-baseline.md
+manual-test-checklist.md
+next-prompt-template.md
+operator-findings-template.md
+next-steps.txt
+scene_cleanup_helper_demo.zip
 EOF
 
 echo

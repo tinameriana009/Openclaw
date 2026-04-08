@@ -20,6 +20,7 @@ It gives operators:
 - `manual-validation-checklist.md` — the operator loop for build/editor/runtime validation
 - `error-feedback-playbook.md` — prompt recipes for Build.cs, UHT, load, Blueprint, and runtime failures
 - `operator-session-template.md` — a lightweight worksheet for recording environment, logs, and next-prompt payloads
+- `next-prompt-template.md` — a structured follow-up prompt for turning engine findings into the next grounded request
 - `trace-review-checklist.md` — how to review the saved reasoning trail when an answer feels suspicious
 - `plugin/RuntimeTelemetry/` — a minimal illustrative Unreal plugin layout with `.uplugin`, `Build.cs`, module bootstrapping, a subsystem, and a Blueprint-facing library
 
@@ -65,10 +66,11 @@ Then continue with narrower asks such as:
 5. If you want a cleaner handoff bundle, run `cd rust && ./scripts/prepare-unreal-demo.sh` to stage artifacts under `.demo-artifacts/unreal-demo/`.
 6. Use `operator-session-template.md` while validating so environment details, logs, and runtime observations do not get lost.
 7. Copy the plugin into a disposable Unreal project or compare it against an existing plugin repo.
-8. Follow `manual-validation-checklist.md` for the real compile/editor/runtime loop.
-9. Use `error-feedback-playbook.md` to turn compiler errors, UHT issues, load failures, or Blueprint surprises into the next grounded prompt.
+8. Follow `manual-validation-checklist.md` for the real compile/editor/runtime loop and capture final outcomes in `operator-findings-template.md`.
+9. Use `next-prompt-template.md` so the next prompt preserves exact build/editor/runtime evidence.
+10. Use `error-feedback-playbook.md` to turn compiler errors, UHT issues, load failures, or Blueprint surprises into the next grounded prompt.
 
-That path is intentionally honest: corpus → plan → static validation → staged operator bundle → human build/editor validation → evidence-driven follow-up.
+That path is intentionally honest: corpus → plan → static validation → staged operator bundle → human build/editor validation → evidence-driven follow-up with a structured handoff prompt.
 
 ## Lightweight local validation
 
