@@ -165,6 +165,7 @@ struct QueryFeatures {
     semantic_terms: Vec<SemanticTerm>,
     language_terms: Vec<String>,
     intent: QueryIntent,
+    strategy: QueryStrategy,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -184,6 +185,15 @@ struct DocumentSignalSummary {
     heading_hits: usize,
     root_hits: usize,
     outline_hits: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum QueryStrategy {
+    #[default]
+    Balanced,
+    DocsFirst,
+    CodeFirst,
+    SymbolFirst,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1211,6 +1221,16 @@ pub fn search_corpus_manifest(
                 &outline_text_lower,
                 &normalized_outline,
             );
+            apply_strategy_rerank(
+                query_features.strategy,
+                &path_lower,
+                &source_root_lower,
+                &doc.language,
+                &chunk_heading_lower,
+                &outline_text_lower,
+                &mut score,
+                &mut reasons,
+            );
             apply_outline_path_rerank(
                 &query_features,
                 &outline_path,
@@ -1807,7 +1827,67 @@ fn query_features(query: &str) -> QueryFeatures {
             }
         }
     }
+    features.strategy = route_query_strategy(query, &features);
     features
+}
+
+fn route_query_strategy(query: &str, features: &QueryFeatures) -> QueryStrategy {
+    let normalized = normalize_for_match(query);
+    let symbolish_query = !features.raw_terms.is_empty()
+        || features
+            .compact_terms
+            .iter()
+            .any(|term| term.len() >= 8)
+        || query.contains("::")
+        || query.contains("/")
+        || query.contains("_");
+    if symbolish_query {
+        return QueryStrategy::SymbolFirst;
+    }
+
+    let docs_terms = [
+        "docs",
+        "documentation",
+        "guide",
+        "readme",
+        "manual",
+        "overview",
+        "architecture",
+        "explain",
+        "walkthrough",
+    ]
+    .iter()
+    .filter(|needle| normalized.contains(**needle))
+    .count();
+    let code_terms = [
+        "implement",
+        "implementation",
+        "handler",
+        "function",
+        "struct",
+        "class",
+        "method",
+        "code",
+        "source",
+        "module",
+        "fn",
+    ]
+    .iter()
+    .filter(|needle| normalized.contains(**needle))
+    .count();
+
+    if features.intent.docs_lookup
+        || features.intent.explanatory_lookup
+        || features.intent.continuity_lookup
+    {
+        if docs_terms >= code_terms {
+            return QueryStrategy::DocsFirst;
+        }
+    }
+    if features.intent.implementation_lookup || code_terms > docs_terms {
+        return QueryStrategy::CodeFirst;
+    }
+    QueryStrategy::Balanced
 }
 
 fn detect_query_intent(query: &str) -> QueryIntent {
@@ -2049,6 +2129,73 @@ fn apply_query_intent_boosts(
     if root_hint_matches > 0 && intent.file_lookup {
         *score += root_hint_matches as f64 * 0.9;
         reasons.push(format!("intent:root-hintx{root_hint_matches}"));
+    }
+}
+
+fn apply_strategy_rerank(
+    strategy: QueryStrategy,
+    path_lower: &str,
+    source_root_lower: &str,
+    language: &Option<String>,
+    chunk_heading_lower: &str,
+    outline_text_lower: &str,
+    score: &mut f64,
+    reasons: &mut Vec<String>,
+) {
+    let is_docs = matches!(language.as_deref(), Some("markdown" | "text"))
+        || path_lower.contains("docs")
+        || path_lower.contains("readme")
+        || source_root_lower.contains("docs");
+    let is_code = !is_docs
+        && matches!(
+            language.as_deref(),
+            Some(
+                "rust"
+                    | "python"
+                    | "typescript"
+                    | "javascript"
+                    | "go"
+                    | "shell"
+                    | "json"
+                    | "yaml"
+                    | "toml"
+            )
+        );
+    let has_structure_context = !chunk_heading_lower.is_empty() || !outline_text_lower.is_empty();
+    let symbol_friendly = is_code || path_lower.contains("src") || path_lower.contains("lib");
+
+    match strategy {
+        QueryStrategy::Balanced => {}
+        QueryStrategy::DocsFirst => {
+            if is_docs {
+                *score += 3.2;
+                reasons.push("strategy:docs-first".to_string());
+            }
+            if has_structure_context {
+                *score += 1.1;
+                reasons.push("strategy:docs-structure".to_string());
+            }
+        }
+        QueryStrategy::CodeFirst => {
+            if is_code {
+                *score += 3.1;
+                reasons.push("strategy:code-first".to_string());
+            }
+            if path_lower.contains("src") || source_root_lower.contains("src") {
+                *score += 1.0;
+                reasons.push("strategy:code-path".to_string());
+            }
+        }
+        QueryStrategy::SymbolFirst => {
+            if symbol_friendly {
+                *score += 3.8;
+                reasons.push("strategy:symbol-first".to_string());
+            }
+            if is_docs && !symbol_friendly {
+                *score -= 0.8;
+                reasons.push("strategy:symbol-penalty:docs".to_string());
+            }
+        }
     }
 }
 
@@ -3373,6 +3520,78 @@ mod retrieval_gap_regression_tests {
             result.hits[0].reason.contains("root:sdk")
                 || result.hits[0].reason.contains("symbol-root:sdk")
         );
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_routes_explanatory_queries_toward_docs_in_mixed_corpora() {
+        let cwd = temp_dir("workspace-strategy-docs-first");
+        let docs_root = cwd.join("docs");
+        let src_root = cwd.join("src");
+        fs::create_dir_all(&docs_root).expect("mkdir docs");
+        fs::create_dir_all(&src_root).expect("mkdir src");
+        fs::write(
+            docs_root.join("auth.md"),
+            "# Authentication Architecture\n\n## Token Flow\nThis guide explains token refresh, session revocation, and callback sequencing.\n",
+        )
+        .expect("write docs");
+        fs::write(
+            src_root.join("auth.rs"),
+            "pub fn token_flow() {}\n// callback sequencing helper\n",
+        )
+        .expect("write code");
+
+        let manifest = attach_corpus(
+            &cwd,
+            &[docs_root.clone(), src_root.clone()],
+            CorpusAttachOptions::default(),
+        )
+        .expect("attach corpus");
+        let result = search_corpus(
+            &cwd,
+            &manifest.corpus_id,
+            "explain authentication token flow",
+            5,
+            None,
+        )
+        .expect("search");
+
+        assert_eq!(result.hits[0].path, "auth.md");
+        assert!(result.hits[0].reason.contains("strategy:docs-first"));
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_routes_symbol_queries_toward_code_in_mixed_corpora() {
+        let cwd = temp_dir("workspace-strategy-symbol-first");
+        let docs_root = cwd.join("docs");
+        let src_root = cwd.join("src");
+        fs::create_dir_all(&docs_root).expect("mkdir docs");
+        fs::create_dir_all(&src_root).expect("mkdir src");
+        fs::write(
+            docs_root.join("callbacks.md"),
+            "# Callback Handler\nThe auth_callback_handler symbol is mentioned in this guide for operators.\n",
+        )
+        .expect("write docs");
+        fs::write(
+            src_root.join("auth.rs"),
+            "pub fn auth_callback_handler() {}\n// actual implementation\n",
+        )
+        .expect("write code");
+
+        let manifest = attach_corpus(
+            &cwd,
+            &[docs_root.clone(), src_root.clone()],
+            CorpusAttachOptions::default(),
+        )
+        .expect("attach corpus");
+        let result = search_corpus(&cwd, &manifest.corpus_id, "auth_callback_handler", 5, None)
+            .expect("search");
+
+        assert_eq!(result.hits[0].path, "auth.rs");
+        assert!(result.hits[0].reason.contains("strategy:symbol-first"));
 
         let _ = fs::remove_dir_all(cwd);
     }
