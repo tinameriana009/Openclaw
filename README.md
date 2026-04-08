@@ -56,8 +56,8 @@ In short: this repo is no longer just a parity snapshot. It is evolving into a m
 - **Core harness:** strong alpha
 - **Local corpus RAG:** real and usable
 - **Recursive runtime / RLM:** alpha+
-- **Hybrid local+web:** partial alpha
-- **Showcase workflows:** Blender, Unreal, repo analysis
+- **Hybrid local+web:** partial alpha, more honest and better traced
+- **Showcase workflows:** repo analysis (best current end-to-end path), Blender, Unreal
 
 If you want the detailed snapshot and the most honest summary of strengths/limits, see:
 - [`FINAL_STATUS.md`](FINAL_STATUS.md)

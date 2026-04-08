@@ -47,7 +47,7 @@ use runtime::{
     generate_state, inspect_corpus, list_corpora, load_corpus, load_system_prompt,
     parse_oauth_callback_request_target, resolve_sandbox_status, save_oauth_credentials,
     search_corpus, slice_corpus, ApiClient, ApiRequest, AssistantEvent, CompactionConfig,
-    ConfigSource, ContentBlock, ConversationMessage, ConversationRuntime, CorpusAttachOptions,
+    ConfigLoader, ConfigSource, ContentBlock, ConversationMessage, ConversationRuntime, CorpusAttachOptions,
     ExecutionProfile, MessageRole, OAuthAuthorizationRequest, OAuthConfig,
     OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext, PromptCacheEvent,
     ResolvedPermissionMode, RuntimeError, Session, TokenUsage, ToolError, ToolExecutor,
@@ -7314,6 +7314,7 @@ UU conflicted.rs",
 
 #[cfg(test)]
 mod corpus_answer_tests {
+    use super::{minimal_web_research, DEFAULT_MODEL};
     use api::{
         collect_minimal_web_evidence, format_provider_child_init_reason,
         render_extractive_child_answer, resolve_provider_child_model, ApiError, MessageResponse,

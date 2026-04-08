@@ -24,6 +24,7 @@ It is no longer just a parity snapshot. The fork now includes substantial additi
 - cleaner shared provider child backend/factory direction
 - less CLI-owned duplication
 - shared provider extractive child executor builder moved into the `api` crate
+- model resolution and bounded minimal web-evidence shaping were pushed further into shared `api` helpers
 - better fallback messaging and backend availability reporting
 
 ### Local corpus RAG
@@ -32,6 +33,7 @@ It is no longer just a parity snapshot. The fork now includes substantial additi
 - better slice diversity across documents
 - root-aware retrieval provenance
 - per-root disambiguation for same-named files
+- symbol-aware query heuristics for code-heavy and multi-root retrieval
 - skip telemetry / per-root reporting improvements
 
 ### Web-aware behavior
@@ -39,6 +41,7 @@ It is no longer just a parity snapshot. The fork now includes substantial additi
 - richer web counters/telemetry
 - child execution path now handles approved web evidence more honestly
 - degraded web collection is surfaced as explicit notes instead of silent failure or overclaiming
+- fetch-state-aware provenance distinguishes fetched pages from search-result snippets
 - final-answer web execution summaries are more honest
 - provenance handling is stronger
 
@@ -47,7 +50,7 @@ It is no longer just a parity snapshot. The fork now includes substantial additi
 - bootstrap / quickstart guidance
 - release/trust docs (`CHANGELOG`, `RELEASE`, `ARTIFACTS`, `PRIVACY`)
 - production-readiness planning docs, checklist, scorecard, and implementation plan
-- domain workflow docs, prompt templates, demo kits, and lightweight readiness validators
+- domain workflow docs, prompt templates, demo kits, lightweight readiness validators, and a runnable repo-analysis showcase helper
 
 ### Showcase workflows
 - Blender scene cleanup demo kit
@@ -58,11 +61,11 @@ It is no longer just a parity snapshot. The fork now includes substantial additi
 This repository is **not yet fully production-ready**.
 
 Main reasons:
-- web execution is still only minimally operational and not a fully mature end-to-end runtime path
-- child execution is cleaner but still not perfectly centralized in the runtime layer
-- retrieval is still primarily lexical
+- web execution is more honest and better traced, but still not a fully mature end-to-end runtime path
+- child execution is cleaner and more centralized, but still not perfectly owned by shared runtime/provider abstractions
+- retrieval is stronger and more symbol-aware, but still remains heuristic/lexical-first overall
 - recursive planning remains alpha, even though it is now much stronger than the baseline
-- workflow validation for Blender/Unreal remains operator-driven rather than fully automated
+- workflow validation for Blender/Unreal remains operator-driven rather than fully automated, even though repo analysis is now a better runnable showcase path
 
 ## Recommended positioning
 Use language like:

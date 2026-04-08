@@ -50,22 +50,21 @@ Operator/readme/bootstrap documentation has been improved significantly:
 - workflow docs under `docs/workflows/`
 - prompts/examples under `docs/prompts/` and `docs/examples/`
 
-### 5. Blender workflow readiness
-Blender add-on work is the most viable near-term domain workflow:
-- workflow docs exist
-- prompt templates exist
-- demo kit exists
-- validation exists
+### 5. Showcase workflow readiness
+The repo now has one especially practical end-to-end showcase path:
+- **repo analysis** is the best current runnable operator path
+- Blender add-on work remains a strong domain demo, with docs/templates/demo kit/validation
+- Unreal remains a narrower assistive workflow with honest documentation
 
 ## What Is Still Not Production-Ready
 ### 1. Web execution is still incomplete
-The repo has stronger web-aware policy/provenance handling, but still lacks a fully mature end-to-end web retrieval/execution path for recursive corpus-answer flows.
+The repo now has more honest bounded web semantics, fetch-state-aware provenance, and better degraded-path reporting, but it still lacks a fully mature end-to-end web retrieval/execution path for recursive corpus-answer flows.
 
 ### 2. Child execution is not fully runtime-native
-Provider-backed child execution has improved, but too much of the behavior still lives in CLI-layer wiring instead of a cleaner shared runtime/provider abstraction.
+Provider-backed child execution has improved materially and more setup now lives in shared `api` abstractions, but some important seams still live in CLI-layer wiring instead of a cleaner shared runtime/provider abstraction.
 
 ### 3. Retrieval quality ceiling
-Retrieval is still heavily lexical. For very large codebases or symbol-heavy workflows, this will eventually become the quality bottleneck.
+Retrieval is no longer purely plain lexical: it now has stronger provenance, neighbor expansion, and symbol-aware heuristics. But for very large codebases or symbol-heavy workflows, the absence of semantic/structure-aware retrieval will still become a bottleneck.
 
 ### 4. Recursive engine is still alpha
 The RLM path is much stronger than before, but it is not yet a deeply adaptive planner/executor. It remains a bounded alpha recursive engine rather than a mature production orchestrator.
