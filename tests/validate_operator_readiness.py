@@ -98,7 +98,7 @@ def main() -> int:
     workflow_expectations = {
         'blender workflow': (blender_workflow_text, ['does **not** directly run Blender UI interactions for you', 'Validate in Blender manually']),
         'unreal workflow': (unreal_workflow_text, ['does not do today', 'Manual validation loop']),
-        'repo-analysis workflow': (repo_workflow_text, ['Manual validation loop', 'python3 tests/validate_repo_analysis_demo.py', 'run-repo-analysis-demo.sh', '.demo-artifacts/repo-analysis-demo/']),
+        'repo-analysis workflow': (repo_workflow_text, ['Manual validation loop', 'python3 tests/validate_repo_analysis_demo.py', 'run-repo-analysis-demo.sh', '.demo-artifacts/repo-analysis-demo/', 'operator-session-template.md', 'next-prompt-template.md']),
     }
     for label, (text, needles) in workflow_expectations.items():
         for needle in needles:

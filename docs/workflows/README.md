@@ -78,6 +78,8 @@ If you want one especially concrete operator path, start with one of these demo 
 - [`../examples/repo-analysis-demo/README.md`](../examples/repo-analysis-demo/README.md)
 - [`../examples/repo-analysis-demo/brief.md`](../examples/repo-analysis-demo/brief.md)
 - [`../examples/repo-analysis-demo/manual-validation-checklist.md`](../examples/repo-analysis-demo/manual-validation-checklist.md)
+- [`../examples/repo-analysis-demo/operator-session-template.md`](../examples/repo-analysis-demo/operator-session-template.md)
+- [`../examples/repo-analysis-demo/next-prompt-template.md`](../examples/repo-analysis-demo/next-prompt-template.md)
 - [`../examples/repo-analysis-demo/trace-review-checklist.md`](../examples/repo-analysis-demo/trace-review-checklist.md)
 
 ### Unreal runtime telemetry demo kit

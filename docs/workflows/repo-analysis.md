@@ -49,6 +49,8 @@ If you want a more realistic operator path instead of a generic one-liner, use t
 - [`../examples/repo-analysis-demo/brief.md`](../examples/repo-analysis-demo/brief.md)
 - [`../examples/repo-analysis-demo/expected-findings.md`](../examples/repo-analysis-demo/expected-findings.md)
 - [`../examples/repo-analysis-demo/manual-validation-checklist.md`](../examples/repo-analysis-demo/manual-validation-checklist.md)
+- [`../examples/repo-analysis-demo/operator-session-template.md`](../examples/repo-analysis-demo/operator-session-template.md)
+- [`../examples/repo-analysis-demo/next-prompt-template.md`](../examples/repo-analysis-demo/next-prompt-template.md)
 - [`../examples/repo-analysis-demo/trace-review-checklist.md`](../examples/repo-analysis-demo/trace-review-checklist.md)
 
 ## Recommended flow
@@ -153,8 +155,9 @@ After the model answers:
 
 1. compare it against the known-good anchors in [`../examples/repo-analysis-demo/expected-findings.md`](../examples/repo-analysis-demo/expected-findings.md)
 2. spot-check the referenced files using [`../examples/repo-analysis-demo/manual-validation-checklist.md`](../examples/repo-analysis-demo/manual-validation-checklist.md)
-3. inspect the trace if the model made a broad claim from thin evidence
-4. re-prompt with narrower file targets when needed
+3. capture exact evidence, missed files, and weak claims in [`../examples/repo-analysis-demo/operator-session-template.md`](../examples/repo-analysis-demo/operator-session-template.md)
+4. inspect the trace if the model made a broad claim from thin evidence
+5. re-prompt with narrower file targets when needed using [`../examples/repo-analysis-demo/next-prompt-template.md`](../examples/repo-analysis-demo/next-prompt-template.md)
 
 You can also run a lightweight coherence check for the demo assets themselves:
 

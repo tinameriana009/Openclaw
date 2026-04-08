@@ -13,6 +13,9 @@ STEP1_OUT="$RUN_DIR/01-brief-response.txt"
 STEP2_OUT="$RUN_DIR/02-followup-response.txt"
 RUN_META="$RUN_DIR/run-metadata.txt"
 TRACE_HINT="$RUN_DIR/next-steps.txt"
+SESSION_TEMPLATE="$RUN_DIR/operator-session-template.md"
+NEXT_PROMPT_TEMPLATE="$RUN_DIR/next-prompt-template.md"
+REPORT_TEMPLATE="$RUN_DIR/operator-findings-template.md"
 
 mkdir -p "$RUN_DIR"
 
@@ -82,18 +85,61 @@ echo "[2/2] Running file-path follow-up on the resumed session..."
   "$CLAW_BIN" --resume latest prompt "$FOLLOWUP_PROMPT"
 ) | tee "$STEP2_OUT"
 
+cp "$REPO_ROOT/docs/examples/repo-analysis-demo/operator-session-template.md" "$SESSION_TEMPLATE"
+cp "$REPO_ROOT/docs/examples/repo-analysis-demo/next-prompt-template.md" "$NEXT_PROMPT_TEMPLATE"
+
+cat >"$REPORT_TEMPLATE" <<'EOF'
+# Repo analysis operator findings
+
+## Run reviewed
+- Run artifact directory:
+- Step 1 response reviewed? yes / no
+- Step 2 response reviewed? yes / no
+
+## Strong grounded findings
+- 
+
+## Weak or missing claims
+- 
+
+## Files/tests manually spot-checked
+- 
+
+## Trace review notes
+- Trace file(s):
+- Missing evidence:
+
+## Recommended next prompt
+- 
+EOF
+
 cat >"$TRACE_HINT" <<EOF
 Review steps for this run:
 1. Compare the answers against:
    - docs/examples/repo-analysis-demo/expected-findings.md
    - docs/examples/repo-analysis-demo/manual-validation-checklist.md
-2. If the answers sound overconfident, inspect traces from rust/.claw/trace/ using:
+2. Capture exact evidence, weak spots, and handoff notes in:
+   $SESSION_TEMPLATE
+   $REPORT_TEMPLATE
+3. If the answers sound overconfident, inspect traces from rust/.claw/trace/ using:
    ./target/debug/claw --resume latest /trace summary .claw/trace/<trace-file>
-3. Re-run the demo validator if you changed docs/assets:
+4. Use the staged next-prompt template for the next narrowed ask:
+   $NEXT_PROMPT_TEMPLATE
+5. Re-run the demo validator if you changed docs/assets:
    python3 tests/validate_repo_analysis_demo.py
 
 This helper only runs the documented prompt flow and captures outputs.
 It does not certify answer quality or verify the repository automatically.
+EOF
+
+cat >"$RUN_DIR/bundle-manifest.txt" <<EOF
+01-brief-response.txt
+02-followup-response.txt
+run-metadata.txt
+operator-session-template.md
+next-prompt-template.md
+operator-findings-template.md
+next-steps.txt
 EOF
 
 echo

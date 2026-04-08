@@ -7,6 +7,8 @@ It does **not** pretend the harness can verify architecture claims automatically
 - a concrete brief to run against a real local corpus
 - an expected-findings sheet to compare against
 - a manual validation checklist for reviewing the answer
+- an operator session template for capturing evidence and handoff notes
+- a next-prompt template for turning review findings into the next grounded ask
 - a trace-review checklist for auditing how the answer was produced
 
 ## Corpus target
@@ -32,6 +34,7 @@ That helper:
 - runs the documented onboarding brief against `../src` and `../tests`
 - resumes the same session for the file-path follow-up
 - saves both responses under `.demo-artifacts/repo-analysis-demo/<timestamp>/`
+- stages `operator-session-template.md`, `next-prompt-template.md`, and a findings template alongside the run outputs
 - prints the next validation/trace-review steps instead of pretending the run is self-certifying
 
 Optional overrides:
@@ -64,7 +67,9 @@ If you want a richer reasoning trail, repeat with `PROFILE=deep` or `PROFILE=res
 1. Start with [`brief.md`](brief.md).
 2. Compare the answer against [`expected-findings.md`](expected-findings.md).
 3. Use [`manual-validation-checklist.md`](manual-validation-checklist.md) while reading the referenced files.
-4. If the model made a surprising jump, inspect the trace using [`trace-review-checklist.md`](trace-review-checklist.md).
+4. Capture exact evidence, weak spots, and handoff notes in [`operator-session-template.md`](operator-session-template.md).
+5. If the model made a surprising jump, inspect the trace using [`trace-review-checklist.md`](trace-review-checklist.md).
+6. Turn the review into the next grounded question with [`next-prompt-template.md`](next-prompt-template.md).
 
 ## Fast local coherence check
 

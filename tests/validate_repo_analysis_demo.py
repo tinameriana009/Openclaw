@@ -10,6 +10,8 @@ REQUIRED_FILES = [
     DEMO_ROOT / 'brief.md',
     DEMO_ROOT / 'expected-findings.md',
     DEMO_ROOT / 'manual-validation-checklist.md',
+    DEMO_ROOT / 'operator-session-template.md',
+    DEMO_ROOT / 'next-prompt-template.md',
     DEMO_ROOT / 'trace-review-checklist.md',
     REPO_ROOT / 'docs' / 'workflows' / 'README.md',
     REPO_ROOT / 'docs' / 'workflows' / 'repo-analysis.md',
@@ -32,13 +34,27 @@ def main() -> int:
             return 1
 
     readme_text = (DEMO_ROOT / 'README.md').read_text()
-    for needle in ['python3 tests/validate_repo_analysis_demo.py', './scripts/run-repo-analysis-demo.sh', '.demo-artifacts/repo-analysis-demo/']:
+    for needle in [
+        'python3 tests/validate_repo_analysis_demo.py',
+        './scripts/run-repo-analysis-demo.sh',
+        '.demo-artifacts/repo-analysis-demo/',
+        'operator-session-template.md',
+        'next-prompt-template.md',
+    ]:
         if needle not in readme_text:
             print(f'Repo analysis demo README is missing required operator cue: {needle}')
             return 1
 
     workflow_text = (REPO_ROOT / 'docs' / 'workflows' / 'repo-analysis.md').read_text()
-    for needle in ['repo-analysis-demo', 'manual-validation-checklist.md', 'trace-review-checklist.md', 'run-repo-analysis-demo.sh', '.demo-artifacts/repo-analysis-demo/']:
+    for needle in [
+        'repo-analysis-demo',
+        'manual-validation-checklist.md',
+        'operator-session-template.md',
+        'next-prompt-template.md',
+        'trace-review-checklist.md',
+        'run-repo-analysis-demo.sh',
+        '.demo-artifacts/repo-analysis-demo/',
+    ]:
         if needle not in workflow_text:
             print(f'Repo analysis workflow does not mention required demo asset/operator cue: {needle}')
             return 1
