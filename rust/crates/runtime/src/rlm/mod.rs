@@ -1405,22 +1405,26 @@ mod tests {
             &self,
             request: &ChildSubqueryRequest,
         ) -> Result<ChildSubqueryOutput, RecursiveRuntimeError> {
-            let (web_execution, web_execution_note) = if matches!(request.web_policy.mode, WebAccessMode::Ask) {
-                let query = request
-                    .web_research_query
-                    .clone()
-                    .unwrap_or_else(|| "missing-query".to_string());
-                let note = format!(
-                    "approval required before using the web for query {:?}",
-                    request.web_research_query
-                );
-                (
-                    Some(crate::WebExecutionOutcome::approval_required(query, note.clone())),
-                    Some(note),
-                )
-            } else {
-                (Some(crate::WebExecutionOutcome::not_requested()), None)
-            };
+            let (web_execution, web_execution_note) =
+                if matches!(request.web_policy.mode, WebAccessMode::Ask) {
+                    let query = request
+                        .web_research_query
+                        .clone()
+                        .unwrap_or_else(|| "missing-query".to_string());
+                    let note = format!(
+                        "approval required before using the web for query {:?}",
+                        request.web_research_query
+                    );
+                    (
+                        Some(crate::WebExecutionOutcome::approval_required(
+                            query,
+                            note.clone(),
+                        )),
+                        Some(note),
+                    )
+                } else {
+                    (Some(crate::WebExecutionOutcome::not_requested()), None)
+                };
             Ok(ChildSubqueryOutput {
                 subquery_id: request.subquery_id.clone(),
                 answer: format!(
@@ -1651,7 +1655,9 @@ mod tests {
             )
             .expect("run should succeed");
 
-        assert!(result.final_answer.contains("approval-required subqueries=1"));
+        assert!(result
+            .final_answer
+            .contains("approval-required subqueries=1"));
         assert!(result
             .final_answer
             .contains("approval required before using the web for query Some(\"search the web for the latest hidden behavior\")"));
@@ -1659,7 +1665,7 @@ mod tests {
             event.event_type == TraceEventType::SubqueryCompleted
                 && event.data.get("webQuery")
                     == Some(&JsonValue::String(
-                        "search the web for the latest hidden behavior".to_string()
+                        "search the web for the latest hidden behavior".to_string(),
                     ))
                 && event.data.get("webApprovalState")
                     == Some(&JsonValue::String("not_approved".to_string()))
@@ -1672,7 +1678,7 @@ mod tests {
                 && event.data.get("degraded") == Some(&JsonValue::Bool(true))
                 && event.data.get("query")
                     == Some(&JsonValue::String(
-                        "search the web for the latest hidden behavior".to_string()
+                        "search the web for the latest hidden behavior".to_string(),
                     ))
         }));
     }

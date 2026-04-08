@@ -14,6 +14,7 @@ rust/target/
 rust/.claude/
 rust/.clawd-agents/
 rust/.clawd-todos.json
+.demo-artifacts/
 rust/.sandbox-home/
 
 # Demo packaging outputs
