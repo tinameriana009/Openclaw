@@ -252,8 +252,7 @@ fn resumed_trace_approve_writes_operator_packet_and_rerun_guidance() {
     let temp_dir = unique_temp_dir("resume-trace-approve");
     let project_dir = temp_dir.join("project");
     fs::create_dir_all(project_dir.join(".claw").join("trace")).expect("trace dir should exist");
-    fs::create_dir_all(project_dir.join(".claw").join("corpora"))
-        .expect("corpus dir should exist");
+    fs::create_dir_all(project_dir.join(".claw").join("corpora")).expect("corpus dir should exist");
 
     let sessions_dir = project_dir.join(".claw").join("sessions");
     fs::create_dir_all(&sessions_dir).expect("sessions dir should exist");
@@ -344,6 +343,8 @@ fn resumed_trace_approve_writes_operator_packet_and_rerun_guidance() {
 
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
     assert!(stdout.contains("Trace approval"));
+    assert!(stdout.contains("Review JSON      "));
+    assert!(stdout.contains("Review Markdown  "));
     assert!(stdout.contains("Pending queries  search the web for release status"));
     assert!(stdout.contains("Replay command   claw --resume"));
     assert!(stdout.contains("Replay trace     /trace replay"));
@@ -368,6 +369,165 @@ fn resumed_trace_approve_writes_operator_packet_and_rerun_guidance() {
         .as_str()
         .expect("replay command should exist")
         .contains("/corpus answer demo-corpus :: search the web for release status"));
+
+    let review_json_path = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("  Review JSON      "))
+        .map(PathBuf::from)
+        .expect("review json path should be printed");
+    let review_json: JsonValue = serde_json::from_str(
+        &fs::read_to_string(&review_json_path).expect("review json should exist"),
+    )
+    .expect("review json should parse");
+    assert_eq!(review_json["operatorState"], "approved for explicit rerun");
+    assert_eq!(review_json["replayTrace"], JsonValue::Null);
+
+    let review_markdown_path = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("  Review Markdown  "))
+        .map(PathBuf::from)
+        .expect("review markdown path should be printed");
+    let review_markdown =
+        fs::read_to_string(&review_markdown_path).expect("review markdown should exist");
+    assert!(review_markdown.contains("# Web approval review"));
+    assert!(review_markdown.contains("Replay trace: `not yet rerun`"));
+}
+
+#[test]
+fn resumed_trace_replay_updates_review_artifacts_with_rerun_trace() {
+    let temp_dir = unique_temp_dir("resume-trace-replay-review");
+    let project_dir = temp_dir.join("project");
+    fs::create_dir_all(project_dir.join(".claw").join("trace")).expect("trace dir should exist");
+    fs::create_dir_all(project_dir.join(".claw").join("corpora"))
+        .expect("corpus dir should exist");
+    fs::create_dir_all(project_dir.join(".claw").join("sessions"))
+        .expect("sessions dir should exist");
+    fs::create_dir_all(project_dir.join(".claw").join("web-approvals"))
+        .expect("approvals dir should exist");
+
+    let session_path = project_dir.join(".claw").join("sessions").join("session.jsonl");
+    Session::new()
+        .with_persistence_path(&session_path)
+        .save_to_path(&session_path)
+        .expect("session should persist");
+
+    fs::write(
+        project_dir
+            .join(".claw")
+            .join("corpora")
+            .join("demo-corpus.json"),
+        r#"{
+          "artifactKind":"claw.corpus.manifest",
+          "schemaVersion":1,
+          "compatVersion":"1",
+          "corpusId":"demo-corpus",
+          "roots":[],
+          "kind":"docs",
+          "backend":"lexical",
+          "documentCount":0,
+          "chunkCount":0,
+          "estimatedBytes":0,
+          "rootSummaries":[],
+          "skipSummary":{"skippedRoots":0,"skippedFiles":0,"reasons":[]},
+          "documents":[]
+        }"#,
+    )
+    .expect("manifest should write");
+
+    let trace_path = project_dir.join(".claw").join("trace").join("trace.json");
+    fs::write(
+        &trace_path,
+        r#"{
+          "traceId":"trace-approval",
+          "sessionId":"session-1",
+          "rootTaskId":"task-1",
+          "startedAtMs":1,
+          "finishedAtMs":2,
+          "finalStatus":"succeeded",
+          "events":[{
+            "sequence":1,
+            "eventType":"task_started",
+            "timestampMs":1,
+            "data":{"task":"search the web for release status"}
+          },{
+            "sequence":2,
+            "eventType":"corpus_peeked",
+            "timestampMs":1,
+            "data":{"corpusId":"demo-corpus"}
+          },{
+            "sequence":3,
+            "eventType":"web_execution_completed",
+            "timestampMs":2,
+            "data":{
+              "status":"approval_required",
+              "approved":false,
+              "degraded":true,
+              "query":"search the web for release status"
+            }
+          }]
+        }"#,
+    )
+    .expect("trace should write");
+
+    let packet_path = project_dir
+        .join(".claw")
+        .join("web-approvals")
+        .join("trace-approval.json");
+    fs::write(
+        &packet_path,
+        r#"{
+          "schemaVersion":1,
+          "traceId":"trace-approval",
+          "sessionId":"session-1",
+          "task":"search the web for release status",
+          "corpusId":"demo-corpus",
+          "pendingQueries":["search the web for release status"],
+          "approvedAtMs":123,
+          "replayCommand":"claw --resume latest \"/corpus answer demo-corpus :: search the web for release status\"",
+          "operatorNote":"bounded rerun only"
+        }"#,
+    )
+    .expect("packet should write");
+
+    let trace_command = format!("/trace replay {}", trace_path.to_str().expect("utf8 trace path"));
+    let output = run_claw(
+        &project_dir,
+        &["--resume", session_path.to_str().expect("utf8 path"), &trace_command],
+    );
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\n\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("Trace replay"));
+    assert!(stdout.contains("Review JSON      "));
+    assert!(stdout.contains("Review Markdown  "));
+    assert!(stdout.contains("Replay trace     "));
+
+    let review_json_path = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("  Review JSON      "))
+        .map(PathBuf::from)
+        .expect("review json path should be printed");
+    let review_json: JsonValue = serde_json::from_str(
+        &fs::read_to_string(&review_json_path).expect("review json should exist"),
+    )
+    .expect("review json should parse");
+    assert_eq!(review_json["operatorState"], "rerun captured for review");
+    assert!(review_json["replayTrace"].as_str().is_some());
+
+    let review_markdown_path = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("  Review Markdown  "))
+        .map(PathBuf::from)
+        .expect("review markdown path should be printed");
+    let review_markdown =
+        fs::read_to_string(&review_markdown_path).expect("review markdown should exist");
+    assert!(review_markdown.contains("# Web approval review"));
+    assert!(!review_markdown.contains("Replay trace: `not yet rerun`"));
 }
 
 #[test]

@@ -55,7 +55,7 @@ use runtime::{
     UsageTracker,
 };
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value as JsonValue};
 use tools::{minimal_web_research, GlobalToolRegistry};
 
 const DEFAULT_MODEL: &str = "claude-opus-4-6";
@@ -1431,7 +1431,8 @@ fn run_corpus_command(
     if let Some(query) = args.strip_prefix("answer ") {
         let (requested_corpus_id, query) = parse_corpus_targeted_arg(query);
         let corpus_id = resolve_corpus_for_command(&cwd, requested_corpus_id, "answer")?;
-        return run_corpus_answer(&cwd, &corpus_id, query, profile, session_id, active_model);
+        return run_corpus_answer(&cwd, &corpus_id, query, profile, session_id, active_model)
+            .map(|output| output.rendered);
     }
     if let Some(chunk_id) = args.strip_prefix("slice ") {
         let (requested_corpus_id, chunk_id) = parse_corpus_targeted_arg(chunk_id);
@@ -1448,6 +1449,11 @@ fn run_corpus_command(
     Err("unsupported /corpus usage; try /corpus, /corpus attach <path>, /corpus search [<corpus-id> ::] <query>, /corpus answer [<corpus-id> ::] <query>, /corpus inspect <id>, or /corpus slice [<corpus-id> ::] <chunk-id>".into())
 }
 
+struct CorpusAnswerOutput {
+    rendered: String,
+    trace_artifact_path: Option<PathBuf>,
+}
+
 fn run_corpus_answer(
     cwd: &Path,
     corpus_id: &str,
@@ -1455,7 +1461,7 @@ fn run_corpus_answer(
     profile: ExecutionProfile,
     session_id: Option<&str>,
     active_model: Option<&str>,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<CorpusAnswerOutput, Box<dyn std::error::Error>> {
     let manifest = load_corpus(cwd, corpus_id)?;
     let (result, artifacts) = run_runtime_configured_provider_recursive_query(
         cwd,
@@ -1472,13 +1478,16 @@ fn run_corpus_answer(
         .as_ref()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "<not saved>".to_string());
-    Ok(format!(
-        "{}\n\n{}\n  Trace artifact   {}\n  Telemetry        {}",
-        result.final_answer,
-        runtime::render_trace_summary(&result.trace),
-        trace_artifact,
-        artifacts.telemetry_path.display()
-    ))
+    Ok(CorpusAnswerOutput {
+        rendered: format!(
+            "{}\n\n{}\n  Trace artifact   {}\n  Telemetry        {}",
+            result.final_answer,
+            runtime::render_trace_summary(&result.trace),
+            trace_artifact,
+            artifacts.telemetry_path.display()
+        ),
+        trace_artifact_path: result.trace_artifact_path,
+    })
 }
 
 fn run_trace_command(
@@ -1526,8 +1535,7 @@ fn approve_trace_for_operator(
         .iter()
         .filter(|event| event.event_type == runtime::TraceEventType::WebExecutionCompleted)
         .filter(|event| {
-            event.data.get("status").and_then(|value| value.as_str())
-                == Some("approval_required")
+            event.data.get("status").and_then(|value| value.as_str()) == Some("approval_required")
         })
         .filter_map(|event| event.data.get("query").and_then(|value| value.as_str()))
         .map(str::trim)
@@ -1592,10 +1600,48 @@ fn approve_trace_for_operator(
         "operatorNote": "Approval has been recorded, but browser automation is still not available; rerun explicitly to collect bounded web evidence.",
     });
     fs::write(&packet_path, serde_json::to_string_pretty(&packet)?)?;
+    let review_json_path = approval_packet_review_json_path(&packet_path);
+    let review_markdown_path = approval_packet_review_markdown_path(&packet_path);
+    let operator_state = "approved for explicit rerun";
+    let next_step = "run /trace replay <trace-file> or the replay command to execute a bounded rerun and inspect the new trace";
+    let review_json = json!({
+        "schemaVersion": 1,
+        "traceId": packet["traceId"],
+        "sessionId": packet["sessionId"],
+        "corpusId": packet["corpusId"],
+        "task": packet["task"],
+        "approvalPacket": packet_path.display().to_string(),
+        "originalTrace": trace_path.display().to_string(),
+        "replayTrace": JsonValue::Null,
+        "approvedAtMs": packet["approvedAtMs"],
+        "operatorState": operator_state,
+        "nextStep": next_step,
+        "pendingQueries": packet["pendingQueries"],
+        "replayCommand": packet["replayCommand"],
+        "operatorNote": packet["operatorNote"],
+    });
+    fs::write(
+        &review_json_path,
+        serde_json::to_string_pretty(&review_json)?,
+    )?;
+    let review_packet: WebApprovalPacket = serde_json::from_value(packet.clone())?;
+    fs::write(
+        &review_markdown_path,
+        render_web_operator_review_markdown(
+            &review_packet,
+            &packet_path,
+            &trace_path,
+            None,
+            operator_state,
+            next_step,
+        ),
+    )?;
     Ok(format!(
-        "Trace approval\n  Result           approval packet recorded\n  Trace            {}\n  Packet           {}\n  Pending queries  {}\n  Replay command   {}\n  Replay trace     /trace replay {}\n  Note             browser automation is still not available; rerun explicitly after approval",
+        "Trace approval\n  Result           approval packet recorded\n  Trace            {}\n  Packet           {}\n  Review JSON      {}\n  Review Markdown  {}\n  Pending queries  {}\n  Replay command   {}\n  Replay trace     /trace replay {}\n  Note             browser automation is still not available; rerun explicitly after approval",
         trace_path.display(),
         packet_path.display(),
+        review_json_path.display(),
+        review_markdown_path.display(),
         packet["pendingQueries"].as_array().into_iter().flatten().filter_map(|value| value.as_str()).collect::<Vec<_>>().join("; "),
         packet["replayCommand"].as_str().unwrap_or_default(),
         trace_path.display(),
@@ -1623,6 +1669,56 @@ struct WebApprovalPacket {
     operator_note: Option<String>,
 }
 
+fn approval_packet_review_json_path(packet_path: &Path) -> PathBuf {
+    packet_path.with_extension("review.json")
+}
+
+fn approval_packet_review_markdown_path(packet_path: &Path) -> PathBuf {
+    packet_path.with_extension("review.md")
+}
+
+fn render_web_operator_review_markdown(
+    packet: &WebApprovalPacket,
+    packet_path: &Path,
+    original_trace_path: &Path,
+    replay_trace_path: Option<&Path>,
+    operator_state: &str,
+    next_step: &str,
+) -> String {
+    let pending_queries = if packet.pending_queries.is_empty() {
+        "- none".to_string()
+    } else {
+        packet
+            .pending_queries
+            .iter()
+            .map(|query| format!("- {query}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let replay_trace = replay_trace_path
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "not yet rerun".to_string());
+    format!(
+        "# Web approval review\n\n- Trace ID: `{}`\n- Session ID: `{}`\n- Corpus: `{}`\n- Approval packet: `{}`\n- Original trace: `{}`\n- Replay trace: `{}`\n- Approved at ms: `{}`\n- Operator state: {}\n- Next step: {}\n\n## Task\n\n{}\n\n## Pending approved queries\n\n{}\n\n## Replay command\n\n```bash\n{}\n```\n\n## Operator note\n\n{}\n",
+        packet.trace_id,
+        packet.session_id,
+        packet.corpus_id,
+        packet_path.display(),
+        original_trace_path.display(),
+        replay_trace,
+        packet.approved_at_ms,
+        operator_state,
+        next_step,
+        packet.task,
+        pending_queries,
+        packet.replay_command,
+        packet
+            .operator_note
+            .as_deref()
+            .unwrap_or("browser automation is still not available; rerun remains explicitly operator-driven"),
+    )
+}
+
 fn resolve_trace_target_path(trace_target: &str, cwd: &Path) -> PathBuf {
     if Path::new(trace_target).is_absolute() {
         PathBuf::from(trace_target)
@@ -1631,7 +1727,10 @@ fn resolve_trace_target_path(trace_target: &str, cwd: &Path) -> PathBuf {
     }
 }
 
-fn approval_packet_path_for_trace(trace_path: &Path, cwd: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+fn approval_packet_path_for_trace(
+    trace_path: &Path,
+    cwd: &Path,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let trace = runtime::TraceLedger::read_from_path(trace_path)?;
     Ok(cwd
         .join(".claw")
@@ -1639,7 +1738,10 @@ fn approval_packet_path_for_trace(trace_path: &Path, cwd: &Path) -> Result<PathB
         .join(format!("{}.json", trace.trace_id)))
 }
 
-fn load_web_approval_packet(target: &str, cwd: &Path) -> Result<(PathBuf, WebApprovalPacket), Box<dyn std::error::Error>> {
+fn load_web_approval_packet(
+    target: &str,
+    cwd: &Path,
+) -> Result<(PathBuf, WebApprovalPacket), Box<dyn std::error::Error>> {
     let requested_path = resolve_trace_target_path(target, cwd);
     let packet_path = if requested_path
         .file_name()
@@ -1654,7 +1756,11 @@ fn load_web_approval_packet(target: &str, cwd: &Path) -> Result<(PathBuf, WebApp
     let packet_text = fs::read_to_string(&packet_path)?;
     let packet: WebApprovalPacket = serde_json::from_str(&packet_text)?;
     if packet.schema_version != 1 {
-        return Err(format!("unsupported web approval packet schema: {}", packet.schema_version).into());
+        return Err(format!(
+            "unsupported web approval packet schema: {}",
+            packet.schema_version
+        )
+        .into());
     }
     Ok((packet_path, packet))
 }
@@ -1664,6 +1770,7 @@ fn replay_trace_for_operator(
     cwd: &Path,
     session_path: Option<&Path>,
 ) -> Result<String, Box<dyn std::error::Error>> {
+    let original_trace_path = resolve_trace_target_path(trace_target, cwd);
     let (packet_path, packet) = load_web_approval_packet(trace_target, cwd)?;
     let answer = run_corpus_answer(
         cwd,
@@ -1675,24 +1782,91 @@ fn replay_trace_for_operator(
             .or(Some(packet.session_id.as_str())),
         None,
     )?;
-    let pending_queries = if packet.pending_queries.is_empty() {
+    let replay_trace_path = answer.trace_artifact_path.clone();
+    let review_json_path = approval_packet_review_json_path(&packet_path);
+    let review_markdown_path = approval_packet_review_markdown_path(&packet_path);
+    let trace_id = packet.trace_id.clone();
+    let session_id = packet.session_id.clone();
+    let corpus_id = packet.corpus_id.clone();
+    let task = packet.task.clone();
+    let pending_queries = packet.pending_queries.clone();
+    let replay_command = packet.replay_command.clone();
+    let operator_note = packet.operator_note.clone();
+    let approved_at_ms = packet.approved_at_ms;
+    let schema_version = packet.schema_version;
+    let operator_state = if replay_trace_path.is_some() {
+        "rerun captured for review"
+    } else {
+        "rerun completed without saved trace artifact"
+    };
+    let next_step = "inspect the replay trace and attached web execution summary; browser automation is still not available";
+    let review_json = json!({
+        "schemaVersion": 1,
+        "traceId": trace_id,
+        "sessionId": session_id,
+        "corpusId": corpus_id,
+        "task": task,
+        "approvalPacket": packet_path.display().to_string(),
+        "originalTrace": original_trace_path.display().to_string(),
+        "replayTrace": replay_trace_path.as_ref().map(|path| path.display().to_string()),
+        "approvedAtMs": approved_at_ms,
+        "operatorState": operator_state,
+        "nextStep": next_step,
+        "pendingQueries": pending_queries,
+        "replayCommand": replay_command,
+        "operatorNote": operator_note,
+    });
+    fs::write(
+        &review_json_path,
+        serde_json::to_string_pretty(&review_json)?,
+    )?;
+    let review_packet: WebApprovalPacket = serde_json::from_value(json!({
+        "schemaVersion": schema_version,
+        "traceId": review_json["traceId"],
+        "sessionId": review_json["sessionId"],
+        "task": review_json["task"],
+        "corpusId": review_json["corpusId"],
+        "pendingQueries": review_json["pendingQueries"],
+        "approvedAtMs": review_json["approvedAtMs"],
+        "replayCommand": review_json["replayCommand"],
+        "operatorNote": review_json["operatorNote"],
+    }))?;
+    fs::write(
+        &review_markdown_path,
+        render_web_operator_review_markdown(
+            &review_packet,
+            &packet_path,
+            &original_trace_path,
+            replay_trace_path.as_deref(),
+            operator_state,
+            next_step,
+        ),
+    )?;
+    let pending_queries = if review_packet.pending_queries.is_empty() {
         "none".to_string()
     } else {
-        packet.pending_queries.join("; ")
+        review_packet.pending_queries.join("; ")
     };
+    let replay_trace_line = replay_trace_path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "<not saved>".to_string());
     Ok(format!(
-        "Trace replay\n  Result           approved trace replay executed\n  Packet           {}\n  Trace            {}\n  Corpus           {}\n  Pending queries  {}\n  Approved at ms   {}\n  Original replay  {}\n  Note             {}\n\n{}",
+        "Trace replay\n  Result           approved trace replay executed\n  Packet           {}\n  Review JSON      {}\n  Review Markdown  {}\n  Trace            {}\n  Replay trace     {}\n  Corpus           {}\n  Pending queries  {}\n  Approved at ms   {}\n  Original replay  {}\n  Note             {}\n\n{}",
         packet_path.display(),
-        packet.trace_id,
-        packet.corpus_id,
+        review_json_path.display(),
+        review_markdown_path.display(),
+        review_packet.trace_id,
+        replay_trace_line,
+        review_packet.corpus_id,
         pending_queries,
-        packet.approved_at_ms,
-        packet.replay_command,
-        packet
+        review_packet.approved_at_ms,
+        review_packet.replay_command,
+        review_packet
             .operator_note
             .as_deref()
             .unwrap_or("browser automation is still not available; this rerun only executes the grounded recursive path"),
-        answer,
+        answer.rendered,
     ))
 }
 
@@ -7718,7 +7892,10 @@ mod corpus_answer_tests {
             }"#,
         )
         .expect("trace should write");
-        let packet_path = root.join(".claw").join("web-approvals").join("trace-123.json");
+        let packet_path = root
+            .join(".claw")
+            .join("web-approvals")
+            .join("trace-123.json");
         fs::write(
             &packet_path,
             r#"{
@@ -7750,7 +7927,10 @@ mod corpus_answer_tests {
     fn load_web_approval_packet_accepts_packet_path_directly() {
         let root = temp_dir("approval-packet-direct");
         fs::create_dir_all(root.join(".claw").join("web-approvals")).expect("packet dir");
-        let packet_path = root.join(".claw").join("web-approvals").join("trace-abc.json");
+        let packet_path = root
+            .join(".claw")
+            .join("web-approvals")
+            .join("trace-abc.json");
         fs::write(
             &packet_path,
             r#"{
