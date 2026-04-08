@@ -11,6 +11,14 @@ use super::types::{
     ChildSubqueryOutput, RecursiveContextSlice, RecursiveExecutionMode, RecursiveStopReason,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RetrievalPlan {
+    pub query: String,
+    pub strategy: &'static str,
+    pub rationale: &'static str,
+    pub anchor_terms: Vec<String>,
+}
+
 pub(super) fn map_chunk(path: &str, chunk: &CorpusChunk) -> RecursiveContextSlice {
     RecursiveContextSlice {
         chunk_id: chunk.chunk_id.clone(),
@@ -33,11 +41,150 @@ pub(super) fn slice_text(metadata: &BTreeMap<String, JsonValue>, preview: &str) 
         .to_string()
 }
 
-pub(super) fn build_iteration_query(task: &str, child_outputs: &[ChildSubqueryOutput]) -> String {
+fn is_stopword(token: &str) -> bool {
+    matches!(
+        token,
+        "about"
+            | "after"
+            | "also"
+            | "around"
+            | "because"
+            | "before"
+            | "being"
+            | "between"
+            | "check"
+            | "child"
+            | "cite"
+            | "concrete"
+            | "could"
+            | "evidence"
+            | "export"
+            | "finding"
+            | "findings"
+            | "first"
+            | "found"
+            | "from"
+            | "grounded"
+            | "happen"
+            | "hidden"
+            | "inspection"
+            | "inspected"
+            | "iteration"
+            | "local"
+            | "manual"
+            | "missing"
+            | "needs"
+            | "next"
+            | "note"
+            | "observed"
+            | "operator"
+            | "pass"
+            | "prior"
+            | "produced"
+            | "remaining"
+            | "repeat"
+            | "repeating"
+            | "response"
+            | "search"
+            | "should"
+            | "slice"
+            | "slices"
+            | "state"
+            | "step"
+            | "still"
+            | "summary"
+            | "support"
+            | "task"
+            | "that"
+            | "their"
+            | "them"
+            | "there"
+            | "these"
+            | "they"
+            | "this"
+            | "trace"
+            | "validation"
+            | "verify"
+            | "what"
+            | "when"
+            | "with"
+            | "without"
+            | "workflow"
+    )
+}
+
+fn collect_anchor_terms(task: &str, child_outputs: &[ChildSubqueryOutput]) -> Vec<String> {
+    let mut terms = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for source in std::iter::once(task).chain(
+        child_outputs
+            .iter()
+            .rev()
+            .map(|output| output.answer.as_str()),
+    ) {
+        for token in source
+            .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-' && ch != '_')
+            .filter(|token| token.len() >= 5)
+            .map(|token| {
+                token
+                    .trim_matches('-')
+                    .trim_matches('_')
+                    .to_ascii_lowercase()
+            })
+        {
+            if token.is_empty() || is_stopword(&token) || !seen.insert(token.clone()) {
+                continue;
+            }
+            terms.push(token);
+            if terms.len() >= 6 {
+                return terms;
+            }
+        }
+    }
+    terms
+}
+
+pub(super) fn build_iteration_plan(
+    task: &str,
+    child_outputs: &[ChildSubqueryOutput],
+) -> RetrievalPlan {
+    if child_outputs.is_empty() {
+        return RetrievalPlan {
+            query: task.to_string(),
+            strategy: "bootstrap",
+            rationale: "start from the original task before any child evidence exists",
+            anchor_terms: collect_anchor_terms(task, child_outputs),
+        };
+    }
+
+    let anchor_terms = collect_anchor_terms(task, child_outputs);
+    let mut query_parts = vec![task.to_string()];
     if let Some(last) = child_outputs.last() {
-        format!("{task} {} {}", last.answer, last.citations.join(" "))
+        query_parts.push(last.answer.clone());
+        if !last.citations.is_empty() {
+            query_parts.push(last.citations.join(" "));
+        }
+    }
+    if !anchor_terms.is_empty() {
+        query_parts.push(anchor_terms.join(" "));
+    }
+
+    let strategy = if child_outputs.len() >= 2 {
+        "gap_followup"
     } else {
-        task.to_string()
+        "evidence_followup"
+    };
+    let rationale = if child_outputs.len() >= 2 {
+        "re-query with prior findings plus stable anchor terms to chase remaining gaps instead of only echoing the last answer"
+    } else {
+        "re-query with the first child result and stable anchor terms to broaden evidence coverage"
+    };
+
+    RetrievalPlan {
+        query: query_parts.join(" "),
+        strategy,
+        rationale,
+        anchor_terms,
     }
 }
 
@@ -393,5 +540,38 @@ mod tests {
         assert_eq!(data.get("childCount"), Some(&JsonValue::Number(1)));
         assert_eq!(data.get("completedIterations"), Some(&JsonValue::Number(2)));
         assert_eq!(data.get("subcalls"), Some(&JsonValue::Number(2)));
+    }
+
+    #[test]
+    fn bootstrap_iteration_plan_starts_from_task() {
+        let plan = build_iteration_plan("audit recursive runtime planner gaps", &[]);
+
+        assert_eq!(plan.strategy, "bootstrap");
+        assert_eq!(plan.query, "audit recursive runtime planner gaps");
+        assert!(plan.anchor_terms.contains(&"recursive".to_string()));
+        assert!(plan.anchor_terms.contains(&"runtime".to_string()));
+        assert!(plan.anchor_terms.contains(&"planner".to_string()));
+    }
+
+    #[test]
+    fn follow_up_iteration_plan_carries_anchor_terms_forward() {
+        let first = sample_child_output(
+            "first pass found recursive scheduler weakness and attestation verification gap",
+        );
+        let second = sample_child_output(
+            "second pass confirmed scheduler weakness but still needs provenance bundle validation",
+        );
+        let plan = build_iteration_plan(
+            "audit recursive scheduler and provenance bundle",
+            &[first, second],
+        );
+
+        assert_eq!(plan.strategy, "gap_followup");
+        assert!(plan
+            .query
+            .contains("second pass confirmed scheduler weakness"));
+        assert!(plan.anchor_terms.contains(&"scheduler".to_string()));
+        assert!(plan.anchor_terms.contains(&"provenance".to_string()));
+        assert!(plan.anchor_terms.contains(&"bundle".to_string()));
     }
 }

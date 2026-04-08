@@ -18,7 +18,7 @@ use crate::trace::{TraceEventType, TraceFinalStatus, TraceLedger};
 pub use finalization::{export_trace, render_trace_summary};
 use finalization::{finalize_empty_stop, finalize_failed_run, finalize_successful_run};
 use helpers::{
-    build_child_prompt, build_iteration_query, child_output_novelty_metrics,
+    build_child_prompt, build_iteration_plan, child_output_novelty_metrics,
     effective_child_web_policy, escalation_reason_label, map_chunk, mode_label,
     next_iteration_stop_reason, no_iteration_artifacts_stop_reason, now_ms, push_trace_event,
     should_stop_for_convergence, task_mentions_freshness, task_requests_web,
@@ -37,7 +37,10 @@ pub fn prepare_recursive_task_run(
         task_id: request.task_id.to_string(),
         task: request.task.to_string(),
         budget: RuntimeBudget {
-            max_depth: resolved.rlm.max_depth.and_then(|value| u32::try_from(value).ok()),
+            max_depth: resolved
+                .rlm
+                .max_depth
+                .and_then(|value| u32::try_from(value).ok()),
             max_iterations: resolved
                 .rlm
                 .max_iterations
@@ -715,19 +718,37 @@ where
         web_policy: WebPolicy,
         trace: &mut TraceLedger,
     ) -> Result<Option<IterationArtifacts>, RecursiveRuntimeError> {
-        let query = build_iteration_query(task, child_outputs);
+        let plan = build_iteration_plan(task, child_outputs);
         push_trace_event(
             trace,
             TraceEventType::RetrievalRequested,
             BTreeMap::from([
-                ("query".to_string(), JsonValue::String(query.clone())),
+                ("query".to_string(), JsonValue::String(plan.query.clone())),
                 (
                     "iteration".to_string(),
                     JsonValue::Number(i64::from(iteration)),
                 ),
+                (
+                    "plannerStrategy".to_string(),
+                    JsonValue::String(plan.strategy.to_string()),
+                ),
+                (
+                    "plannerRationale".to_string(),
+                    JsonValue::String(plan.rationale.to_string()),
+                ),
+                (
+                    "plannerAnchorTerms".to_string(),
+                    JsonValue::Array(
+                        plan.anchor_terms
+                            .iter()
+                            .cloned()
+                            .map(JsonValue::String)
+                            .collect(),
+                    ),
+                ),
             ]),
         );
-        let retrieval = self.corpus_search(&query, 6);
+        let retrieval = self.corpus_search(&plan.query, 6);
         let sequence = u32::try_from(trace.events.len() + 1).unwrap_or(u32::MAX);
         let mut retrieval_event = local_evidence_trace_event(sequence, now_ms(), &retrieval);
         retrieval_event.data.insert(
@@ -823,8 +844,8 @@ mod tests {
     use crate::corpus::{
         CorpusBackend, CorpusChunk, CorpusDocument, CorpusKind, CorpusRootSummary,
     };
-    use crate::ExecutionProfile;
     use crate::hybrid::{EvidenceKind, EvidenceRecord};
+    use crate::ExecutionProfile;
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
@@ -1236,6 +1257,45 @@ mod tests {
                 && event.data.get("materiallyNovel") == Some(&JsonValue::Bool(false))
                 && event.data.get("novelCitationCount") == Some(&JsonValue::Number(0))
         }));
+    }
+
+    #[test]
+    fn retrieval_trace_includes_planner_metadata() {
+        let corpus = sample_corpus();
+        let runtime = RecursiveConversationRuntime::new(&corpus, StubExecutor);
+
+        let result = runtime
+            .run(
+                "session-1",
+                "task-planner-trace",
+                "investigate recursive scheduler provenance gaps",
+                RuntimeBudget {
+                    max_depth: Some(2),
+                    max_iterations: Some(2),
+                    max_subcalls: Some(2),
+                    max_runtime_ms: Some(30_000),
+                    ..RuntimeBudget::default()
+                },
+                None,
+            )
+            .expect("run should succeed");
+
+        let retrieval_event = result
+            .trace
+            .events
+            .iter()
+            .find(|event| event.event_type == TraceEventType::RetrievalRequested)
+            .expect("retrieval request event should exist");
+
+        assert_eq!(
+            retrieval_event.data.get("plannerStrategy"),
+            Some(&JsonValue::String("bootstrap".to_string()))
+        );
+        assert!(matches!(
+            retrieval_event.data.get("plannerAnchorTerms"),
+            Some(JsonValue::Array(values)) if !values.is_empty()
+        ));
+        assert!(retrieval_event.data.contains_key("plannerRationale"));
     }
 
     #[test]
@@ -1959,8 +2019,17 @@ mod tests {
         assert_eq!(prepared.session_id, "session-prepared");
         assert_eq!(prepared.task_id, "task-prepared");
         assert_eq!(prepared.task, "investigate grounded execution");
-        assert_eq!(prepared.telemetry_path, workspace_root.join(".claw").join("telemetry").join("recursive-runtime.jsonl"));
-        assert_eq!(prepared.trace_dir, workspace_root.join(".claw").join("trace"));
+        assert_eq!(
+            prepared.telemetry_path,
+            workspace_root
+                .join(".claw")
+                .join("telemetry")
+                .join("recursive-runtime.jsonl")
+        );
+        assert_eq!(
+            prepared.trace_dir,
+            workspace_root.join(".claw").join("trace")
+        );
         assert_eq!(prepared.budget.max_depth, Some(4));
         assert_eq!(prepared.web_policy.mode, WebAccessMode::Ask);
 
@@ -1968,8 +2037,17 @@ mod tests {
         assert_eq!(borrowed.session_id, "session-prepared");
         assert_eq!(borrowed.task_id, "task-prepared");
         assert_eq!(borrowed.task, "investigate grounded execution");
-        assert_eq!(borrowed.telemetry_path, workspace_root.join(".claw").join("telemetry").join("recursive-runtime.jsonl"));
-        assert_eq!(borrowed.trace_dir, workspace_root.join(".claw").join("trace"));
+        assert_eq!(
+            borrowed.telemetry_path,
+            workspace_root
+                .join(".claw")
+                .join("telemetry")
+                .join("recursive-runtime.jsonl")
+        );
+        assert_eq!(
+            borrowed.trace_dir,
+            workspace_root.join(".claw").join("trace")
+        );
     }
 
     struct AlwaysFailExecutor;
