@@ -183,6 +183,7 @@ struct DocumentSignalSummary {
     path_hits: usize,
     heading_hits: usize,
     root_hits: usize,
+    outline_hits: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -889,6 +890,13 @@ pub fn search_corpus_manifest(
                 .unwrap_or_default();
             let chunk_heading_lower = chunk_heading.to_ascii_lowercase();
             let normalized_chunk_heading = normalize_for_match(chunk_heading);
+            let outline_text = chunk
+                .metadata
+                .get("outlineText")
+                .and_then(JsonValue::as_str)
+                .unwrap_or_default();
+            let outline_text_lower = outline_text.to_ascii_lowercase();
+            let normalized_outline = normalize_for_match(outline_text);
             let normalized_body = normalize_for_match(&body);
             let compact_body = normalized_body.replace(' ', "");
             let mut score = 0.0_f64;
@@ -905,6 +913,7 @@ pub fn search_corpus_manifest(
                 let heading_hit = heading_text.contains(token);
                 let chunk_heading_hit = chunk_heading_lower.contains(token);
                 let root_name_hit = root_basename_lower.contains(token);
+                let outline_hit = outline_text_lower.contains(token);
                 let normalized_token = normalize_for_match(token).replace(' ', "");
                 let compact_body_hit = normalized_token.len() >= 4
                     && !normalized_token.is_empty()
@@ -927,6 +936,7 @@ pub fn search_corpus_manifest(
                     || heading_hit
                     || chunk_heading_hit
                     || root_name_hit
+                    || outline_hit
                     || compact_body_hit
                     || compact_path_hit
                     || compact_root_hit
@@ -964,6 +974,10 @@ pub fn search_corpus_manifest(
                 if root_name_hit {
                     score += 2.4 + idf * 1.6;
                     reasons.push(format!("root-name:{token}@{idf:.2}"));
+                }
+                if outline_hit {
+                    score += 2.1 + idf * 1.6;
+                    reasons.push(format!("outline:{token}@{idf:.2}"));
                 }
                 if compact_body_hit {
                     score += 1.25 + idf * 0.9;
@@ -1013,6 +1027,11 @@ pub fn search_corpus_manifest(
                 {
                     score += 5.5;
                     reasons.push("phrase:section-heading".to_string());
+                }
+                if !normalized_outline.is_empty() && normalized_outline.contains(&normalized_query)
+                {
+                    score += 5.8;
+                    reasons.push("phrase:outline".to_string());
                 }
                 if normalized_path.contains(&normalized_query) {
                     score += 5.0;
@@ -1101,6 +1120,7 @@ pub fn search_corpus_manifest(
                 let root_semantic_hit = source_root_lower.contains(&semantic.expanded_term)
                     || root_basename_lower.contains(&semantic.expanded_term);
                 let heading_semantic_hit = heading_text.contains(&semantic.expanded_term);
+                let outline_semantic_hit = outline_text_lower.contains(&semantic.expanded_term);
                 if body_semantic_hits > 0 {
                     score += body_semantic_hits as f64 * 1.8;
                     reasons.push(format!(
@@ -1133,6 +1153,13 @@ pub fn search_corpus_manifest(
                     score += 2.0;
                     reasons.push(format!(
                         "semantic-section-heading:{}<-{}",
+                        semantic.expanded_term, semantic.query_term
+                    ));
+                }
+                if outline_semantic_hit {
+                    score += 2.2;
+                    reasons.push(format!(
+                        "semantic-outline:{}<-{}",
                         semantic.expanded_term, semantic.query_term
                     ));
                 }
@@ -1169,6 +1196,8 @@ pub fn search_corpus_manifest(
                 &doc.language,
                 &chunk_heading_lower,
                 &normalized_chunk_heading,
+                &outline_text_lower,
+                &normalized_outline,
             );
             total_matching_chunks = total_matching_chunks.saturating_add(1);
             document_hits.push(ScoredChunkHit {
@@ -1456,7 +1485,13 @@ fn collect_documents(
         let document_identity = format!("{}::{}", source_root.display(), relative);
         let document_id = CorpusManifest::stable_document_id(&document_identity);
         let headings = collect_headings(&text);
-        let chunks = chunk_document(&document_id, &text, chunk_bytes, headings.first().cloned());
+        let chunks = chunk_document(
+            &document_id,
+            &text,
+            chunk_bytes,
+            headings.first().cloned(),
+            matches!(language_for_path(&path).as_deref(), Some("markdown")),
+        );
         if chunks.is_empty() {
             continue;
         }
@@ -1542,17 +1577,46 @@ fn collect_headings(text: &str) -> Vec<String> {
         .collect()
 }
 
+fn markdown_headings_in_text(text: &str) -> Vec<(u8, String)> {
+    text.lines().filter_map(parse_markdown_heading).collect()
+}
+
+fn parse_markdown_heading(line: &str) -> Option<(u8, String)> {
+    let trimmed = line.trim();
+    let mut level = 0_u8;
+    for ch in trimmed.chars() {
+        if ch == '#' {
+            level = level.saturating_add(1);
+        } else {
+            break;
+        }
+    }
+    if level == 0 {
+        return None;
+    }
+    let heading = trimmed[usize::from(level)..].trim();
+    if heading.is_empty() {
+        return None;
+    }
+    Some((level.min(6), heading.to_string()))
+}
+
 fn chunk_document(
     document_id: &str,
     text: &str,
     chunk_bytes: usize,
     default_heading: Option<String>,
+    markdown_headings: bool,
 ) -> Vec<CorpusChunk> {
     let mut chunks = Vec::new();
     let mut start = 0usize;
     let mut ordinal = 0u32;
     let bytes = text.as_bytes();
-    let mut active_heading = default_heading;
+    let mut active_heading = default_heading.clone();
+    let mut heading_stack = default_heading
+        .into_iter()
+        .map(|heading| (1_u8, heading))
+        .collect::<Vec<_>>();
 
     while start < bytes.len() {
         let mut end = (start + chunk_bytes).min(bytes.len());
@@ -1576,13 +1640,26 @@ fn chunk_document(
 
         let slice = text[start..end].trim();
         if !slice.is_empty() {
-            if let Some(latest) = slice
+            if markdown_headings {
+                for (level, heading) in markdown_headings_in_text(slice) {
+                    while heading_stack.len() >= usize::from(level) {
+                        heading_stack.pop();
+                    }
+                    heading_stack.push((level, heading));
+                }
+            } else if let Some(latest) = slice
                 .lines()
                 .filter_map(|line| line.trim().strip_prefix('#').map(str::trim))
                 .find(|heading| !heading.is_empty())
             {
-                active_heading = Some(latest.to_string());
+                heading_stack.clear();
+                heading_stack.push((1, latest.to_string()));
             }
+            active_heading = heading_stack.last().map(|(_, heading)| heading.clone());
+            let outline_path = heading_stack
+                .iter()
+                .map(|(_, heading)| heading.clone())
+                .collect::<Vec<_>>();
             let mut metadata = BTreeMap::new();
             metadata.insert("text".to_string(), JsonValue::String(slice.to_string()));
             metadata.insert(
@@ -1595,6 +1672,20 @@ fn chunk_document(
             metadata.insert(
                 "preview".to_string(),
                 JsonValue::String(make_preview(slice, 220)),
+            );
+            metadata.insert(
+                "outlinePath".to_string(),
+                JsonValue::Array(
+                    outline_path
+                        .iter()
+                        .cloned()
+                        .map(JsonValue::String)
+                        .collect(),
+                ),
+            );
+            metadata.insert(
+                "outlineText".to_string(),
+                JsonValue::String(outline_path.join(" > ")),
             );
             chunks.push(CorpusChunk {
                 chunk_id: CorpusManifest::stable_chunk_id(document_id, ordinal),
@@ -1803,12 +1894,20 @@ fn summarize_document_signals(
         .collect::<Vec<_>>()
         .join("\n")
         .to_ascii_lowercase();
+    let outline_lower = doc
+        .chunks
+        .iter()
+        .filter_map(|chunk| chunk.metadata.get("outlineText").and_then(JsonValue::as_str))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase();
     let mut summary = DocumentSignalSummary::default();
     for token in tokens {
         let path_hit = path_lower.contains(token);
         let heading_hit = heading_text.contains(token);
         let root_hit = source_root_lower.contains(token);
-        if path_hit || heading_hit || root_hit || body_lower.contains(token) {
+        let outline_hit = outline_lower.contains(token);
+        if path_hit || heading_hit || root_hit || body_lower.contains(token) || outline_hit {
             summary.matched_tokens += 1;
         }
         if path_hit {
@@ -1819,6 +1918,9 @@ fn summarize_document_signals(
         }
         if root_hit {
             summary.root_hits += 1;
+        }
+        if outline_hit {
+            summary.outline_hits += 1;
         }
     }
     summary
@@ -1836,6 +1938,8 @@ fn apply_query_intent_boosts(
     language: &Option<String>,
     chunk_heading_lower: &str,
     normalized_chunk_heading: &str,
+    outline_text_lower: &str,
+    normalized_outline: &str,
 ) {
     if intent.file_lookup && document_signal.path_hits > 0 {
         *score += 2.5 + document_signal.path_hits as f64 * 0.9;
@@ -1872,7 +1976,9 @@ fn apply_query_intent_boosts(
             document_signal.matched_tokens, matched_tokens
         ));
     }
-    if (intent.continuity_lookup || intent.explanatory_lookup) && !chunk_heading_lower.is_empty() {
+    if (intent.continuity_lookup || intent.explanatory_lookup)
+        && (!chunk_heading_lower.is_empty() || !outline_text_lower.is_empty())
+    {
         *score += 1.2;
         reasons.push("intent:section-context".to_string());
         let section_matches = intent
@@ -1888,11 +1994,19 @@ fn apply_query_intent_boosts(
             && (normalized_chunk_heading.contains("overview")
                 || normalized_chunk_heading.contains("architecture")
                 || normalized_chunk_heading.contains("flow")
-                || normalized_chunk_heading.contains("lifecycle"))
+                || normalized_chunk_heading.contains("lifecycle")
+                || normalized_outline.contains("overview")
+                || normalized_outline.contains("architecture")
+                || normalized_outline.contains("flow")
+                || normalized_outline.contains("lifecycle"))
         {
             *score += 1.6;
             reasons.push("intent:explainable-section".to_string());
         }
+    }
+    if (intent.continuity_lookup || intent.explanatory_lookup) && document_signal.outline_hits > 0 {
+        *score += 1.6 + document_signal.outline_hits as f64 * 0.8;
+        reasons.push(format!("intent:outlinex{}", document_signal.outline_hits));
     }
     let path_hint_matches = intent
         .root_hint_tokens
@@ -2351,14 +2465,32 @@ mod tests {
     fn chunker_captures_headings_and_is_deterministic() {
         let text = "# Title\nalpha\nbeta\n\n## Details\ngamma\ndelta\n";
         let doc_id = CorpusManifest::stable_document_id("notes.md");
-        let chunks_a = chunk_document(&doc_id, text, 20, None);
-        let chunks_b = chunk_document(&doc_id, text, 20, None);
+        let chunks_a = chunk_document(&doc_id, text, 20, None, true);
+        let chunks_b = chunk_document(&doc_id, text, 20, None, true);
         assert_eq!(chunks_a, chunks_b);
         assert!(chunks_a.len() >= 2);
         assert_eq!(
             chunks_a[0].metadata.get("heading"),
             Some(&JsonValue::String("Title".to_string()))
         );
+        assert_eq!(
+            chunks_a[0].metadata.get("outlineText"),
+            Some(&JsonValue::String("Title".to_string()))
+        );
+        assert!(matches!(
+            chunks_a
+                .iter()
+                .find(|chunk| {
+                    chunk
+                        .metadata
+                        .get("outlineText")
+                        .and_then(JsonValue::as_str)
+                        .unwrap_or_default()
+                        .contains("Details")
+                })
+                .and_then(|chunk| chunk.metadata.get("outlinePath")),
+            Some(JsonValue::Array(values)) if values.len() >= 2
+        ));
     }
 
     #[test]
@@ -2705,7 +2837,10 @@ This guide mentions the callback flow in prose.
         );
         assert!(result.hits[0].reason.contains("intent:file-lookup:"));
         assert!(
-            result.hits.iter().any(|hit| hit.reason.contains("intent:implementation"))
+            result
+                .hits
+                .iter()
+                .any(|hit| hit.reason.contains("intent:implementation"))
                 || result.hits[0].reason.contains("intent:implementation")
         );
 
@@ -2942,6 +3077,60 @@ Credentials are validated before issuing session cookies.
                     || result.hits[0].reason.contains("semantic-")
             );
         }
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_uses_document_outline_for_nested_heading_queries() {
+        let cwd = temp_dir("workspace-outline-aware");
+        let root = cwd.join("docs");
+        fs::create_dir_all(&root).expect("mkdir");
+        fs::write(
+            root.join("runbook.md"),
+            "# Platform Guide
+Intro.
+
+## Authentication
+General auth summary.
+
+### Session Revocation
+Operators revoke sessions and clean up leaked refresh tokens.
+",
+        )
+        .expect("write outline doc");
+        fs::write(
+            root.join("misc.md"),
+            "# Session Revocation
+Standalone notes without authentication context.
+",
+        )
+        .expect("write misc doc");
+
+        let manifest = attach_corpus(
+            &cwd,
+            &[root.clone()],
+            CorpusAttachOptions {
+                chunk_bytes: 72,
+                ..CorpusAttachOptions::default()
+            },
+        )
+        .expect("attach corpus");
+        let result = search_corpus(
+            &cwd,
+            &manifest.corpus_id,
+            "explain authentication session revocation",
+            5,
+            None,
+        )
+        .expect("search");
+
+        assert_eq!(result.hits[0].path, "runbook.md");
+        assert!(
+            result.hits[0].reason.contains("outline:")
+                || result.hits[0].reason.contains("phrase:outline")
+                || result.hits[0].reason.contains("intent:outline")
+        );
 
         let _ = fs::remove_dir_all(cwd);
     }
