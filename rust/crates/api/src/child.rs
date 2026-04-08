@@ -2,10 +2,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use runtime::{
-    ChildSubqueryExecutor, ChildSubqueryOutput, ChildSubqueryRequest, ConfigLoader, EvidenceRecord,
-    ExecutionProfile, RecursiveExecutionResult, RecursiveRunArtifacts, RecursiveRuntimeError,
-    RecursiveTaskRunRequest, RuntimeBudget, WebAccessMode, WebEvidenceInput, WebExecutionOutcome,
-    WebPolicy,
+    prepare_recursive_task_run, ChildSubqueryExecutor, ChildSubqueryOutput,
+    ChildSubqueryRequest, ConfigLoader, EvidenceRecord, ExecutionProfile,
+    PreparedRecursiveTaskRun, RecursiveExecutionResult, RecursiveRunArtifacts,
+    RecursiveRuntimeError, RecursiveProfileTaskRequest, RecursiveTaskWorkspace,
+    WebAccessMode, WebEvidenceInput, WebExecutionOutcome,
 };
 use tokio::runtime::Runtime;
 
@@ -379,6 +380,7 @@ pub struct ProviderRecursiveTaskRequest<'a> {
 }
 
 pub type ProviderRecursiveRunArtifacts = RecursiveRunArtifacts;
+pub type ProviderPreparedRecursiveTaskRun = PreparedRecursiveTaskRun;
 
 #[must_use]
 pub fn build_runtime_configured_provider_recursive_task_runtime<'a>(
@@ -394,45 +396,28 @@ pub fn build_runtime_configured_provider_recursive_task_runtime<'a>(
     )
 }
 
+#[must_use]
+pub fn prepare_runtime_configured_provider_recursive_task_run(
+    request: &ProviderRecursiveTaskRequest<'_>,
+) -> ProviderPreparedRecursiveTaskRun {
+    prepare_recursive_task_run(RecursiveProfileTaskRequest {
+        workspace: RecursiveTaskWorkspace {
+            cwd: request.runtime.cwd,
+            session_id: request.runtime.session_id,
+        },
+        task_id: request.task_id,
+        task: request.task,
+        profile: request.profile,
+    })
+}
+
 pub fn run_runtime_configured_provider_recursive_task(
     request: ProviderRecursiveTaskRequest<'_>,
 ) -> Result<(RecursiveExecutionResult, ProviderRecursiveRunArtifacts), RecursiveRuntimeError> {
-    let resolved = request.profile.resolve();
-    let telemetry_path = request
-        .runtime
-        .cwd
-        .join(".claw")
-        .join("telemetry")
-        .join("recursive-runtime.jsonl");
-    let trace_dir = request.runtime.cwd.join(".claw").join("trace");
+    let prepared = prepare_runtime_configured_provider_recursive_task_run(&request);
     let runtime =
         build_runtime_configured_provider_recursive_task_runtime(&request.runtime, request.corpus);
-    runtime.run_task(RecursiveTaskRunRequest {
-        session_id: request.runtime.session_id,
-        task_id: request.task_id,
-        task: request.task,
-        budget: RuntimeBudget {
-            max_depth: resolved
-                .rlm
-                .max_depth
-                .and_then(|value| u32::try_from(value).ok()),
-            max_iterations: resolved
-                .rlm
-                .max_iterations
-                .and_then(|value| u32::try_from(value).ok()),
-            max_subcalls: resolved
-                .rlm
-                .max_subcalls
-                .and_then(|value| u32::try_from(value).ok()),
-            max_runtime_ms: resolved.rlm.max_runtime_ms,
-            max_prompt_tokens: None,
-            max_completion_tokens: None,
-            max_cost_usd: None,
-        },
-        telemetry_path,
-        trace_dir,
-        web_policy: WebPolicy::from_config(&resolved.web_research),
-    })
+    runtime.run_task(prepared.as_request())
 }
 
 pub fn run_runtime_configured_provider_recursive_query(

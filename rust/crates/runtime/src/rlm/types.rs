@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::budget::{BudgetStopReason, RuntimeBudget, RuntimeBudgetUsage};
@@ -8,6 +8,7 @@ use crate::corpus::{CorpusManifest, RetrievalResult};
 use crate::hybrid::{EscalationOutcome, EvidenceRecord, WebExecutionOutcome, WebPolicy};
 use crate::json::JsonValue;
 use crate::trace::{TraceFinalStatus, TraceLedger};
+use crate::ux::ExecutionProfile;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecursiveExecutionMode {
@@ -161,6 +162,46 @@ pub struct RecursiveExecutionResult {
 pub struct RecursiveRunArtifacts {
     pub telemetry_path: PathBuf,
     pub trace_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecursiveTaskWorkspace<'a> {
+    pub cwd: &'a Path,
+    pub session_id: &'a str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecursiveProfileTaskRequest<'a> {
+    pub workspace: RecursiveTaskWorkspace<'a>,
+    pub task_id: &'a str,
+    pub task: &'a str,
+    pub profile: ExecutionProfile,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedRecursiveTaskRun {
+    pub session_id: String,
+    pub task_id: String,
+    pub task: String,
+    pub budget: RuntimeBudget,
+    pub telemetry_path: PathBuf,
+    pub trace_dir: PathBuf,
+    pub web_policy: WebPolicy,
+}
+
+impl PreparedRecursiveTaskRun {
+    #[must_use]
+    pub fn as_request(&self) -> RecursiveTaskRunRequest<'_> {
+        RecursiveTaskRunRequest {
+            session_id: &self.session_id,
+            task_id: &self.task_id,
+            task: &self.task,
+            budget: self.budget,
+            telemetry_path: self.telemetry_path.clone(),
+            trace_dir: self.trace_dir.clone(),
+            web_policy: self.web_policy.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

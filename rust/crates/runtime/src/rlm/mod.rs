@@ -27,6 +27,41 @@ use helpers::{
 use telemetry::{JsonlTelemetrySink, SessionTracer};
 pub use types::*;
 
+#[must_use]
+pub fn prepare_recursive_task_run(
+    request: RecursiveProfileTaskRequest<'_>,
+) -> PreparedRecursiveTaskRun {
+    let resolved = request.profile.resolve();
+    PreparedRecursiveTaskRun {
+        session_id: request.workspace.session_id.to_string(),
+        task_id: request.task_id.to_string(),
+        task: request.task.to_string(),
+        budget: RuntimeBudget {
+            max_depth: resolved.rlm.max_depth.and_then(|value| u32::try_from(value).ok()),
+            max_iterations: resolved
+                .rlm
+                .max_iterations
+                .and_then(|value| u32::try_from(value).ok()),
+            max_subcalls: resolved
+                .rlm
+                .max_subcalls
+                .and_then(|value| u32::try_from(value).ok()),
+            max_runtime_ms: resolved.rlm.max_runtime_ms,
+            max_prompt_tokens: None,
+            max_completion_tokens: None,
+            max_cost_usd: None,
+        },
+        telemetry_path: request
+            .workspace
+            .cwd
+            .join(".claw")
+            .join("telemetry")
+            .join("recursive-runtime.jsonl"),
+        trace_dir: request.workspace.cwd.join(".claw").join("trace"),
+        web_policy: WebPolicy::from_config(&resolved.web_research),
+    }
+}
+
 impl<'a, E> RecursiveConversationRuntime<'a, E, DefaultChildOutputAggregator>
 where
     E: ChildSubqueryExecutor,
@@ -788,6 +823,7 @@ mod tests {
     use crate::corpus::{
         CorpusBackend, CorpusChunk, CorpusDocument, CorpusKind, CorpusRootSummary,
     };
+    use crate::ExecutionProfile;
     use crate::hybrid::{EvidenceKind, EvidenceRecord};
     use std::collections::BTreeMap;
     use std::fs;
@@ -1873,36 +1909,26 @@ mod tests {
     fn shared_recursive_task_runner_owns_telemetry_and_trace_artifacts() {
         let corpus = sample_corpus();
         let runtime = RecursiveConversationRuntime::new(&corpus, StubExecutor);
-        let trace_dir = temp_trace_dir();
-        let telemetry_path = trace_dir
+        let workspace_root = temp_trace_dir()
             .parent()
             .expect("trace dir parent")
-            .join("telemetry")
-            .join("recursive-runtime.jsonl");
+            .to_path_buf();
+        let prepared = prepare_recursive_task_run(RecursiveProfileTaskRequest {
+            workspace: RecursiveTaskWorkspace {
+                cwd: &workspace_root,
+                session_id: "session-task-runner",
+            },
+            task_id: "task-task-runner",
+            task: "trace aggregation export",
+            profile: ExecutionProfile::Balanced,
+        });
 
         let (result, artifacts) = runtime
-            .run_task(RecursiveTaskRunRequest {
-                session_id: "session-task-runner",
-                task_id: "task-task-runner",
-                task: "trace aggregation export",
-                budget: RuntimeBudget {
-                    max_depth: Some(2),
-                    max_iterations: Some(2),
-                    max_subcalls: Some(1),
-                    max_runtime_ms: Some(30_000),
-                    ..RuntimeBudget::default()
-                },
-                telemetry_path: telemetry_path.clone(),
-                trace_dir: trace_dir.clone(),
-                web_policy: WebPolicy {
-                    mode: WebAccessMode::Off,
-                    max_fetches: Some(0),
-                },
-            })
+            .run_task(prepared.as_request())
             .expect("shared task runner should succeed");
 
-        assert_eq!(artifacts.telemetry_path, telemetry_path);
-        assert_eq!(artifacts.trace_dir, trace_dir);
+        assert_eq!(artifacts.telemetry_path, prepared.telemetry_path);
+        assert_eq!(artifacts.trace_dir, prepared.trace_dir);
         assert!(artifacts.telemetry_path.is_file());
         assert!(result
             .trace_artifact_path
@@ -1912,6 +1938,38 @@ mod tests {
             .expect("telemetry log should be readable");
         assert!(!telemetry.trim().is_empty());
         assert!(telemetry.contains("session-task-runner"));
+    }
+
+    #[test]
+    fn prepared_recursive_task_run_centralizes_profile_budget_and_paths() {
+        let workspace_root = temp_trace_dir()
+            .parent()
+            .expect("trace dir parent")
+            .to_path_buf();
+        let prepared = prepare_recursive_task_run(RecursiveProfileTaskRequest {
+            workspace: RecursiveTaskWorkspace {
+                cwd: &workspace_root,
+                session_id: "session-prepared",
+            },
+            task_id: "task-prepared",
+            task: "investigate grounded execution",
+            profile: ExecutionProfile::Research,
+        });
+
+        assert_eq!(prepared.session_id, "session-prepared");
+        assert_eq!(prepared.task_id, "task-prepared");
+        assert_eq!(prepared.task, "investigate grounded execution");
+        assert_eq!(prepared.telemetry_path, workspace_root.join(".claw").join("telemetry").join("recursive-runtime.jsonl"));
+        assert_eq!(prepared.trace_dir, workspace_root.join(".claw").join("trace"));
+        assert_eq!(prepared.budget.max_depth, Some(4));
+        assert_eq!(prepared.web_policy.mode, WebAccessMode::Ask);
+
+        let borrowed = prepared.as_request();
+        assert_eq!(borrowed.session_id, "session-prepared");
+        assert_eq!(borrowed.task_id, "task-prepared");
+        assert_eq!(borrowed.task, "investigate grounded execution");
+        assert_eq!(borrowed.telemetry_path, workspace_root.join(".claw").join("telemetry").join("recursive-runtime.jsonl"));
+        assert_eq!(borrowed.trace_dir, workspace_root.join(".claw").join("trace"));
     }
 
     struct AlwaysFailExecutor;
