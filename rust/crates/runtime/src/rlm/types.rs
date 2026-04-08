@@ -202,6 +202,17 @@ impl PreparedRecursiveTaskRun {
             web_policy: self.web_policy.clone(),
         }
     }
+
+    pub fn run_with<'a, E, A>(
+        &self,
+        runtime: &RecursiveConversationRuntime<'a, E, A>,
+    ) -> Result<(RecursiveExecutionResult, RecursiveRunArtifacts), RecursiveRuntimeError>
+    where
+        E: ChildSubqueryExecutor,
+        A: ChildOutputAggregator,
+    {
+        runtime.run_task(self.as_request())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

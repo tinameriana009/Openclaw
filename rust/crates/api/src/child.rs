@@ -2,11 +2,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use runtime::{
-    prepare_recursive_task_run, ChildSubqueryExecutor, ChildSubqueryOutput,
-    ChildSubqueryRequest, ConfigLoader, EvidenceRecord, ExecutionProfile,
-    PreparedRecursiveTaskRun, RecursiveExecutionResult, RecursiveRunArtifacts,
-    RecursiveRuntimeError, RecursiveProfileTaskRequest, RecursiveTaskWorkspace,
-    WebAccessMode, WebEvidenceInput, WebExecutionOutcome,
+    prepare_recursive_task_run, ChildSubqueryExecutor, ChildSubqueryOutput, ChildSubqueryRequest,
+    ConfigLoader, EvidenceRecord, ExecutionProfile, PreparedRecursiveTaskRun,
+    RecursiveExecutionResult, RecursiveProfileTaskRequest, RecursiveRunArtifacts,
+    RecursiveRuntimeError, RecursiveTaskWorkspace, WebAccessMode, WebEvidenceInput,
+    WebExecutionOutcome,
 };
 use tokio::runtime::Runtime;
 
@@ -370,6 +370,26 @@ pub struct ProviderRecursiveRuntimeConfig<'a> {
     pub default_model: &'a str,
 }
 
+impl<'a> ProviderRecursiveRuntimeConfig<'a> {
+    #[must_use]
+    pub fn build_child_executor(&self) -> ProviderBackedChildExecutor {
+        build_runtime_configured_provider_extractive_child_executor(
+            self.cwd,
+            self.session_id,
+            self.active_model,
+            self.default_model,
+        )
+    }
+
+    #[must_use]
+    pub fn build_runtime(
+        &self,
+        corpus: &'a runtime::CorpusManifest,
+    ) -> runtime::RecursiveConversationRuntime<'a, ProviderBackedChildExecutor> {
+        runtime::RecursiveConversationRuntime::new(corpus, self.build_child_executor())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderRecursiveTaskRequest<'a> {
     pub runtime: ProviderRecursiveRuntimeConfig<'a>,
@@ -377,6 +397,30 @@ pub struct ProviderRecursiveTaskRequest<'a> {
     pub task_id: &'a str,
     pub task: &'a str,
     pub profile: ExecutionProfile,
+}
+
+impl<'a> ProviderRecursiveTaskRequest<'a> {
+    #[must_use]
+    pub fn prepare(&self) -> ProviderPreparedRecursiveTaskRun {
+        prepare_recursive_task_run(RecursiveProfileTaskRequest {
+            workspace: RecursiveTaskWorkspace {
+                cwd: self.runtime.cwd,
+                session_id: self.runtime.session_id,
+            },
+            task_id: self.task_id,
+            task: self.task,
+            profile: self.profile,
+        })
+    }
+
+    pub fn run(
+        &self,
+    ) -> Result<(RecursiveExecutionResult, ProviderRecursiveRunArtifacts), RecursiveRuntimeError>
+    {
+        let prepared = self.prepare();
+        let runtime = self.runtime.build_runtime(self.corpus);
+        prepared.run_with(&runtime)
+    }
 }
 
 pub type ProviderRecursiveRunArtifacts = RecursiveRunArtifacts;
@@ -387,37 +431,20 @@ pub fn build_runtime_configured_provider_recursive_task_runtime<'a>(
     config: &ProviderRecursiveRuntimeConfig<'a>,
     corpus: &'a runtime::CorpusManifest,
 ) -> runtime::RecursiveConversationRuntime<'a, ProviderBackedChildExecutor> {
-    build_runtime_configured_provider_recursive_runtime(
-        config.cwd,
-        corpus,
-        config.session_id,
-        config.active_model,
-        config.default_model,
-    )
+    config.build_runtime(corpus)
 }
 
 #[must_use]
 pub fn prepare_runtime_configured_provider_recursive_task_run(
     request: &ProviderRecursiveTaskRequest<'_>,
 ) -> ProviderPreparedRecursiveTaskRun {
-    prepare_recursive_task_run(RecursiveProfileTaskRequest {
-        workspace: RecursiveTaskWorkspace {
-            cwd: request.runtime.cwd,
-            session_id: request.runtime.session_id,
-        },
-        task_id: request.task_id,
-        task: request.task,
-        profile: request.profile,
-    })
+    request.prepare()
 }
 
 pub fn run_runtime_configured_provider_recursive_task(
     request: ProviderRecursiveTaskRequest<'_>,
 ) -> Result<(RecursiveExecutionResult, ProviderRecursiveRunArtifacts), RecursiveRuntimeError> {
-    let prepared = prepare_runtime_configured_provider_recursive_task_run(&request);
-    let runtime =
-        build_runtime_configured_provider_recursive_task_runtime(&request.runtime, request.corpus);
-    runtime.run_task(prepared.as_request())
+    request.run()
 }
 
 pub fn run_runtime_configured_provider_recursive_query(
@@ -1077,17 +1104,22 @@ mod tests {
         .expect("write settings");
 
         let corpus = sample_corpus();
-        let (result, artifacts) = run_runtime_configured_provider_recursive_query(
-            &cwd,
-            &corpus,
-            "session-1",
-            "task-1",
-            "Summarize the guide",
-            ExecutionProfile::Balanced,
-            Some("claude-sonnet-4-6"),
-            "claude-opus-4-6",
-        )
-        .expect("shared recursive runner should succeed");
+        let request = ProviderRecursiveTaskRequest {
+            runtime: ProviderRecursiveRuntimeConfig {
+                cwd: &cwd,
+                session_id: "session-1",
+                active_model: Some("claude-sonnet-4-6"),
+                default_model: "claude-opus-4-6",
+            },
+            corpus: &corpus,
+            task_id: "task-1",
+            task: "Summarize the guide",
+            profile: ExecutionProfile::Balanced,
+        };
+
+        let (result, artifacts) = request
+            .run()
+            .expect("shared recursive runner should succeed");
 
         assert!(result.usage.depth <= 1);
         assert!(result.usage.subcalls <= 1);
