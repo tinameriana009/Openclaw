@@ -24,8 +24,12 @@ use super::types::{
 };
 
 fn summarize_web_execution(child_outputs: &[ChildSubqueryOutput]) -> Option<String> {
+    let mut total = 0usize;
     let mut approved = 0usize;
     let mut approval_required = 0usize;
+    let mut skipped = 0usize;
+    let mut no_evidence = 0usize;
+    let mut failed = 0usize;
     let mut degraded = 0usize;
     let mut succeeded = 0usize;
     let mut with_evidence = 0usize;
@@ -34,33 +38,32 @@ fn summarize_web_execution(child_outputs: &[ChildSubqueryOutput]) -> Option<Stri
         let Some(execution) = output.web_execution.as_ref() else {
             continue;
         };
+        total += 1;
         if execution.approved {
             approved += 1;
         }
-        if matches!(
-            execution.status,
-            crate::WebExecutionStatus::ApprovalRequired
-        ) {
-            approval_required += 1;
+        match execution.status {
+            crate::WebExecutionStatus::ApprovalRequired => approval_required += 1,
+            crate::WebExecutionStatus::Skipped => skipped += 1,
+            crate::WebExecutionStatus::Succeeded => succeeded += 1,
+            crate::WebExecutionStatus::NoEvidence => no_evidence += 1,
+            crate::WebExecutionStatus::Failed => failed += 1,
+            crate::WebExecutionStatus::NotRequested => {}
         }
         if execution.degraded {
             degraded += 1;
-        }
-        if matches!(execution.status, crate::WebExecutionStatus::Succeeded) {
-            succeeded += 1;
         }
         if execution.evidence_count > 0 {
             with_evidence += 1;
         }
     }
 
-    let total = approved + approval_required + degraded + succeeded + with_evidence;
     if total == 0 {
         return None;
     }
 
     Some(format!(
-        "Web execution summary: approved subqueries={approved}, approval-required subqueries={approval_required}, successful web fetches={succeeded}, subqueries with attached web evidence={with_evidence}, degraded web outcomes={degraded}.",
+        "Web execution summary: web-aware subqueries={total}, approved subqueries={approved}, approval-required subqueries={approval_required}, successful web fetches={succeeded}, subqueries with attached web evidence={with_evidence}, no-evidence outcomes={no_evidence}, failed web outcomes={failed}, skipped web paths={skipped}, degraded web outcomes={degraded}.",
     ))
 }
 

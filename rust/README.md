@@ -27,6 +27,7 @@ Operator trust/release docs added for this harness:
 
 - [`CHANGELOG.md`](CHANGELOG.md) — release notes scaffold and current baseline notes
 - [`RELEASE.md`](RELEASE.md) — repeatable release/readiness checklist
+- [`docs/RELEASE_CANDIDATE.md`](docs/RELEASE_CANDIDATE.md) — the bounded RC gate and release-note minimum for this repo
 - [`docs/ARTIFACTS.md`](docs/ARTIFACTS.md) — on-disk artifact contract and compatibility notes
 - [`docs/PRIVACY.md`](docs/PRIVACY.md) — privacy and handling guidance for `.claw/` artifacts
 
@@ -90,7 +91,14 @@ cd rust
 ./scripts/release-verify.sh
 ```
 
-That helper checks the active Rust toolchain first, then runs the locked workspace verification sequence.
+For release-candidate discipline instead of a normal smoke pass:
+
+```bash
+cd rust
+RELEASE_CANDIDATE=1 ./scripts/release-verify.sh
+```
+
+That helper checks the active Rust toolchain first, then runs the locked workspace verification sequence. In RC mode it also runs the explicit release-candidate documentation gate and expects release notes/trust docs to stay aligned with the current `artifactKind` / `schemaVersion` / `compatVersion` contract.
 
 Manual equivalent:
 
@@ -339,7 +347,7 @@ These are the important remaining rough edges from an operator point of view:
 - The install story is still source-first; there is no polished packaged release flow documented here yet.
 - The quickest reliable trace workflow is still “inspect `.claw/trace/` on disk”; the CLI trace UX is improving but the saved artifact path remains the safest one to depend on.
 - Corpus discoverability is much better than before, but the most advanced grounded-answer path should still be treated as an active harness surface rather than a finished product.
-- Web-aware behavior is more honest and traceable than before, but it is still not a fully mature end-to-end operator web workflow.
+- Web-aware behavior is more honest and traceable than before, including explicit approval-required child states and richer final-answer summaries, but it is still not a fully mature end-to-end operator web workflow.
 - Child execution is cleaner and more shared than before, but not yet fully runtime/provider-owned in every seam.
 - Recursive traces now capture novelty/progress signals per child step, but the runtime still uses lightweight heuristics rather than a full planner or formal verifier.
 - OAuth currently depends on a localhost callback and manual URL opening when no browser opener is available.

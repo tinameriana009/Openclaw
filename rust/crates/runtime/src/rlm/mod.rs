@@ -330,7 +330,7 @@ where
                 web_policy: child_web_policy,
                 web_research_query: matches!(
                     artifacts.escalation.decision,
-                    WebAccessDecision::Allowed
+                    WebAccessDecision::Allowed | WebAccessDecision::RequiresApproval
                 )
                 .then(|| task.to_string()),
             };
@@ -1398,6 +1398,51 @@ mod tests {
         }
     }
 
+    struct AskAwareExecutor;
+
+    impl ChildSubqueryExecutor for AskAwareExecutor {
+        fn execute(
+            &self,
+            request: &ChildSubqueryRequest,
+        ) -> Result<ChildSubqueryOutput, RecursiveRuntimeError> {
+            let (web_execution, web_execution_note) = if matches!(request.web_policy.mode, WebAccessMode::Ask) {
+                let query = request
+                    .web_research_query
+                    .clone()
+                    .unwrap_or_else(|| "missing-query".to_string());
+                let note = format!(
+                    "approval required before using the web for query {:?}",
+                    request.web_research_query
+                );
+                (
+                    Some(crate::WebExecutionOutcome::approval_required(query, note.clone())),
+                    Some(note),
+                )
+            } else {
+                (Some(crate::WebExecutionOutcome::not_requested()), None)
+            };
+            Ok(ChildSubqueryOutput {
+                subquery_id: request.subquery_id.clone(),
+                answer: format!(
+                    "ask-aware executor ran with web mode {} and query {:?}",
+                    web_policy_label(request.web_policy.mode),
+                    request.web_research_query
+                ),
+                citations: request
+                    .slices
+                    .iter()
+                    .map(|slice| slice.chunk_id.clone())
+                    .collect(),
+                web_evidence: Vec::new(),
+                web_execution,
+                web_execution_note,
+                prompt_tokens: 12,
+                completion_tokens: 4,
+                cost_usd: 0.0,
+            })
+        }
+    }
+
     struct ConvergingExecutor;
 
     impl ChildSubqueryExecutor for ConvergingExecutor {
@@ -1579,6 +1624,56 @@ mod tests {
                 && event.data.get("status") == Some(&JsonValue::String("no_evidence".to_string()))
                 && event.data.get("approved") == Some(&JsonValue::Bool(true))
                 && event.data.get("degraded") == Some(&JsonValue::Bool(true))
+        }));
+    }
+
+    #[test]
+    fn ask_mode_preserves_web_query_and_approval_required_trace_state() {
+        let corpus = sample_corpus();
+        let runtime = RecursiveConversationRuntime::new(&corpus, AskAwareExecutor);
+        let result = runtime
+            .run_with_tracer_and_policy(
+                "session-1",
+                "task-web-approval",
+                "search the web for the latest hidden behavior",
+                RuntimeBudget {
+                    max_depth: Some(2),
+                    max_iterations: Some(2),
+                    max_subcalls: Some(1),
+                    ..RuntimeBudget::default()
+                },
+                None,
+                None,
+                WebPolicy {
+                    mode: WebAccessMode::Ask,
+                    max_fetches: Some(2),
+                },
+            )
+            .expect("run should succeed");
+
+        assert!(result.final_answer.contains("approval-required subqueries=1"));
+        assert!(result
+            .final_answer
+            .contains("approval required before using the web for query Some(\"search the web for the latest hidden behavior\")"));
+        assert!(result.trace.events.iter().any(|event| {
+            event.event_type == TraceEventType::SubqueryCompleted
+                && event.data.get("webQuery")
+                    == Some(&JsonValue::String(
+                        "search the web for the latest hidden behavior".to_string()
+                    ))
+                && event.data.get("webApprovalState")
+                    == Some(&JsonValue::String("not_approved".to_string()))
+        }));
+        assert!(result.trace.events.iter().any(|event| {
+            event.event_type == TraceEventType::WebExecutionCompleted
+                && event.data.get("status")
+                    == Some(&JsonValue::String("approval_required".to_string()))
+                && event.data.get("approved") == Some(&JsonValue::Bool(false))
+                && event.data.get("degraded") == Some(&JsonValue::Bool(true))
+                && event.data.get("query")
+                    == Some(&JsonValue::String(
+                        "search the web for the latest hidden behavior".to_string()
+                    ))
         }));
     }
 
