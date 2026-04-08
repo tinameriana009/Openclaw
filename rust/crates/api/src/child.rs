@@ -1,10 +1,12 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use runtime::{
     ChildSubqueryExecutor, ChildSubqueryOutput, ChildSubqueryRequest, ConfigLoader, EvidenceRecord,
-    RecursiveRuntimeError, WebAccessMode, WebEvidenceInput, WebExecutionOutcome,
+    ExecutionProfile, RecursiveExecutionResult, RecursiveRuntimeError, RuntimeBudget,
+    WebAccessMode, WebEvidenceInput, WebExecutionOutcome, WebPolicy,
 };
+use telemetry::{JsonlTelemetrySink, SessionTracer};
 use tokio::runtime::Runtime;
 
 use crate::{
@@ -329,6 +331,78 @@ pub fn build_runtime_configured_provider_recursive_runtime<'a>(
             default_model,
         ),
     )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderRecursiveRunArtifacts {
+    pub telemetry_path: PathBuf,
+    pub trace_dir: PathBuf,
+}
+
+pub fn run_runtime_configured_provider_recursive_query(
+    cwd: &Path,
+    corpus: &runtime::CorpusManifest,
+    session_id: &str,
+    task_id: &str,
+    task: &str,
+    profile: ExecutionProfile,
+    active_model: Option<&str>,
+    default_model: &str,
+) -> Result<(RecursiveExecutionResult, ProviderRecursiveRunArtifacts), RecursiveRuntimeError> {
+    let resolved = profile.resolve();
+    let telemetry_path = cwd
+        .join(".claw")
+        .join("telemetry")
+        .join("recursive-runtime.jsonl");
+    let tracer = SessionTracer::new(
+        session_id,
+        Arc::new(JsonlTelemetrySink::new(&telemetry_path).map_err(|error| {
+            RecursiveRuntimeError::ChildExecution(format!(
+                "failed to initialize recursive runtime telemetry sink: {error}"
+            ))
+        })?),
+    );
+    let trace_dir = cwd.join(".claw").join("trace");
+    let runtime = build_runtime_configured_provider_recursive_runtime(
+        cwd,
+        corpus,
+        session_id,
+        active_model,
+        default_model,
+    );
+    let result = runtime.run_with_tracer_and_policy(
+        session_id,
+        task_id,
+        task,
+        RuntimeBudget {
+            max_depth: resolved
+                .rlm
+                .max_depth
+                .and_then(|value| u32::try_from(value).ok()),
+            max_iterations: resolved
+                .rlm
+                .max_iterations
+                .and_then(|value| u32::try_from(value).ok()),
+            max_subcalls: resolved
+                .rlm
+                .max_subcalls
+                .and_then(|value| u32::try_from(value).ok()),
+            max_runtime_ms: resolved.rlm.max_runtime_ms,
+            max_prompt_tokens: None,
+            max_completion_tokens: None,
+            max_cost_usd: None,
+        },
+        Some(&trace_dir),
+        Some(&tracer),
+        WebPolicy::from_config(&resolved.web_research),
+    )?;
+    Ok((
+        result,
+        ProviderRecursiveRunArtifacts {
+            telemetry_path,
+            trace_dir,
+        },
+    ))
 }
 
 pub fn collect_minimal_web_evidence(
@@ -792,8 +866,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use runtime::{
-        ChildSubqueryRequest, RecursiveContextSlice, RecursiveRuntimeError, RuntimeBudget,
-        WebAccessMode, WebPolicy,
+        ChildSubqueryRequest, ExecutionProfile, RecursiveContextSlice, RecursiveRuntimeError,
+        RuntimeBudget, WebAccessMode, WebPolicy,
     };
 
     use super::*;
@@ -861,34 +935,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn resolve_provider_child_model_prefers_rlm_subcall_model() {
-        let cwd = temp_dir("model-resolution");
-        fs::create_dir_all(cwd.join(".claw")).expect("config dir");
-        fs::write(
-            cwd.join(".claw").join("settings.json"),
-            r#"{"model":"claude-opus-4-6","rlm":{"subcallModel":"haiku"}}"#,
-        )
-        .expect("write settings");
-
-        let resolved =
-            resolve_provider_child_model(&cwd, Some("claude-sonnet-4-6"), "claude-opus-4-6");
-        assert_eq!(resolved, "claude-haiku-4-5-20251213");
-
-        let _ = fs::remove_dir_all(cwd);
-    }
-
-    #[test]
-    fn recursive_runtime_builder_uses_shared_runtime_configured_executor() {
-        let cwd = temp_dir("recursive-runtime-builder");
-        fs::create_dir_all(cwd.join(".claw")).expect("config dir");
-        fs::write(
-            cwd.join(".claw").join("settings.json"),
-            r#"{"model":"claude-opus-4-6","rlm":{"subcallModel":"haiku"}}"#,
-        )
-        .expect("write settings");
-
-        let corpus = runtime::CorpusManifest {
+    fn sample_corpus() -> runtime::CorpusManifest {
+        runtime::CorpusManifest {
             artifact_kind: "claw.corpus-manifest".to_string(),
             schema_version: 1,
             compat_version: "0.1".to_string(),
@@ -931,7 +979,37 @@ mod tests {
                     metadata: BTreeMap::new(),
                 }],
             }],
-        };
+        }
+    }
+
+    #[test]
+    fn resolve_provider_child_model_prefers_rlm_subcall_model() {
+        let cwd = temp_dir("model-resolution");
+        fs::create_dir_all(cwd.join(".claw")).expect("config dir");
+        fs::write(
+            cwd.join(".claw").join("settings.json"),
+            r#"{"model":"claude-opus-4-6","rlm":{"subcallModel":"haiku"}}"#,
+        )
+        .expect("write settings");
+
+        let resolved =
+            resolve_provider_child_model(&cwd, Some("claude-sonnet-4-6"), "claude-opus-4-6");
+        assert_eq!(resolved, "claude-haiku-4-5-20251213");
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn recursive_runtime_builder_uses_shared_runtime_configured_executor() {
+        let cwd = temp_dir("recursive-runtime-builder");
+        fs::create_dir_all(cwd.join(".claw")).expect("config dir");
+        fs::write(
+            cwd.join(".claw").join("settings.json"),
+            r#"{"model":"claude-opus-4-6","rlm":{"subcallModel":"haiku"}}"#,
+        )
+        .expect("write settings");
+
+        let corpus = sample_corpus();
 
         let runtime = build_runtime_configured_provider_recursive_runtime(
             &cwd,
@@ -941,7 +1019,51 @@ mod tests {
             "claude-opus-4-6",
         );
 
-        assert_eq!(runtime.child_executor().model(), "claude-haiku-4-5-20251213");
+        assert_eq!(
+            runtime.child_executor().model(),
+            "claude-haiku-4-5-20251213"
+        );
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn shared_recursive_query_runner_owns_budget_policy_and_artifact_paths() {
+        let cwd = temp_dir("recursive-query-runner");
+        fs::create_dir_all(cwd.join(".claw")).expect("config dir");
+        fs::write(
+            cwd.join(".claw").join("settings.json"),
+            r#"{"model":"claude-opus-4-6","rlm":{"subcallModel":"haiku"}}"#,
+        )
+        .expect("write settings");
+
+        let corpus = sample_corpus();
+        let (result, artifacts) = run_runtime_configured_provider_recursive_query(
+            &cwd,
+            &corpus,
+            "session-1",
+            "task-1",
+            "Summarize the guide",
+            ExecutionProfile::Balanced,
+            Some("claude-sonnet-4-6"),
+            "claude-opus-4-6",
+        )
+        .expect("shared recursive runner should succeed");
+
+        assert!(result.usage.depth <= 1);
+        assert!(result.usage.subcalls <= 1);
+        assert_eq!(
+            artifacts.telemetry_path,
+            cwd.join(".claw")
+                .join("telemetry")
+                .join("recursive-runtime.jsonl")
+        );
+        assert_eq!(artifacts.trace_dir, cwd.join(".claw").join("trace"));
+        assert!(artifacts.telemetry_path.exists());
+        assert!(result
+            .trace_artifact_path
+            .as_ref()
+            .is_some_and(|path| path.starts_with(&artifacts.trace_dir)));
 
         let _ = fs::remove_dir_all(cwd);
     }

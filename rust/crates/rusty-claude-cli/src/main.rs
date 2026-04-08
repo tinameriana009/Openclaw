@@ -24,12 +24,13 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use api::{
-    build_runtime_configured_provider_recursive_runtime, collect_minimal_web_evidence,
-    format_provider_child_init_reason, render_extractive_child_answer,
-    resolve_provider_child_model, resolve_runtime_provider_child_auth, resolve_startup_auth_source,
-    AnthropicClient, ApiError, AuthSource, ContentBlockDelta, InputContentBlock, InputMessage,
-    MessageRequest, MessageResponse, OutputContentBlock, PromptCache, ProviderClient,
-    StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition, ToolResultContentBlock,
+    collect_minimal_web_evidence, format_provider_child_init_reason,
+    render_extractive_child_answer, resolve_provider_child_model,
+    resolve_runtime_provider_child_auth, resolve_startup_auth_source,
+    run_runtime_configured_provider_recursive_query, AnthropicClient, ApiError, AuthSource,
+    ContentBlockDelta, InputContentBlock, InputMessage, MessageRequest, MessageResponse,
+    OutputContentBlock, PromptCache, ProviderClient, StreamEvent as ApiStreamEvent, ToolChoice,
+    ToolDefinition, ToolResultContentBlock,
 };
 
 use commands::{
@@ -53,7 +54,6 @@ use runtime::{
     UsageTracker,
 };
 use serde_json::json;
-use telemetry::{JsonlTelemetrySink, SessionTracer};
 use tools::{minimal_web_research, GlobalToolRegistry};
 
 const DEFAULT_MODEL: &str = "claude-opus-4-6";
@@ -1455,47 +1455,15 @@ fn run_corpus_answer(
     active_model: Option<&str>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let manifest = load_corpus(cwd, corpus_id)?;
-    let resolved = profile.resolve();
-    let telemetry_path = cwd
-        .join(".claw")
-        .join("telemetry")
-        .join("recursive-runtime.jsonl");
-    let tracer = SessionTracer::new(
-        session_id.unwrap_or("corpus-cli"),
-        std::sync::Arc::new(JsonlTelemetrySink::new(&telemetry_path)?),
-    );
-    let runtime = build_runtime_configured_provider_recursive_runtime(
+    let (result, artifacts) = run_runtime_configured_provider_recursive_query(
         cwd,
         &manifest,
         session_id.unwrap_or("corpus-cli"),
-        active_model,
-        DEFAULT_MODEL,
-    );
-    let result = runtime.run_with_tracer_and_policy(
-        session_id.unwrap_or("corpus-cli"),
         &format!("corpus-answer-{}", sanitize_session_segment(query)),
         query,
-        runtime::RuntimeBudget {
-            max_depth: resolved
-                .rlm
-                .max_depth
-                .and_then(|value| u32::try_from(value).ok()),
-            max_iterations: resolved
-                .rlm
-                .max_iterations
-                .and_then(|value| u32::try_from(value).ok()),
-            max_subcalls: resolved
-                .rlm
-                .max_subcalls
-                .and_then(|value| u32::try_from(value).ok()),
-            max_runtime_ms: resolved.rlm.max_runtime_ms,
-            max_prompt_tokens: None,
-            max_completion_tokens: None,
-            max_cost_usd: None,
-        },
-        Some(&cwd.join(".claw").join("trace")),
-        Some(&tracer),
-        runtime::WebPolicy::from_config(&resolved.web_research),
+        profile,
+        active_model,
+        DEFAULT_MODEL,
     )?;
     let trace_artifact = result
         .trace_artifact_path
@@ -1507,7 +1475,7 @@ fn run_corpus_answer(
         result.final_answer,
         runtime::render_trace_summary(&result.trace),
         trace_artifact,
-        telemetry_path.display()
+        artifacts.telemetry_path.display()
     ))
 }
 
