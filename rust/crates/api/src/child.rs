@@ -1,12 +1,12 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use runtime::{
     ChildSubqueryExecutor, ChildSubqueryOutput, ChildSubqueryRequest, ConfigLoader, EvidenceRecord,
-    ExecutionProfile, RecursiveExecutionResult, RecursiveRuntimeError, RuntimeBudget,
-    WebAccessMode, WebEvidenceInput, WebExecutionOutcome, WebPolicy,
+    ExecutionProfile, RecursiveExecutionResult, RecursiveRunArtifacts, RecursiveRuntimeError,
+    RecursiveTaskRunRequest, RuntimeBudget, WebAccessMode, WebEvidenceInput, WebExecutionOutcome,
+    WebPolicy,
 };
-use telemetry::{JsonlTelemetrySink, SessionTracer};
 use tokio::runtime::Runtime;
 
 use crate::{
@@ -378,11 +378,7 @@ pub struct ProviderRecursiveTaskRequest<'a> {
     pub profile: ExecutionProfile,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderRecursiveRunArtifacts {
-    pub telemetry_path: PathBuf,
-    pub trace_dir: PathBuf,
-}
+pub type ProviderRecursiveRunArtifacts = RecursiveRunArtifacts;
 
 #[must_use]
 pub fn build_runtime_configured_provider_recursive_task_runtime<'a>(
@@ -408,22 +404,14 @@ pub fn run_runtime_configured_provider_recursive_task(
         .join(".claw")
         .join("telemetry")
         .join("recursive-runtime.jsonl");
-    let tracer = SessionTracer::new(
-        request.runtime.session_id,
-        Arc::new(JsonlTelemetrySink::new(&telemetry_path).map_err(|error| {
-            RecursiveRuntimeError::ChildExecution(format!(
-                "failed to initialize recursive runtime telemetry sink: {error}"
-            ))
-        })?),
-    );
     let trace_dir = request.runtime.cwd.join(".claw").join("trace");
     let runtime =
         build_runtime_configured_provider_recursive_task_runtime(&request.runtime, request.corpus);
-    let result = runtime.run_with_tracer_and_policy(
-        request.runtime.session_id,
-        request.task_id,
-        request.task,
-        RuntimeBudget {
+    runtime.run_task(RecursiveTaskRunRequest {
+        session_id: request.runtime.session_id,
+        task_id: request.task_id,
+        task: request.task,
+        budget: RuntimeBudget {
             max_depth: resolved
                 .rlm
                 .max_depth
@@ -441,17 +429,10 @@ pub fn run_runtime_configured_provider_recursive_task(
             max_completion_tokens: None,
             max_cost_usd: None,
         },
-        Some(&trace_dir),
-        Some(&tracer),
-        WebPolicy::from_config(&resolved.web_research),
-    )?;
-    Ok((
-        result,
-        ProviderRecursiveRunArtifacts {
-            telemetry_path,
-            trace_dir,
-        },
-    ))
+        telemetry_path,
+        trace_dir,
+        web_policy: WebPolicy::from_config(&resolved.web_research),
+    })
 }
 
 pub fn run_runtime_configured_provider_recursive_query(

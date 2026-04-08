@@ -4,6 +4,7 @@ mod types;
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::budget::{BudgetSliceRequest, RuntimeBudget, RuntimeBudgetUsage};
 use crate::corpus::{search_corpus_manifest, CorpusManifest, RetrievalHit, RetrievalResult};
@@ -23,7 +24,7 @@ use helpers::{
     should_stop_for_convergence, task_mentions_freshness, task_requests_web,
     web_access_decision_label, web_policy_label,
 };
-use telemetry::SessionTracer;
+use telemetry::{JsonlTelemetrySink, SessionTracer};
 pub use types::*;
 
 impl<'a, E> RecursiveConversationRuntime<'a, E, DefaultChildOutputAggregator>
@@ -37,6 +38,38 @@ where
             executor,
             aggregator: DefaultChildOutputAggregator,
         }
+    }
+
+    pub fn run_task(
+        &self,
+        request: RecursiveTaskRunRequest<'_>,
+    ) -> Result<(RecursiveExecutionResult, RecursiveRunArtifacts), RecursiveRuntimeError> {
+        let tracer = SessionTracer::new(
+            request.session_id,
+            Arc::new(
+                JsonlTelemetrySink::new(&request.telemetry_path).map_err(|error| {
+                    RecursiveRuntimeError::ChildExecution(format!(
+                        "failed to initialize recursive runtime telemetry sink: {error}"
+                    ))
+                })?,
+            ),
+        );
+        let result = self.run_with_tracer_and_policy(
+            request.session_id,
+            request.task_id,
+            request.task,
+            request.budget,
+            Some(&request.trace_dir),
+            Some(&tracer),
+            request.web_policy,
+        )?;
+        Ok((
+            result,
+            RecursiveRunArtifacts {
+                telemetry_path: request.telemetry_path,
+                trace_dir: request.trace_dir,
+            },
+        ))
     }
 }
 
@@ -1834,6 +1867,51 @@ mod tests {
             .execute(&request)
             .expect("fallback wrapper should recover");
         assert_eq!(output.answer, "formatted: child blew up");
+    }
+
+    #[test]
+    fn shared_recursive_task_runner_owns_telemetry_and_trace_artifacts() {
+        let corpus = sample_corpus();
+        let runtime = RecursiveConversationRuntime::new(&corpus, StubExecutor);
+        let trace_dir = temp_trace_dir();
+        let telemetry_path = trace_dir
+            .parent()
+            .expect("trace dir parent")
+            .join("telemetry")
+            .join("recursive-runtime.jsonl");
+
+        let (result, artifacts) = runtime
+            .run_task(RecursiveTaskRunRequest {
+                session_id: "session-task-runner",
+                task_id: "task-task-runner",
+                task: "trace aggregation export",
+                budget: RuntimeBudget {
+                    max_depth: Some(2),
+                    max_iterations: Some(2),
+                    max_subcalls: Some(1),
+                    max_runtime_ms: Some(30_000),
+                    ..RuntimeBudget::default()
+                },
+                telemetry_path: telemetry_path.clone(),
+                trace_dir: trace_dir.clone(),
+                web_policy: WebPolicy {
+                    mode: WebAccessMode::Off,
+                    max_fetches: Some(0),
+                },
+            })
+            .expect("shared task runner should succeed");
+
+        assert_eq!(artifacts.telemetry_path, telemetry_path);
+        assert_eq!(artifacts.trace_dir, trace_dir);
+        assert!(artifacts.telemetry_path.is_file());
+        assert!(result
+            .trace_artifact_path
+            .as_ref()
+            .is_some_and(|path| path.starts_with(&artifacts.trace_dir)));
+        let telemetry = std::fs::read_to_string(&artifacts.telemetry_path)
+            .expect("telemetry log should be readable");
+        assert!(!telemetry.trim().is_empty());
+        assert!(telemetry.contains("session-task-runner"));
     }
 
     struct AlwaysFailExecutor;

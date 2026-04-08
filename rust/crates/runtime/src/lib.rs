@@ -109,7 +109,8 @@ pub use rlm::{
     ChildSubqueryOutput, ChildSubqueryRequest, DefaultChildOutputAggregator,
     FallbackChildSubqueryExecutor, RecursiveContextSlice, RecursiveConversationRuntime,
     RecursiveCorpusPeekResult, RecursiveExecutionMode, RecursiveExecutionResult,
-    RecursiveIterationState, RecursiveRuntimeError, RecursiveRuntimeState, RecursiveStopReason,
+    RecursiveIterationState, RecursiveRunArtifacts, RecursiveRuntimeError, RecursiveRuntimeState,
+    RecursiveStopReason, RecursiveTaskRunRequest,
 };
 pub use sandbox::{
     build_linux_sandbox_command, detect_container_environment, detect_container_environment_from,

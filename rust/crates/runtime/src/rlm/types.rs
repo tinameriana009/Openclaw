@@ -157,6 +157,23 @@ pub struct RecursiveExecutionResult {
     pub usage: RuntimeBudgetUsage,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecursiveRunArtifacts {
+    pub telemetry_path: PathBuf,
+    pub trace_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecursiveTaskRunRequest<'a> {
+    pub session_id: &'a str,
+    pub task_id: &'a str,
+    pub task: &'a str,
+    pub budget: RuntimeBudget,
+    pub telemetry_path: PathBuf,
+    pub trace_dir: PathBuf,
+    pub web_policy: WebPolicy,
+}
+
 pub trait ChildSubqueryExecutor {
     fn execute(
         &self,
