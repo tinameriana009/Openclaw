@@ -7502,7 +7502,7 @@ UU conflicted.rs",
 
 #[cfg(test)]
 mod corpus_answer_tests {
-    use super::DEFAULT_MODEL;
+    use super::{load_web_approval_packet, DEFAULT_MODEL};
     use api::minimal_web_research;
     use api::{
         collect_minimal_web_evidence, format_provider_child_init_reason,
@@ -7701,7 +7701,7 @@ mod corpus_answer_tests {
 
     #[test]
     fn load_web_approval_packet_resolves_from_trace_path() {
-        let root = temp_dir();
+        let root = temp_dir("approval-trace-path");
         fs::create_dir_all(root.join(".claw").join("trace")).expect("trace dir");
         fs::create_dir_all(root.join(".claw").join("web-approvals")).expect("packet dir");
         let trace_path = root.join(".claw").join("trace").join("trace.json");
@@ -7748,7 +7748,7 @@ mod corpus_answer_tests {
 
     #[test]
     fn load_web_approval_packet_accepts_packet_path_directly() {
-        let root = temp_dir();
+        let root = temp_dir("approval-packet-direct");
         fs::create_dir_all(root.join(".claw").join("web-approvals")).expect("packet dir");
         let packet_path = root.join(".claw").join("web-approvals").join("trace-abc.json");
         fs::write(
