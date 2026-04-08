@@ -53,6 +53,12 @@ pub struct TraceCounters {
     pub web_executions_completed: u32,
     pub degraded_web_executions: u32,
     pub web_evidence_items: u32,
+    pub web_execution_approved: u32,
+    pub web_execution_approval_required: u32,
+    pub web_execution_succeeded: u32,
+    pub web_execution_no_evidence: u32,
+    pub web_execution_failed: u32,
+    pub web_execution_skipped: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,6 +222,27 @@ impl TraceLedger {
                     counters.web_executions_completed += 1;
                     if event
                         .data
+                        .get("approved")
+                        .and_then(JsonValue::as_bool)
+                        .unwrap_or(false)
+                    {
+                        counters.web_execution_approved += 1;
+                    }
+                    match event
+                        .data
+                        .get("status")
+                        .and_then(JsonValue::as_str)
+                        .unwrap_or_default()
+                    {
+                        "approval_required" => counters.web_execution_approval_required += 1,
+                        "succeeded" => counters.web_execution_succeeded += 1,
+                        "no_evidence" => counters.web_execution_no_evidence += 1,
+                        "failed" => counters.web_execution_failed += 1,
+                        "skipped" => counters.web_execution_skipped += 1,
+                        _ => {}
+                    }
+                    if event
+                        .data
                         .get("degraded")
                         .and_then(JsonValue::as_bool)
                         .unwrap_or(false)
@@ -268,6 +295,30 @@ impl TraceLedger {
         summary.insert(
             "web_executions_completed".to_string(),
             Value::from(counters.web_executions_completed),
+        );
+        summary.insert(
+            "web_execution_approved".to_string(),
+            Value::from(counters.web_execution_approved),
+        );
+        summary.insert(
+            "web_execution_approval_required".to_string(),
+            Value::from(counters.web_execution_approval_required),
+        );
+        summary.insert(
+            "web_execution_succeeded".to_string(),
+            Value::from(counters.web_execution_succeeded),
+        );
+        summary.insert(
+            "web_execution_no_evidence".to_string(),
+            Value::from(counters.web_execution_no_evidence),
+        );
+        summary.insert(
+            "web_execution_failed".to_string(),
+            Value::from(counters.web_execution_failed),
+        );
+        summary.insert(
+            "web_execution_skipped".to_string(),
+            Value::from(counters.web_execution_skipped),
         );
         summary.insert(
             "degraded_web_executions".to_string(),
@@ -641,6 +692,8 @@ mod tests {
         assert_eq!(counters.subqueries_started, 1);
         assert_eq!(counters.web_escalations, 1);
         assert_eq!(counters.web_executions_completed, 1);
+        assert_eq!(counters.web_execution_approved, 1);
+        assert_eq!(counters.web_execution_no_evidence, 1);
         assert_eq!(counters.degraded_web_executions, 1);
     }
 
@@ -669,6 +722,14 @@ mod tests {
         );
         assert_eq!(
             trace_records[0].attributes.get("web_executions_completed"),
+            Some(&serde_json::Value::from(1))
+        );
+        assert_eq!(
+            trace_records[0].attributes.get("web_execution_approved"),
+            Some(&serde_json::Value::from(1))
+        );
+        assert_eq!(
+            trace_records[0].attributes.get("web_execution_no_evidence"),
             Some(&serde_json::Value::from(1))
         );
         assert_eq!(

@@ -301,12 +301,16 @@ impl FinalAnswer {
                 format!("  Approved                      {}", web.approved),
                 format!("  Approval required             {}", web.approval_required),
                 format!("  Succeeded                     {}", web.succeeded),
-                format!("  With fetched evidence         {}", web.succeeded_with_fetched_evidence),
+                format!(
+                    "  With fetched evidence         {}",
+                    web.succeeded_with_fetched_evidence
+                ),
                 format!("  No evidence attached          {}", web.no_evidence),
                 format!("  Failed                        {}", web.failed),
                 format!("  Skipped                       {}", web.skipped),
                 format!("  Degraded                      {}", web.degraded),
             ];
+            web_lines.extend(render_web_operator_handoff(web));
             if !web.details.is_empty() {
                 web_lines.push("  Subquery details".to_string());
                 web_lines.extend(web.details.iter().map(render_web_execution_detail));
@@ -324,6 +328,65 @@ impl FinalAnswer {
             .collect::<Vec<_>>()
             .join("\n\n")
     }
+}
+
+fn render_web_operator_handoff(web: &WebExecutionSummary) -> Vec<String> {
+    let pending_queries = web
+        .details
+        .iter()
+        .filter(|detail| detail.status == "approval_required")
+        .filter_map(|detail| detail.query.as_deref())
+        .collect::<Vec<_>>();
+    let failed_subqueries = web
+        .details
+        .iter()
+        .filter(|detail| detail.status == "failed")
+        .map(|detail| detail.subquery_id.as_str())
+        .collect::<Vec<_>>();
+    let no_evidence_subqueries = web
+        .details
+        .iter()
+        .filter(|detail| detail.status == "no_evidence")
+        .map(|detail| detail.subquery_id.as_str())
+        .collect::<Vec<_>>();
+
+    let overall = if web.approval_required > 0 {
+        "awaiting approval"
+    } else if web.failed > 0 {
+        "web attempt failed"
+    } else if web.no_evidence > 0 {
+        "web attempted but unverified"
+    } else if web.succeeded_with_fetched_evidence > 0 {
+        "bounded web evidence attached"
+    } else if web.total > 0 {
+        "local-only despite web-aware execution"
+    } else {
+        "not requested"
+    };
+
+    let mut lines = vec![format!("  Operator state                {overall}")];
+    if !pending_queries.is_empty() {
+        lines.push(format!(
+            "  Operator next step            approve web queries: {}",
+            pending_queries.join(" | ")
+        ));
+    } else if !failed_subqueries.is_empty() {
+        lines.push(format!(
+            "  Operator next step            inspect failed web subqueries: {}",
+            failed_subqueries.join(", ")
+        ));
+    } else if !no_evidence_subqueries.is_empty() {
+        lines.push(format!(
+            "  Operator next step            review degraded no-evidence subqueries: {}",
+            no_evidence_subqueries.join(", ")
+        ));
+    } else if web.succeeded_with_fetched_evidence > 0 {
+        lines.push(
+            "  Operator next step            use attached web evidence carefully; browser automation is still not available"
+                .to_string(),
+        );
+    }
+    lines
 }
 
 fn render_web_execution_detail(detail: &WebExecutionDetail) -> String {
@@ -457,6 +520,10 @@ mod tests {
         assert!(rendered.contains("Web execution"));
         assert!(rendered.contains("Web-aware subqueries          2"));
         assert!(rendered.contains("Approval required             1"));
+        assert!(rendered.contains("Operator state                awaiting approval"));
+        assert!(
+            rendered.contains("Operator next step            approve web queries: current version")
+        );
         assert!(rendered.contains("subq-2: status=approval_required; approval=not approved; evidence=0; degraded=yes; query=\"current version\""));
         assert!(rendered.contains("Trace reference\n  Id               trace-123"));
     }

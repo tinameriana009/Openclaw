@@ -12,8 +12,8 @@ use crate::hybrid::{
 use crate::json::JsonValue;
 use crate::trace::{TraceEventType, TraceLedger};
 use crate::ux::{
-    Citation, ConfidenceLevel, ConfidenceNote, EvidenceProvenance, FinalAnswer,
-    WebExecutionDetail, WebExecutionSummary,
+    Citation, ConfidenceLevel, ConfidenceNote, EvidenceProvenance, FinalAnswer, WebExecutionDetail,
+    WebExecutionSummary,
 };
 use telemetry::SessionTracer;
 
@@ -73,7 +73,10 @@ fn summarize_web_execution(child_outputs: &[ChildSubqueryOutput]) -> Option<WebE
             query: execution.query.clone(),
             evidence_count: execution.evidence_count,
             degraded: execution.degraded,
-            note: execution.note.clone().or_else(|| output.web_execution_note.clone()),
+            note: execution
+                .note
+                .clone()
+                .or_else(|| output.web_execution_note.clone()),
         });
     }
 
@@ -447,7 +450,7 @@ pub fn render_trace_summary(trace: &TraceLedger) -> String {
         .unwrap_or("unknown");
     let counters = trace.counters();
     format!(
-        "Trace\n  Id               {}\n  Session          {}\n  Task             {}\n  Status           {}\n  Stop reason      {}\n  Events           {}\n  Retrievals       {} / {}\n  Subqueries       {} / {}\n  Web escalations  {}\n  Web executions   {}\n  Web degraded     {}\n  Web evidence     {}",
+        "Trace\n  Id               {}\n  Session          {}\n  Task             {}\n  Status           {}\n  Stop reason      {}\n  Events           {}\n  Retrievals       {} / {}\n  Subqueries       {} / {}\n  Web escalations  {}\n  Web executions   {}\n  Web approved     {}\n  Web pending      {}\n  Web succeeded    {}\n  Web no evidence  {}\n  Web failed       {}\n  Web skipped      {}\n  Web degraded     {}\n  Web evidence     {}",
         trace.trace_id,
         trace.session_id,
         trace.root_task_id,
@@ -460,6 +463,12 @@ pub fn render_trace_summary(trace: &TraceLedger) -> String {
         counters.subqueries_started,
         counters.web_escalations,
         counters.web_executions_completed,
+        counters.web_execution_approved,
+        counters.web_execution_approval_required,
+        counters.web_execution_succeeded,
+        counters.web_execution_no_evidence,
+        counters.web_execution_failed,
+        counters.web_execution_skipped,
         counters.degraded_web_executions,
         counters.web_evidence_items,
     )
