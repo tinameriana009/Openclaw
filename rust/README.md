@@ -351,7 +351,7 @@ These are the important remaining rough edges from an operator point of view:
 - The install story is still source-first; there is no polished packaged release flow documented here yet.
 - The quickest reliable trace workflow is still “inspect `.claw/trace/` on disk”; the CLI trace UX is improving but the saved artifact path remains the safest one to depend on.
 - Corpus discoverability is much better than before, but the most advanced grounded-answer path should still be treated as an active harness surface rather than a finished product.
-- Web-aware behavior is more honest and traceable than before, including explicit approval-required child states and richer final-answer summaries, but it is still not a fully mature end-to-end operator web workflow.
+- Web-aware behavior is more honest and traceable than before, including explicit approval-required child states, a dedicated final-answer `Web execution` section with per-status counts/subquery details, and richer provenance summaries, but it is still not a fully mature end-to-end operator web workflow.
 - Child execution is cleaner and more shared than before, but not yet fully runtime/provider-owned in every seam.
 - Recursive traces now capture novelty/progress signals per child step, but the runtime still uses lightweight heuristics rather than a full planner or formal verifier.
 - OAuth currently depends on a localhost callback and manual URL opening when no browser opener is available.

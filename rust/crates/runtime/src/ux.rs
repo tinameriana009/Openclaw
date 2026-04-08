@@ -49,10 +49,36 @@ pub struct ConfidenceNote {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebExecutionDetail {
+    pub subquery_id: String,
+    pub status: String,
+    pub approval: String,
+    pub query: Option<String>,
+    pub evidence_count: u32,
+    pub degraded: bool,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebExecutionSummary {
+    pub total: usize,
+    pub approved: usize,
+    pub approval_required: usize,
+    pub succeeded: usize,
+    pub succeeded_with_fetched_evidence: usize,
+    pub no_evidence: usize,
+    pub failed: usize,
+    pub skipped: usize,
+    pub degraded: usize,
+    pub details: Vec<WebExecutionDetail>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FinalAnswer {
     pub body: String,
     pub citations: Vec<Citation>,
     pub confidence: Option<ConfidenceNote>,
+    pub web: Option<WebExecutionSummary>,
     pub trace_id: Option<String>,
 }
 
@@ -268,6 +294,26 @@ impl FinalAnswer {
             sections.push(confidence_lines.join("\n"));
         }
 
+        if let Some(web) = &self.web {
+            let mut web_lines = vec![
+                "Web execution".to_string(),
+                format!("  Web-aware subqueries          {}", web.total),
+                format!("  Approved                      {}", web.approved),
+                format!("  Approval required             {}", web.approval_required),
+                format!("  Succeeded                     {}", web.succeeded),
+                format!("  With fetched evidence         {}", web.succeeded_with_fetched_evidence),
+                format!("  No evidence attached          {}", web.no_evidence),
+                format!("  Failed                        {}", web.failed),
+                format!("  Skipped                       {}", web.skipped),
+                format!("  Degraded                      {}", web.degraded),
+            ];
+            if !web.details.is_empty() {
+                web_lines.push("  Subquery details".to_string());
+                web_lines.extend(web.details.iter().map(render_web_execution_detail));
+            }
+            sections.push(web_lines.join("\n"));
+        }
+
         if let Some(trace_id) = &self.trace_id {
             sections.push(format!("Trace reference\n  Id               {trace_id}"));
         }
@@ -278,6 +324,23 @@ impl FinalAnswer {
             .collect::<Vec<_>>()
             .join("\n\n")
     }
+}
+
+fn render_web_execution_detail(detail: &WebExecutionDetail) -> String {
+    let mut line = format!(
+        "  - {}: status={}; approval={}; evidence={}",
+        detail.subquery_id, detail.status, detail.approval, detail.evidence_count
+    );
+    if detail.degraded {
+        line.push_str("; degraded=yes");
+    }
+    if let Some(query) = detail.query.as_deref() {
+        line.push_str(&format!("; query=\"{query}\""));
+    }
+    if let Some(note) = detail.note.as_deref() {
+        line.push_str(&format!("; note={note}"));
+    }
+    line
 }
 
 fn render_citation(citation: &Citation) -> String {
@@ -296,7 +359,7 @@ fn render_citation(citation: &Citation) -> String {
 mod tests {
     use super::{
         Citation, ConfidenceLevel, ConfidenceNote, EvidenceProvenance, ExecutionProfile,
-        FinalAnswer,
+        FinalAnswer, WebExecutionDetail, WebExecutionSummary,
     };
 
     #[test]
@@ -349,6 +412,37 @@ mod tests {
                 summary: "The implementation matches the current fixture coverage.".to_string(),
                 gaps: vec!["A real recursive controller is not wired yet.".to_string()],
             }),
+            web: Some(WebExecutionSummary {
+                total: 2,
+                approved: 1,
+                approval_required: 1,
+                succeeded: 1,
+                succeeded_with_fetched_evidence: 1,
+                no_evidence: 0,
+                failed: 0,
+                skipped: 0,
+                degraded: 1,
+                details: vec![
+                    WebExecutionDetail {
+                        subquery_id: "subq-1".to_string(),
+                        status: "succeeded".to_string(),
+                        approval: "approved".to_string(),
+                        query: Some("latest release".to_string()),
+                        evidence_count: 1,
+                        degraded: false,
+                        note: Some("fetched from minimal adapter".to_string()),
+                    },
+                    WebExecutionDetail {
+                        subquery_id: "subq-2".to_string(),
+                        status: "approval_required".to_string(),
+                        approval: "not approved".to_string(),
+                        query: Some("current version".to_string()),
+                        evidence_count: 0,
+                        degraded: true,
+                        note: Some("explicit approval required before web fetch".to_string()),
+                    },
+                ],
+            }),
             trace_id: Some("trace-123".to_string()),
         };
 
@@ -360,6 +454,10 @@ mod tests {
         assert!(rendered.contains("Web sources"));
         assert!(rendered.contains("[W1] Example spec"));
         assert!(rendered.contains("Confidence\n  Level            medium"));
+        assert!(rendered.contains("Web execution"));
+        assert!(rendered.contains("Web-aware subqueries          2"));
+        assert!(rendered.contains("Approval required             1"));
+        assert!(rendered.contains("subq-2: status=approval_required; approval=not approved; evidence=0; degraded=yes; query=\"current version\""));
         assert!(rendered.contains("Trace reference\n  Id               trace-123"));
     }
 }

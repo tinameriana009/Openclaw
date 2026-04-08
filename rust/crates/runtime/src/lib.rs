@@ -130,7 +130,8 @@ pub use usage::{
 };
 pub use ux::{
     Citation, ConfidenceLevel, ConfidenceNote, EvidenceProvenance, ExecutionProfile,
-    ExecutionProfileConfig, ExecutionProfileParseError, FinalAnswer,
+    ExecutionProfileConfig, ExecutionProfileParseError, FinalAnswer, WebExecutionDetail,
+    WebExecutionSummary,
 };
 
 #[cfg(test)]

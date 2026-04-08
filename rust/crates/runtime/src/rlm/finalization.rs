@@ -11,7 +11,10 @@ use crate::hybrid::{
 };
 use crate::json::JsonValue;
 use crate::trace::{TraceEventType, TraceLedger};
-use crate::ux::{Citation, ConfidenceLevel, ConfidenceNote, EvidenceProvenance, FinalAnswer};
+use crate::ux::{
+    Citation, ConfidenceLevel, ConfidenceNote, EvidenceProvenance, FinalAnswer,
+    WebExecutionDetail, WebExecutionSummary,
+};
 use telemetry::SessionTracer;
 
 use super::helpers::{
@@ -23,7 +26,7 @@ use super::types::{
     RecursiveRuntimeState, RecursiveStopReason,
 };
 
-fn summarize_web_execution(child_outputs: &[ChildSubqueryOutput]) -> Option<String> {
+fn summarize_web_execution(child_outputs: &[ChildSubqueryOutput]) -> Option<WebExecutionSummary> {
     let mut total = 0usize;
     let mut approved = 0usize;
     let mut approval_required = 0usize;
@@ -32,7 +35,8 @@ fn summarize_web_execution(child_outputs: &[ChildSubqueryOutput]) -> Option<Stri
     let mut failed = 0usize;
     let mut degraded = 0usize;
     let mut succeeded = 0usize;
-    let mut with_evidence = 0usize;
+    let mut succeeded_with_fetched_evidence = 0usize;
+    let mut details = Vec::new();
 
     for output in child_outputs {
         let Some(execution) = output.web_execution.as_ref() else {
@@ -45,7 +49,12 @@ fn summarize_web_execution(child_outputs: &[ChildSubqueryOutput]) -> Option<Stri
         match execution.status {
             crate::WebExecutionStatus::ApprovalRequired => approval_required += 1,
             crate::WebExecutionStatus::Skipped => skipped += 1,
-            crate::WebExecutionStatus::Succeeded => succeeded += 1,
+            crate::WebExecutionStatus::Succeeded => {
+                succeeded += 1;
+                if execution.evidence_count > 0 {
+                    succeeded_with_fetched_evidence += 1;
+                }
+            }
             crate::WebExecutionStatus::NoEvidence => no_evidence += 1,
             crate::WebExecutionStatus::Failed => failed += 1,
             crate::WebExecutionStatus::NotRequested => {}
@@ -53,18 +62,37 @@ fn summarize_web_execution(child_outputs: &[ChildSubqueryOutput]) -> Option<Stri
         if execution.degraded {
             degraded += 1;
         }
-        if execution.evidence_count > 0 {
-            with_evidence += 1;
-        }
+        details.push(WebExecutionDetail {
+            subquery_id: output.subquery_id.clone(),
+            status: execution.status.as_str().to_string(),
+            approval: if execution.approved {
+                "approved".to_string()
+            } else {
+                "not approved".to_string()
+            },
+            query: execution.query.clone(),
+            evidence_count: execution.evidence_count,
+            degraded: execution.degraded,
+            note: execution.note.clone().or_else(|| output.web_execution_note.clone()),
+        });
     }
 
     if total == 0 {
         return None;
     }
 
-    Some(format!(
-        "Web execution summary: web-aware subqueries={total}, approved subqueries={approved}, approval-required subqueries={approval_required}, successful web fetches={succeeded}, subqueries with attached web evidence={with_evidence}, no-evidence outcomes={no_evidence}, failed web outcomes={failed}, skipped web paths={skipped}, degraded web outcomes={degraded}.",
-    ))
+    Some(WebExecutionSummary {
+        total,
+        approved,
+        approval_required,
+        succeeded,
+        succeeded_with_fetched_evidence,
+        no_evidence,
+        failed,
+        skipped,
+        degraded,
+        details,
+    })
 }
 
 fn format_recursive_answer(
@@ -132,8 +160,20 @@ fn format_recursive_answer(
             escalation_reason_label(escalation.reason)
         ));
     }
-    if let Some(summary) = summarize_web_execution(child_outputs) {
-        gaps.push(summary);
+    let web = summarize_web_execution(child_outputs);
+    if let Some(summary) = web.as_ref() {
+        gaps.push(format!(
+            "Web execution summary: web-aware subqueries={}, approved subqueries={}, approval-required subqueries={}, successful web fetches={}, subqueries with fetched web evidence={}, no-evidence outcomes={}, failed web outcomes={}, skipped web paths={}, degraded web outcomes={}.",
+            summary.total,
+            summary.approved,
+            summary.approval_required,
+            summary.succeeded,
+            summary.succeeded_with_fetched_evidence,
+            summary.no_evidence,
+            summary.failed,
+            summary.skipped,
+            summary.degraded,
+        ));
     }
     for note in child_outputs
         .iter()
@@ -163,6 +203,7 @@ fn format_recursive_answer(
         body,
         citations,
         confidence: Some(confidence),
+        web,
         trace_id: Some(trace_id.to_string()),
     }
     .render_text()
