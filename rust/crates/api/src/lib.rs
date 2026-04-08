@@ -5,13 +5,16 @@ mod prompt_cache;
 mod providers;
 mod sse;
 mod types;
+mod web;
 
 pub use child::{
     build_configured_provider_extractive_child_executor, build_provider_backed_child_executor,
     build_provider_child_executor, build_provider_extractive_child_executor,
-    collect_minimal_web_evidence, format_provider_child_init_reason,
-    format_provider_execution_fallback_reason, render_extractive_child_answer,
-    resolve_provider_child_model, MinimalWebEvidence, MinimalWebEvidenceFetcher,
+    build_runtime_configured_provider_extractive_child_executor, collect_minimal_web_evidence,
+    format_provider_child_init_reason, format_provider_execution_fallback_reason,
+    render_extractive_child_answer, resolve_provider_child_model,
+    resolve_runtime_provider_child_auth, runtime_minimal_web_evidence_fetcher,
+    runtime_provider_child_auth_resolver, MinimalWebEvidence, MinimalWebEvidenceFetcher,
     ProviderBackedChildExecutor, ProviderChildAuthResolver, ProviderChildBackend,
     ProviderChildExecutor, ProviderFallbackRenderer, WebEvidenceCollector,
 };
@@ -36,6 +39,7 @@ pub use types::{
     MessageResponse, MessageStartEvent, MessageStopEvent, OutputContentBlock, StreamEvent,
     ToolChoice, ToolDefinition, ToolResultContentBlock, Usage,
 };
+pub use web::minimal_web_research;
 
 pub use telemetry::{
     AnalyticsEvent, AnthropicRequestProfile, ClientIdentity, JsonlTelemetrySink,

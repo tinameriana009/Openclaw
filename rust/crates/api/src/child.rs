@@ -8,8 +8,8 @@ use runtime::{
 use tokio::runtime::Runtime;
 
 use crate::{
-    max_tokens_for_model, ApiError, AuthSource, InputMessage, MessageRequest, MessageResponse,
-    OutputContentBlock, PromptCache, ProviderClient,
+    max_tokens_for_model, minimal_web_research, resolve_startup_auth_source, ApiError, AuthSource,
+    InputMessage, MessageRequest, MessageResponse, OutputContentBlock, PromptCache, ProviderClient,
 };
 
 pub type WebEvidenceCollector = Arc<
@@ -268,6 +268,47 @@ pub fn build_configured_provider_extractive_child_executor(
         &model,
         auth_resolver,
         web_evidence_collector,
+    )
+}
+
+pub fn resolve_runtime_provider_child_auth(cwd: &Path) -> Result<AuthSource, ApiError> {
+    resolve_startup_auth_source(|| {
+        let config = ConfigLoader::default_for(cwd).load().map_err(|error| {
+            ApiError::Auth(format!("failed to load runtime OAuth config: {error}"))
+        })?;
+        Ok(config.oauth().cloned())
+    })
+}
+
+#[must_use]
+pub fn runtime_provider_child_auth_resolver(cwd: &Path) -> ProviderChildAuthResolver {
+    let cwd = cwd.to_path_buf();
+    Arc::new(move || {
+        resolve_runtime_provider_child_auth(&cwd)
+            .map(Some)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[must_use]
+pub fn runtime_minimal_web_evidence_fetcher() -> MinimalWebEvidenceFetcher {
+    Arc::new(minimal_web_research)
+}
+
+#[must_use]
+pub fn build_runtime_configured_provider_extractive_child_executor(
+    cwd: &Path,
+    session_id: &str,
+    active_model: Option<&str>,
+    default_model: &str,
+) -> ProviderBackedChildExecutor {
+    build_configured_provider_extractive_child_executor(
+        cwd,
+        session_id,
+        active_model,
+        default_model,
+        runtime_provider_child_auth_resolver(cwd),
+        runtime_minimal_web_evidence_fetcher(),
     )
 }
 
@@ -747,6 +788,13 @@ mod tests {
         std::env::temp_dir().join(format!("api-child-{label}-{nanos}"))
     }
 
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .expect("env lock")
+    }
+
     fn sample_request(
         mode: WebAccessMode,
         web_research_query: Option<&str>,
@@ -808,6 +856,34 @@ mod tests {
             resolve_provider_child_model(&cwd, Some("claude-sonnet-4-6"), "claude-opus-4-6");
         assert_eq!(resolved, "claude-haiku-4-5-20251213");
 
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn resolve_runtime_provider_child_auth_loads_oauth_config_for_refreshable_tokens() {
+        let _guard = env_lock();
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
+
+        let cwd = temp_dir("runtime-auth");
+        fs::create_dir_all(cwd.join(".claw")).expect("config dir");
+        fs::write(
+            cwd.join(".claw").join("settings.json"),
+            r#"{"oauth":{"clientId":"runtime-client","authorizeUrl":"https://console.test/oauth/authorize","tokenUrl":"https://console.test/oauth/token","callbackPort":54545}}"#,
+        )
+        .expect("write settings");
+        runtime::save_oauth_credentials(&runtime::OAuthTokenSet {
+            access_token: "saved-access-token".to_string(),
+            refresh_token: Some("saved-refresh-token".to_string()),
+            expires_at: Some(u64::MAX),
+            scopes: vec![],
+        })
+        .expect("save oauth credentials");
+
+        let auth = resolve_runtime_provider_child_auth(&cwd).expect("runtime auth");
+        assert_eq!(auth.bearer_token(), Some("saved-access-token"));
+
+        runtime::clear_oauth_credentials().expect("clear oauth credentials");
         let _ = fs::remove_dir_all(cwd);
     }
 

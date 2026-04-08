@@ -24,13 +24,12 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use api::{
-    build_configured_provider_extractive_child_executor, collect_minimal_web_evidence,
+    build_runtime_configured_provider_extractive_child_executor, collect_minimal_web_evidence,
     format_provider_child_init_reason, render_extractive_child_answer,
-    resolve_provider_child_model, resolve_startup_auth_source, AnthropicClient, ApiError,
-    AuthSource, ContentBlockDelta, InputContentBlock, InputMessage, MessageRequest,
-    MessageResponse, MinimalWebEvidence, OutputContentBlock, PromptCache,
-    ProviderChildAuthResolver, ProviderClient, StreamEvent as ApiStreamEvent, ToolChoice,
-    ToolDefinition, ToolResultContentBlock,
+    resolve_provider_child_model, resolve_runtime_provider_child_auth, resolve_startup_auth_source,
+    AnthropicClient, ApiError, AuthSource, ContentBlockDelta, InputContentBlock, InputMessage,
+    MessageRequest, MessageResponse, OutputContentBlock, PromptCache, ProviderClient,
+    StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition, ToolResultContentBlock,
 };
 
 use commands::{
@@ -47,8 +46,8 @@ use runtime::{
     generate_state, inspect_corpus, list_corpora, load_corpus, load_system_prompt,
     parse_oauth_callback_request_target, resolve_sandbox_status, save_oauth_credentials,
     search_corpus, slice_corpus, ApiClient, ApiRequest, AssistantEvent, CompactionConfig,
-    ConfigLoader, ConfigSource, ContentBlock, ConversationMessage, ConversationRuntime, CorpusAttachOptions,
-    ExecutionProfile, MessageRole, OAuthAuthorizationRequest, OAuthConfig,
+    ConfigLoader, ConfigSource, ContentBlock, ConversationMessage, ConversationRuntime,
+    CorpusAttachOptions, ExecutionProfile, MessageRole, OAuthAuthorizationRequest, OAuthConfig,
     OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext, PromptCacheEvent,
     ResolvedPermissionMode, RuntimeError, Session, TokenUsage, ToolError, ToolExecutor,
     UsageTracker,
@@ -1452,30 +1451,11 @@ fn build_corpus_answer_executor(
     session_id: Option<&str>,
     active_model: Option<&str>,
 ) -> api::ProviderBackedChildExecutor {
-    let auth_resolver: ProviderChildAuthResolver = Arc::new(|| {
-        resolve_cli_auth_source()
-            .map(Some)
-            .map_err(|error| error.to_string())
-    });
-    build_configured_provider_extractive_child_executor(
+    build_runtime_configured_provider_extractive_child_executor(
         cwd,
         session_id.unwrap_or("corpus-cli"),
         active_model,
         DEFAULT_MODEL,
-        auth_resolver,
-        Arc::new(|query, fetch_limit| {
-            minimal_web_research(query, fetch_limit).map(|evidence| {
-                evidence
-                    .into_iter()
-                    .map(|item| MinimalWebEvidence {
-                        title: item.title,
-                        url: item.url,
-                        snippet: item.snippet,
-                        fetched: item.fetched,
-                    })
-                    .collect()
-            })
-        }),
     )
 }
 
@@ -4366,13 +4346,8 @@ impl AnthropicRuntimeClient {
 }
 
 fn resolve_cli_auth_source() -> Result<AuthSource, Box<dyn std::error::Error>> {
-    Ok(resolve_startup_auth_source(|| {
-        let cwd = env::current_dir().map_err(api::ApiError::from)?;
-        let config = ConfigLoader::default_for(&cwd).load().map_err(|error| {
-            api::ApiError::Auth(format!("failed to load runtime OAuth config: {error}"))
-        })?;
-        Ok(config.oauth().cloned())
-    })?)
+    let cwd = env::current_dir()?;
+    Ok(resolve_runtime_provider_child_auth(&cwd)?)
 }
 
 impl ApiClient for AnthropicRuntimeClient {
@@ -7314,7 +7289,8 @@ UU conflicted.rs",
 
 #[cfg(test)]
 mod corpus_answer_tests {
-    use super::{minimal_web_research, DEFAULT_MODEL};
+    use super::DEFAULT_MODEL;
+    use api::minimal_web_research;
     use api::{
         collect_minimal_web_evidence, format_provider_child_init_reason,
         render_extractive_child_answer, resolve_provider_child_model, ApiError, MessageResponse,
@@ -7414,19 +7390,7 @@ mod corpus_answer_tests {
     fn collect_fixture_web_evidence(
         request: &ChildSubqueryRequest,
     ) -> Result<Vec<runtime::EvidenceRecord>, runtime::RecursiveRuntimeError> {
-        collect_minimal_web_evidence(request, &|query, fetch_limit| {
-            minimal_web_research(query, fetch_limit).map(|evidence| {
-                evidence
-                    .into_iter()
-                    .map(|item| MinimalWebEvidence {
-                        title: item.title,
-                        url: item.url,
-                        snippet: item.snippet,
-                        fetched: item.fetched,
-                    })
-                    .collect()
-            })
-        })
+        collect_minimal_web_evidence(request, &minimal_web_research)
     }
 
     #[test]
