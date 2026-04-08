@@ -164,6 +164,24 @@ struct QueryFeatures {
     compact_terms: Vec<String>,
     semantic_terms: Vec<SemanticTerm>,
     language_terms: Vec<String>,
+    intent: QueryIntent,
+}
+
+#[derive(Debug, Clone, Default)]
+struct QueryIntent {
+    file_lookup: bool,
+    implementation_lookup: bool,
+    docs_lookup: bool,
+    continuity_lookup: bool,
+    root_hint_tokens: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct DocumentSignalSummary {
+    matched_tokens: usize,
+    path_hits: usize,
+    heading_hits: usize,
+    root_hits: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -846,6 +864,13 @@ pub fn search_corpus_manifest(
             .to_ascii_lowercase();
         let normalized_basename = normalize_for_match(&basename_lower).replace(' ', "");
         let normalized_root_basename = normalize_for_match(&root_basename_lower).replace(' ', "");
+        let document_signal = summarize_document_signals(
+            doc,
+            &tokens,
+            &path_lower,
+            &source_root_lower,
+            &heading_text,
+        );
         let mut document_hits = Vec::new();
         for chunk in &doc.chunks {
             total_candidate_chunks = total_candidate_chunks.saturating_add(1);
@@ -1105,6 +1130,17 @@ pub fn search_corpus_manifest(
                     reasons.push(format!("span:{span}"));
                 }
             }
+            apply_query_intent_boosts(
+                &query_features.intent,
+                &document_signal,
+                matched_tokens,
+                &mut score,
+                &mut reasons,
+                &path_lower,
+                &source_root_lower,
+                &heading_text,
+                &doc.language,
+            );
             total_matching_chunks = total_matching_chunks.saturating_add(1);
             document_hits.push(ScoredChunkHit {
                 hit: RetrievalHit {
@@ -1583,7 +1619,10 @@ fn infer_corpus_kind(documents: &[CorpusDocument]) -> CorpusKind {
 }
 
 fn query_features(query: &str) -> QueryFeatures {
-    let mut features = QueryFeatures::default();
+    let mut features = QueryFeatures {
+        intent: detect_query_intent(query),
+        ..QueryFeatures::default()
+    };
     let mut seen_tokens = std::collections::BTreeSet::new();
     let mut seen_raw = std::collections::BTreeSet::new();
     let mut seen_compact = std::collections::BTreeSet::new();
@@ -1630,6 +1669,184 @@ fn query_features(query: &str) -> QueryFeatures {
         }
     }
     features
+}
+
+fn detect_query_intent(query: &str) -> QueryIntent {
+    let lowered = query.to_ascii_lowercase();
+    let normalized = normalize_for_match(query);
+    let file_lookup = [
+        "where is",
+        "which file",
+        "what file",
+        "file",
+        "path",
+        "module",
+        "directory",
+        "folder",
+        "readme",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle) || normalized.contains(needle));
+    let implementation_lookup = [
+        "implement",
+        "implementation",
+        "handler",
+        "function",
+        "struct",
+        "class",
+        "method",
+        "code path",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle) || normalized.contains(needle));
+    let docs_lookup = ["docs", "documentation", "guide", "readme", "manual"]
+        .iter()
+        .any(|needle| lowered.contains(needle) || normalized.contains(needle));
+    let continuity_lookup = [
+        "flow",
+        "walkthrough",
+        "end to end",
+        "step by step",
+        "pipeline",
+        "sequence",
+        "lifecycle",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle) || normalized.contains(needle));
+    let root_hint_tokens = query
+        .split_whitespace()
+        .filter(|token| token.len() >= 3)
+        .filter(|token| {
+            let lower = token.to_ascii_lowercase();
+            !matches!(
+                lower.as_str(),
+                "where"
+                    | "which"
+                    | "what"
+                    | "file"
+                    | "path"
+                    | "docs"
+                    | "guide"
+                    | "manual"
+                    | "readme"
+                    | "code"
+                    | "flow"
+                    | "walkthrough"
+            )
+        })
+        .flat_map(split_identifier_parts)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    QueryIntent {
+        file_lookup,
+        implementation_lookup,
+        docs_lookup,
+        continuity_lookup,
+        root_hint_tokens,
+    }
+}
+
+fn summarize_document_signals(
+    doc: &CorpusDocument,
+    tokens: &[String],
+    path_lower: &str,
+    source_root_lower: &str,
+    heading_text: &str,
+) -> DocumentSignalSummary {
+    let body_lower = doc
+        .chunks
+        .iter()
+        .filter_map(|chunk| chunk.metadata.get("text").and_then(JsonValue::as_str))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase();
+    let mut summary = DocumentSignalSummary::default();
+    for token in tokens {
+        let path_hit = path_lower.contains(token);
+        let heading_hit = heading_text.contains(token);
+        let root_hit = source_root_lower.contains(token);
+        if path_hit || heading_hit || root_hit || body_lower.contains(token) {
+            summary.matched_tokens += 1;
+        }
+        if path_hit {
+            summary.path_hits += 1;
+        }
+        if heading_hit {
+            summary.heading_hits += 1;
+        }
+        if root_hit {
+            summary.root_hits += 1;
+        }
+    }
+    summary
+}
+
+fn apply_query_intent_boosts(
+    intent: &QueryIntent,
+    document_signal: &DocumentSignalSummary,
+    matched_tokens: usize,
+    score: &mut f64,
+    reasons: &mut Vec<String>,
+    path_lower: &str,
+    source_root_lower: &str,
+    heading_text: &str,
+    language: &Option<String>,
+) {
+    if intent.file_lookup && document_signal.path_hits > 0 {
+        *score += 2.5 + document_signal.path_hits as f64 * 0.9;
+        reasons.push(format!(
+            "intent:file-lookup:pathx{}",
+            document_signal.path_hits
+        ));
+    }
+    if intent.file_lookup && document_signal.root_hits > 0 {
+        *score += 1.4 + document_signal.root_hits as f64 * 0.7;
+        reasons.push(format!(
+            "intent:file-lookup:rootx{}",
+            document_signal.root_hits
+        ));
+    }
+    if intent.docs_lookup {
+        let looks_like_docs = matches!(language.as_deref(), Some("markdown" | "text"))
+            || path_lower.contains("docs")
+            || path_lower.contains("readme")
+            || heading_text.contains("guide");
+        if looks_like_docs {
+            *score += 2.8;
+            reasons.push("intent:docs".to_string());
+        }
+    }
+    if intent.implementation_lookup && !matches!(language.as_deref(), Some("markdown" | "text")) {
+        *score += 2.6;
+        reasons.push("intent:implementation".to_string());
+    }
+    if intent.continuity_lookup && document_signal.matched_tokens > matched_tokens {
+        *score += 1.8;
+        reasons.push(format!(
+            "document-continuity:{}/{}",
+            document_signal.matched_tokens, matched_tokens
+        ));
+    }
+    let path_hint_matches = intent
+        .root_hint_tokens
+        .iter()
+        .filter(|token| path_lower.contains(token.as_str()))
+        .count();
+    if path_hint_matches > 0 && intent.file_lookup {
+        *score += path_hint_matches as f64 * 0.8;
+        reasons.push(format!("intent:path-hintx{path_hint_matches}"));
+    }
+    let root_hint_matches = intent
+        .root_hint_tokens
+        .iter()
+        .filter(|token| source_root_lower.contains(token.as_str()))
+        .count();
+    if root_hint_matches > 0 && intent.file_lookup {
+        *score += root_hint_matches as f64 * 0.9;
+        reasons.push(format!("intent:root-hintx{root_hint_matches}"));
+    }
 }
 
 fn expand_query_token(token: &str) -> Vec<String> {
@@ -2377,6 +2594,126 @@ mod tests {
             result.hits[0].reason.contains("semantic-body:")
                 || result.hits[0].reason.contains("semantic-heading:")
         );
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_routes_file_lookup_queries_toward_paths_and_roots() {
+        let cwd = temp_dir("workspace-file-intent");
+        let src_root = cwd.join("src");
+        let docs_root = cwd.join("docs");
+        fs::create_dir_all(&src_root).expect("mkdir src");
+        fs::create_dir_all(&docs_root).expect("mkdir docs");
+        fs::write(
+            src_root.join("auth_callback.rs"),
+            "pub fn finalize_callback() {}
+",
+        )
+        .expect("write impl");
+        fs::write(
+            docs_root.join("callback_notes.md"),
+            "# Callback
+This guide mentions the callback flow in prose.
+",
+        )
+        .expect("write docs");
+
+        let manifest = attach_corpus(
+            &cwd,
+            &[src_root.clone(), docs_root.clone()],
+            CorpusAttachOptions::default(),
+        )
+        .expect("attach corpus");
+        let result = search_corpus(
+            &cwd,
+            &manifest.corpus_id,
+            "which file has auth callback implementation",
+            5,
+            None,
+        )
+        .expect("search");
+
+        assert_eq!(result.hits[0].path, "auth_callback.rs");
+        assert!(result.hits[0].reason.contains("intent:file-lookup:"));
+        assert!(result.hits[0].reason.contains("intent:implementation"));
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_routes_docs_queries_toward_markdown_guides() {
+        let cwd = temp_dir("workspace-docs-intent");
+        let root = cwd.join("mixed");
+        fs::create_dir_all(&root).expect("mkdir");
+        fs::write(
+            root.join("config.rs"),
+            "pub fn config_overview() {}
+",
+        )
+        .expect("write code");
+        fs::write(
+            root.join("config-guide.md"),
+            "# Config Guide
+Configuration walkthrough for operators.
+",
+        )
+        .expect("write docs");
+
+        let manifest = attach_corpus(&cwd, &[root.clone()], CorpusAttachOptions::default())
+            .expect("attach corpus");
+        let result = search_corpus(&cwd, &manifest.corpus_id, "docs guide for config", 5, None)
+            .expect("search");
+
+        assert_eq!(result.hits[0].path, "config-guide.md");
+        assert!(result.hits[0].reason.contains("intent:docs"));
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_adds_document_continuity_signal_for_flow_queries() {
+        let cwd = temp_dir("workspace-document-continuity");
+        let root = cwd.join("docs");
+        fs::create_dir_all(&root).expect("mkdir");
+        let bridge = "handoff context ".repeat(16);
+        fs::write(
+            root.join("flow.md"),
+            format!(
+                "# Flow
+
+authentication setup and token minting
+
+{bridge}
+
+session lifecycle cleanup and revocation
+"
+            ),
+        )
+        .expect("write flow");
+
+        let manifest = attach_corpus(
+            &cwd,
+            &[root.clone()],
+            CorpusAttachOptions {
+                chunk_bytes: 128,
+                ..CorpusAttachOptions::default()
+            },
+        )
+        .expect("attach corpus");
+        let result = search_corpus(
+            &cwd,
+            &manifest.corpus_id,
+            "authentication session flow",
+            8,
+            None,
+        )
+        .expect("search");
+
+        assert!(result
+            .hits
+            .iter()
+            .any(|hit| hit.reason.contains("document-continuity:")));
 
         let _ = fs::remove_dir_all(cwd);
     }
