@@ -37,6 +37,20 @@ pub type ProviderFallbackRenderer =
     Arc<dyn Fn(&ChildSubqueryRequest, &str) -> ChildSubqueryOutput + Send + Sync>;
 pub type ProviderBackedChildExecutor = runtime::FallbackChildSubqueryExecutor<ProviderChildBackend>;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderChildExecutorConfig {
+    pub prompt_cache_namespace: String,
+}
+
+impl ProviderChildExecutorConfig {
+    #[must_use]
+    pub fn recursive_task(session_id: &str) -> Self {
+        Self {
+            prompt_cache_namespace: format!("{session_id}-recursive-task"),
+        }
+    }
+}
+
 pub struct ProviderChildExecutor {
     runtime: Runtime,
     client: ProviderClient,
@@ -85,16 +99,30 @@ impl ProviderChildExecutor {
     }
 }
 
+pub fn build_provider_child_executor_with_config(
+    model: &str,
+    anthropic_auth: Option<AuthSource>,
+    web_evidence_collector: WebEvidenceCollector,
+    config: ProviderChildExecutorConfig,
+) -> Result<ProviderChildExecutor, String> {
+    let client = ProviderClient::from_model_with_anthropic_auth(model, anthropic_auth)
+        .map_err(|error| format_provider_child_init_reason(model, &error))?
+        .with_prompt_cache(PromptCache::new(&config.prompt_cache_namespace));
+    ProviderChildExecutor::new(client, model, web_evidence_collector)
+}
+
 pub fn build_provider_child_executor(
     session_id: &str,
     model: &str,
     anthropic_auth: Option<AuthSource>,
     web_evidence_collector: WebEvidenceCollector,
 ) -> Result<ProviderChildExecutor, String> {
-    let client = ProviderClient::from_model_with_anthropic_auth(model, anthropic_auth)
-        .map_err(|error| format_provider_child_init_reason(model, &error))?
-        .with_prompt_cache(PromptCache::new(&format!("{session_id}-corpus-answer")));
-    ProviderChildExecutor::new(client, model, web_evidence_collector)
+    build_provider_child_executor_with_config(
+        model,
+        anthropic_auth,
+        web_evidence_collector,
+        ProviderChildExecutorConfig::recursive_task(session_id),
+    )
 }
 
 pub enum ProviderChildBackend {
@@ -334,46 +362,67 @@ pub fn build_runtime_configured_provider_recursive_runtime<'a>(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderRecursiveRuntimeConfig<'a> {
+    pub cwd: &'a Path,
+    pub session_id: &'a str,
+    pub active_model: Option<&'a str>,
+    pub default_model: &'a str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderRecursiveTaskRequest<'a> {
+    pub runtime: ProviderRecursiveRuntimeConfig<'a>,
+    pub corpus: &'a runtime::CorpusManifest,
+    pub task_id: &'a str,
+    pub task: &'a str,
+    pub profile: ExecutionProfile,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderRecursiveRunArtifacts {
     pub telemetry_path: PathBuf,
     pub trace_dir: PathBuf,
 }
 
-pub fn run_runtime_configured_provider_recursive_query(
-    cwd: &Path,
-    corpus: &runtime::CorpusManifest,
-    session_id: &str,
-    task_id: &str,
-    task: &str,
-    profile: ExecutionProfile,
-    active_model: Option<&str>,
-    default_model: &str,
+#[must_use]
+pub fn build_runtime_configured_provider_recursive_task_runtime<'a>(
+    config: &ProviderRecursiveRuntimeConfig<'a>,
+    corpus: &'a runtime::CorpusManifest,
+) -> runtime::RecursiveConversationRuntime<'a, ProviderBackedChildExecutor> {
+    build_runtime_configured_provider_recursive_runtime(
+        config.cwd,
+        corpus,
+        config.session_id,
+        config.active_model,
+        config.default_model,
+    )
+}
+
+pub fn run_runtime_configured_provider_recursive_task(
+    request: ProviderRecursiveTaskRequest<'_>,
 ) -> Result<(RecursiveExecutionResult, ProviderRecursiveRunArtifacts), RecursiveRuntimeError> {
-    let resolved = profile.resolve();
-    let telemetry_path = cwd
+    let resolved = request.profile.resolve();
+    let telemetry_path = request
+        .runtime
+        .cwd
         .join(".claw")
         .join("telemetry")
         .join("recursive-runtime.jsonl");
     let tracer = SessionTracer::new(
-        session_id,
+        request.runtime.session_id,
         Arc::new(JsonlTelemetrySink::new(&telemetry_path).map_err(|error| {
             RecursiveRuntimeError::ChildExecution(format!(
                 "failed to initialize recursive runtime telemetry sink: {error}"
             ))
         })?),
     );
-    let trace_dir = cwd.join(".claw").join("trace");
-    let runtime = build_runtime_configured_provider_recursive_runtime(
-        cwd,
-        corpus,
-        session_id,
-        active_model,
-        default_model,
-    );
+    let trace_dir = request.runtime.cwd.join(".claw").join("trace");
+    let runtime =
+        build_runtime_configured_provider_recursive_task_runtime(&request.runtime, request.corpus);
     let result = runtime.run_with_tracer_and_policy(
-        session_id,
-        task_id,
-        task,
+        request.runtime.session_id,
+        request.task_id,
+        request.task,
         RuntimeBudget {
             max_depth: resolved
                 .rlm
@@ -403,6 +452,30 @@ pub fn run_runtime_configured_provider_recursive_query(
             trace_dir,
         },
     ))
+}
+
+pub fn run_runtime_configured_provider_recursive_query(
+    cwd: &Path,
+    corpus: &runtime::CorpusManifest,
+    session_id: &str,
+    task_id: &str,
+    task: &str,
+    profile: ExecutionProfile,
+    active_model: Option<&str>,
+    default_model: &str,
+) -> Result<(RecursiveExecutionResult, ProviderRecursiveRunArtifacts), RecursiveRuntimeError> {
+    run_runtime_configured_provider_recursive_task(ProviderRecursiveTaskRequest {
+        runtime: ProviderRecursiveRuntimeConfig {
+            cwd,
+            session_id,
+            active_model,
+            default_model,
+        },
+        corpus,
+        task_id,
+        task,
+        profile,
+    })
 }
 
 pub fn collect_minimal_web_evidence(

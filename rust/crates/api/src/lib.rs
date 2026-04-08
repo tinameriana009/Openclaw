@@ -9,16 +9,20 @@ mod web;
 
 pub use child::{
     build_configured_provider_extractive_child_executor, build_provider_backed_child_executor,
-    build_provider_child_executor, build_provider_extractive_child_executor,
+    build_provider_child_executor, build_provider_child_executor_with_config,
+    build_provider_extractive_child_executor,
     build_runtime_configured_provider_extractive_child_executor,
-    build_runtime_configured_provider_recursive_runtime, collect_minimal_web_evidence,
+    build_runtime_configured_provider_recursive_runtime,
+    build_runtime_configured_provider_recursive_task_runtime, collect_minimal_web_evidence,
     format_provider_child_init_reason, format_provider_execution_fallback_reason,
     render_extractive_child_answer, resolve_provider_child_model,
     resolve_runtime_provider_child_auth, run_runtime_configured_provider_recursive_query,
-    runtime_minimal_web_evidence_fetcher, runtime_provider_child_auth_resolver, MinimalWebEvidence,
-    MinimalWebEvidenceFetcher, ProviderBackedChildExecutor, ProviderChildAuthResolver,
-    ProviderChildBackend, ProviderChildExecutor, ProviderFallbackRenderer,
-    ProviderRecursiveRunArtifacts, WebEvidenceCollector,
+    run_runtime_configured_provider_recursive_task, runtime_minimal_web_evidence_fetcher,
+    runtime_provider_child_auth_resolver, MinimalWebEvidence, MinimalWebEvidenceFetcher,
+    ProviderBackedChildExecutor, ProviderChildAuthResolver, ProviderChildBackend,
+    ProviderChildExecutor, ProviderChildExecutorConfig, ProviderFallbackRenderer,
+    ProviderRecursiveRunArtifacts, ProviderRecursiveRuntimeConfig, ProviderRecursiveTaskRequest,
+    WebEvidenceCollector,
 };
 pub use client::{
     oauth_token_is_expired, read_base_url, read_xai_base_url, resolve_saved_oauth_token,
