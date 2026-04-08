@@ -22,8 +22,8 @@ Best current showcase path:
 - the repo-analysis flow, especially via `./scripts/run-repo-analysis-demo.sh`, because it exercises grounded local analysis, session resume, and trace review without depending on Blender or Unreal manual UI loops
 
 Most realistic operator-prep helpers for the more manual workflows:
-- `./scripts/prepare-blender-demo.sh` validates the Blender demo kit, rebuilds the zip artifact, and stages a manual-review bundle under `.demo-artifacts/blender-demo/` with findings/prompt templates plus `bundle-summary.json` and `bundle-checksums.txt` for the next handoff
-- `./scripts/prepare-unreal-demo.sh` validates the Unreal demo kit and stages a plugin/checklist bundle under `.demo-artifacts/unreal-demo/` with findings/prompt templates plus `bundle-summary.json` and `bundle-checksums.txt` for the next handoff
+- `./scripts/prepare-blender-demo.sh` validates the Blender demo kit, rebuilds the zip artifact, and stages a manual-review bundle under `.demo-artifacts/blender-demo/` with findings/prompt templates plus `bundle-summary.json`, `operator-handoff.json`, and `bundle-checksums.txt` for the next handoff
+- `./scripts/prepare-unreal-demo.sh` validates the Unreal demo kit and stages a plugin/checklist bundle under `.demo-artifacts/unreal-demo/` with findings/prompt templates plus `bundle-summary.json`, `operator-handoff.json`, and `bundle-checksums.txt` for the next handoff
 
 ## What ships today
 
@@ -294,7 +294,16 @@ The CLI help also exposes:
 ```text
 /trace summary <trace-file>
 /trace export <trace-file> [destination]
+/trace approve <trace-file>
+/trace replay <trace-file|approval-packet>
+/trace resume <trace-file|approval-packet>
 ```
+
+For the current bounded web-review loop:
+- `/trace approve ...` records an approval packet plus `.review.{json,md}` artifacts
+- `/trace replay ...` reruns an already approved packet and refreshes those review artifacts
+- `/trace resume ...` is the honest approve-and-rerun shortcut; it still does **not** provide browser automation
+- `.claw/web-approvals/index.{json,md}` acts as a lightweight on-disk operator dashboard for the saved review state
 
 ## High-value slash commands
 
