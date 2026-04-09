@@ -191,6 +191,37 @@ fn extract_section_terms(answer: &str, heading: &str, limit: usize) -> Vec<Strin
     collect_terms(captured.iter().map(String::as_str), limit)
 }
 
+fn build_follow_up_query(
+    task: &str,
+    last: &ChildSubqueryOutput,
+    findings_terms: &[String],
+    gap_terms: &[String],
+    validation_terms: &[String],
+    anchor_terms: &[String],
+) -> String {
+    let mut query_parts = vec![task.to_string()];
+
+    if !findings_terms.is_empty() {
+        query_parts.push(format!("findings {}", findings_terms.join(" ")));
+    } else {
+        query_parts.push(last.answer.clone());
+    }
+    if !last.citations.is_empty() {
+        query_parts.push(format!("citations {}", last.citations.join(" ")));
+    }
+    if !gap_terms.is_empty() {
+        query_parts.push(format!("remaining gaps {}", gap_terms.join(" ")));
+    }
+    if !validation_terms.is_empty() {
+        query_parts.push(format!("validation {}", validation_terms.join(" ")));
+    }
+    if !anchor_terms.is_empty() {
+        query_parts.push(format!("anchors {}", anchor_terms.join(" ")));
+    }
+
+    query_parts.join(" ")
+}
+
 pub(super) fn build_iteration_plan(
     task: &str,
     child_outputs: &[ChildSubqueryOutput],
@@ -207,6 +238,10 @@ pub(super) fn build_iteration_plan(
     }
 
     let anchor_terms = collect_anchor_terms(task, child_outputs);
+    let findings_terms = child_outputs
+        .last()
+        .map(|last| extract_section_terms(&last.answer, "findings", 6))
+        .unwrap_or_default();
     let gap_terms = child_outputs
         .last()
         .map(|last| extract_section_terms(&last.answer, "remaining gaps", 4))
@@ -215,40 +250,37 @@ pub(super) fn build_iteration_plan(
         .last()
         .map(|last| extract_section_terms(&last.answer, "validation loop", 4))
         .unwrap_or_default();
-    let mut query_parts = vec![task.to_string()];
-    if let Some(last) = child_outputs.last() {
-        query_parts.push(last.answer.clone());
-        if !last.citations.is_empty() {
-            query_parts.push(last.citations.join(" "));
-        }
-    }
-    if !gap_terms.is_empty() {
-        query_parts.push(format!("remaining gaps {}", gap_terms.join(" ")));
-    }
-    if !validation_terms.is_empty() {
-        query_parts.push(format!("validation {}", validation_terms.join(" ")));
-    }
-    if !anchor_terms.is_empty() {
-        query_parts.push(anchor_terms.join(" "));
-    }
-
+    let last = child_outputs
+        .last()
+        .expect("child outputs should be non-empty for follow-up planning");
     let strategy = if !gap_terms.is_empty() {
         "gap_targeted_followup"
+    } else if !validation_terms.is_empty() {
+        "validation_targeted_followup"
     } else if child_outputs.len() >= 2 {
-        "gap_followup"
+        "synthesis_followup"
     } else {
         "evidence_followup"
     };
     let rationale = if !gap_terms.is_empty() {
         "re-query by carrying forward explicit remaining-gap and validation-loop terms from the last child response instead of only replaying the summary"
+    } else if !validation_terms.is_empty() {
+        "re-query around the concrete validation loop from the last child response so the next pass can inspect the proposed check instead of only repeating the narrative summary"
     } else if child_outputs.len() >= 2 {
-        "re-query with prior findings plus stable anchor terms to chase remaining gaps instead of only echoing the last answer"
+        "re-query with stabilized findings and anchor terms to synthesize repeated evidence instead of only echoing the latest answer"
     } else {
         "re-query with the first child result and stable anchor terms to broaden evidence coverage"
     };
 
     RetrievalPlan {
-        query: query_parts.join(" "),
+        query: build_follow_up_query(
+            task,
+            last,
+            &findings_terms,
+            &gap_terms,
+            &validation_terms,
+            &anchor_terms,
+        ),
         strategy,
         rationale,
         anchor_terms,
@@ -635,13 +667,30 @@ mod tests {
             &[first, second],
         );
 
-        assert_eq!(plan.strategy, "gap_followup");
+        assert_eq!(plan.strategy, "synthesis_followup");
         assert!(plan
             .query
             .contains("second pass confirmed scheduler weakness"));
         assert!(plan.anchor_terms.contains(&"scheduler".to_string()));
         assert!(plan.anchor_terms.contains(&"provenance".to_string()));
         assert!(plan.anchor_terms.contains(&"bundle".to_string()));
+    }
+
+    #[test]
+    fn validation_targeted_iteration_plan_extracts_validation_terms_without_gap_terms() {
+        let first = sample_child_output(
+            "Findings: runtime wiring looks stable
+Validation loop: inspect bundle-summary.json and run python3 tests/validate_unreal_demo.py",
+        );
+        let plan = build_iteration_plan("audit unreal operator handoff", &[first]);
+
+        assert_eq!(plan.strategy, "validation_targeted_followup");
+        assert!(plan
+            .validation_terms
+            .contains(&"bundle-summary".to_string()));
+        assert!(plan.validation_terms.contains(&"python3".to_string()));
+        assert!(plan.query.contains("validation"));
+        assert!(plan.query.contains("anchors"));
     }
 
     #[test]

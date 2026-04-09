@@ -364,7 +364,8 @@ These are the important remaining rough edges from an operator point of view:
 - Corpus discoverability is much better than before, but the most advanced grounded-answer path should still be treated as an active harness surface rather than a finished product.
 - Web-aware behavior is more honest and traceable than before, including explicit approval-required child states, a dedicated final-answer `Web execution` section with per-status counts/subquery details, and richer provenance summaries, but it is still not a fully mature end-to-end operator web workflow.
 - Child execution is cleaner and more shared than before, but not yet fully runtime/provider-owned in every seam.
-- Recursive traces now capture novelty/progress signals per child step, retrieval requests carry lightweight planner metadata (strategy / rationale / anchor terms), and the final recursive answer surfaces a compact `Recursive planning` summary so operators can see what the heuristic planner was doing without opening the raw trace first. This is still heuristic guidance rather than a full planner or formal verifier.
+- Recursive traces now capture novelty/progress signals per child step, retrieval requests carry lightweight planner metadata (strategy / rationale / anchor terms), and the final recursive answer surfaces a compact `Recursive planning` summary so operators can see what the heuristic planner was doing without opening the raw trace first.
+- Follow-up retrieval planning is now slightly more disciplined: later iterations prefer structured `Findings`, `Validation loop`, and `Remaining gaps` terms from the last child response instead of blindly replaying the whole answer, which makes the recursive loop easier to inspect and a bit less summary-echo-prone. This is still heuristic guidance rather than a full planner or formal verifier.
 - OAuth currently depends on a localhost callback and manual URL opening when no browser opener is available.
 
 ## Workspace layout
