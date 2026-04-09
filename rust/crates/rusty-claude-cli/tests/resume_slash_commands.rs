@@ -776,6 +776,8 @@ fn resumed_trace_approvals_dashboard_lists_review_entries() {
         r#"{
           "schemaVersion":1,
           "traceId":"trace-approval",
+          "corpusId":"demo-corpus",
+          "task":"search the web for release status",
           "approvalPacket":"/tmp/trace-approval.json",
           "operatorState":"rerun captured for review",
           "nextStep":"inspect replay trace",
@@ -796,9 +798,26 @@ fn resumed_trace_approvals_dashboard_lists_review_entries() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
     assert!(stdout.contains("Trace approvals"));
-    assert!(stdout.contains("Entries          1"));
-    assert!(stdout.contains("Rerun captured   1"));
+    assert!(stdout.contains("Entries            1"));
+    assert!(stdout.contains("Rerun captured     1"));
+    assert!(stdout.contains("Pending queries    1"));
     assert!(stdout.contains("trace-approval :: rerun captured for review"));
+    assert!(stdout.contains("task: search the web for release status"));
+    assert!(stdout.contains("corpus: demo-corpus"));
+    assert!(stdout.contains("packet: /tmp/trace-approval.json"));
+    assert!(stdout.contains("pending: search the web for release status"));
+
+    let index_markdown = fs::read_to_string(
+        project_dir
+            .join(".claw")
+            .join("web-approvals")
+            .join("index.md"),
+    )
+    .expect("index markdown should exist");
+    assert!(index_markdown.contains("## Summary"));
+    assert!(index_markdown.contains("- Pending approved queries: 1"));
+    assert!(index_markdown.contains("- task: search the web for release status"));
+    assert!(index_markdown.contains("- corpus: demo-corpus"));
 }
 
 #[test]

@@ -1873,29 +1873,85 @@ fn refresh_web_approval_review_index(
             Some(value)
         })
         .collect::<Vec<_>>();
+    let awaiting_rerun = review_entries
+        .iter()
+        .filter(|entry| {
+            entry["operatorState"].as_str() == Some("approved for rerun")
+                || entry["operatorState"].as_str() == Some("approved for explicit rerun")
+        })
+        .count();
+    let rerun_captured = review_entries
+        .iter()
+        .filter(|entry| entry["operatorState"].as_str() == Some("rerun captured for review"))
+        .count();
+    let rerun_missing_trace = review_entries
+        .iter()
+        .filter(|entry| {
+            entry["operatorState"].as_str() == Some("rerun completed without saved trace artifact")
+        })
+        .count();
+    let pending_query_total = review_entries
+        .iter()
+        .map(|entry| {
+            entry["pendingQueries"]
+                .as_array()
+                .map(|queries| queries.len())
+                .unwrap_or(0)
+        })
+        .sum::<usize>();
     let index_json_path = approval_review_index_json_path(cwd);
     let index_markdown_path = approval_review_index_markdown_path(cwd);
     let index_json = json!({
         "schemaVersion": 1,
         "generatedAtMs": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis(),
+        "summary": {
+            "entries": review_entries.len(),
+            "awaitingRerun": awaiting_rerun,
+            "rerunCaptured": rerun_captured,
+            "rerunMissingTrace": rerun_missing_trace,
+            "pendingQueries": pending_query_total,
+        },
         "entries": review_entries,
     });
     fs::write(&index_json_path, serde_json::to_string_pretty(&index_json)?)?;
 
     let mut lines = vec!["# Web approval review index".to_string(), "".to_string()];
-    if index_json["entries"]
-        .as_array()
-        .is_some_and(|entries| entries.is_empty())
-    {
+    lines.push("## Summary".to_string());
+    lines.push(format!("- Entries: {}", review_entries.len()));
+    lines.push(format!("- Awaiting rerun: {}", awaiting_rerun));
+    lines.push(format!("- Rerun captured: {}", rerun_captured));
+    lines.push(format!("- Rerun missing trace: {}", rerun_missing_trace));
+    lines.push(format!(
+        "- Pending approved queries: {}",
+        pending_query_total
+    ));
+    lines.push("".to_string());
+    if review_entries.is_empty() {
         lines.push("No review artifacts yet.".to_string());
     } else {
-        for entry in index_json["entries"].as_array().into_iter().flatten() {
+        lines.push("## Entries".to_string());
+        lines.push("".to_string());
+        for entry in &review_entries {
             lines.push(format!(
                 "- trace `{}` — {} — packet `{}`",
                 entry["traceId"].as_str().unwrap_or("unknown"),
                 entry["operatorState"].as_str().unwrap_or("unknown state"),
                 entry["approvalPacket"].as_str().unwrap_or("missing")
             ));
+            if let Some(task) = entry["task"].as_str() {
+                lines.push(format!("  - task: {}", task));
+            }
+            if let Some(corpus_id) = entry["corpusId"].as_str() {
+                lines.push(format!("  - corpus: {}", corpus_id));
+            }
+            if let Some(review_json) = entry["approvalPacket"].as_str().map(|packet| {
+                packet
+                    .strip_suffix(".json")
+                    .map(|prefix| format!("{prefix}.review.json"))
+                    .unwrap_or_else(|| packet.to_string())
+            }) {
+                lines.push(format!("  - review json: {}", review_json));
+            }
             if let Some(next_step) = entry["nextStep"].as_str() {
                 lines.push(format!("  - next: {}", next_step));
             }
@@ -1989,27 +2045,34 @@ fn render_trace_approval_dashboard(cwd: &Path) -> Result<String, Box<dyn std::er
         .as_array()
         .cloned()
         .unwrap_or_default();
-    let approved_for_rerun = entries
-        .iter()
-        .filter(|entry| {
-            entry["operatorState"].as_str() == Some("approved for rerun")
-                || entry["operatorState"].as_str() == Some("approved for explicit rerun")
-        })
-        .count();
-    let rerun_captured = entries
-        .iter()
-        .filter(|entry| entry["operatorState"].as_str() == Some("rerun captured for review"))
-        .count();
+    let summary = &index_value["summary"];
     let mut lines = vec![
         "Trace approvals".to_string(),
-        format!("  Review Index JSON {}", index_json_path.display()),
-        format!("  Review Index MD  {}", index_markdown_path.display()),
-        format!("  Entries          {}", entries.len()),
-        format!("  Awaiting rerun   {}", approved_for_rerun),
-        format!("  Rerun captured   {}", rerun_captured),
+        format!("  Review Index JSON  {}", index_json_path.display()),
+        format!("  Review Index MD    {}", index_markdown_path.display()),
+        format!(
+            "  Entries            {}",
+            summary["entries"].as_u64().unwrap_or(entries.len() as u64)
+        ),
+        format!(
+            "  Awaiting rerun     {}",
+            summary["awaitingRerun"].as_u64().unwrap_or(0)
+        ),
+        format!(
+            "  Rerun captured     {}",
+            summary["rerunCaptured"].as_u64().unwrap_or(0)
+        ),
+        format!(
+            "  Rerun missing trace {}",
+            summary["rerunMissingTrace"].as_u64().unwrap_or(0)
+        ),
+        format!(
+            "  Pending queries    {}",
+            summary["pendingQueries"].as_u64().unwrap_or(0)
+        ),
     ];
     if entries.is_empty() {
-        lines.push("  Note             no approval review artifacts exist yet".to_string());
+        lines.push("  Note               no approval review artifacts exist yet".to_string());
     } else {
         lines.push("  Entries detail".to_string());
         for entry in entries {
@@ -2017,13 +2080,31 @@ fn render_trace_approval_dashboard(cwd: &Path) -> Result<String, Box<dyn std::er
             let state = entry["operatorState"].as_str().unwrap_or("unknown");
             let next_step = entry["nextStep"].as_str().unwrap_or("inspect review json");
             lines.push(format!("  - {} :: {}", trace_id, state));
+            if let Some(task) = entry["task"].as_str() {
+                lines.push(format!("    task: {}", task));
+            }
+            if let Some(corpus_id) = entry["corpusId"].as_str() {
+                lines.push(format!("    corpus: {}", corpus_id));
+            }
+            if let Some(packet) = entry["approvalPacket"].as_str() {
+                lines.push(format!("    packet: {}", packet));
+            }
             lines.push(format!("    next: {}", next_step));
+            let pending = entry["pendingQueries"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|value| value.as_str())
+                .collect::<Vec<_>>();
+            if !pending.is_empty() {
+                lines.push(format!("    pending: {}", pending.join(" | ")));
+            }
             if let Some(replay_trace) = entry["replayTrace"].as_str() {
                 lines.push(format!("    replay trace: {}", replay_trace));
             }
         }
         lines.push(
-            "  Note             on-disk dashboard only; no browser session automation exists yet"
+            "  Note               on-disk dashboard only; no browser session automation exists yet"
                 .to_string(),
         );
     }
