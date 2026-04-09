@@ -74,10 +74,29 @@ pub struct WebExecutionSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannerStep {
+    pub iteration: u32,
+    pub strategy: String,
+    pub rationale: String,
+    pub anchor_terms: Vec<String>,
+    pub gap_terms: Vec<String>,
+    pub validation_terms: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannerSummary {
+    pub iterations: usize,
+    pub latest_strategy: String,
+    pub latest_rationale: String,
+    pub steps: Vec<PlannerStep>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FinalAnswer {
     pub body: String,
     pub citations: Vec<Citation>,
     pub confidence: Option<ConfidenceNote>,
+    pub planner: Option<PlannerSummary>,
     pub web: Option<WebExecutionSummary>,
     pub trace_id: Option<String>,
 }
@@ -294,6 +313,26 @@ impl FinalAnswer {
             sections.push(confidence_lines.join("\n"));
         }
 
+        if let Some(planner) = &self.planner {
+            let mut planner_lines = vec![
+                "Recursive planning".to_string(),
+                format!("  Planned iterations            {}", planner.iterations),
+                format!(
+                    "  Latest strategy               {}",
+                    planner.latest_strategy
+                ),
+                format!(
+                    "  Latest rationale              {}",
+                    planner.latest_rationale
+                ),
+            ];
+            if !planner.steps.is_empty() {
+                planner_lines.push("  Iteration details".to_string());
+                planner_lines.extend(planner.steps.iter().map(render_planner_step));
+            }
+            sections.push(planner_lines.join("\n"));
+        }
+
         if let Some(web) = &self.web {
             let mut web_lines = vec![
                 "Web execution".to_string(),
@@ -328,6 +367,23 @@ impl FinalAnswer {
             .collect::<Vec<_>>()
             .join("\n\n")
     }
+}
+
+fn render_planner_step(step: &PlannerStep) -> String {
+    let mut parts = vec![format!(
+        "  - iteration {}: strategy={}; rationale={}",
+        step.iteration, step.strategy, step.rationale
+    )];
+    if !step.anchor_terms.is_empty() {
+        parts.push(format!("anchors={}", step.anchor_terms.join(", ")));
+    }
+    if !step.gap_terms.is_empty() {
+        parts.push(format!("gaps={}", step.gap_terms.join(", ")));
+    }
+    if !step.validation_terms.is_empty() {
+        parts.push(format!("validation={}", step.validation_terms.join(", ")));
+    }
+    parts.join("; ")
 }
 
 fn render_web_operator_handoff(web: &WebExecutionSummary) -> Vec<String> {
@@ -422,7 +478,7 @@ fn render_citation(citation: &Citation) -> String {
 mod tests {
     use super::{
         Citation, ConfidenceLevel, ConfidenceNote, EvidenceProvenance, ExecutionProfile,
-        FinalAnswer, WebExecutionDetail, WebExecutionSummary,
+        FinalAnswer, PlannerStep, PlannerSummary, WebExecutionDetail, WebExecutionSummary,
     };
 
     #[test]
@@ -475,6 +531,19 @@ mod tests {
                 summary: "The implementation matches the current fixture coverage.".to_string(),
                 gaps: vec!["A real recursive controller is not wired yet.".to_string()],
             }),
+            planner: Some(PlannerSummary {
+                iterations: 2,
+                latest_strategy: "gap_targeted_followup".to_string(),
+                latest_rationale: "carry forward explicit remaining-gap terms".to_string(),
+                steps: vec![PlannerStep {
+                    iteration: 1,
+                    strategy: "bootstrap".to_string(),
+                    rationale: "start from the original task".to_string(),
+                    anchor_terms: vec!["parser".to_string(), "runtime".to_string()],
+                    gap_terms: vec!["hook parity".to_string()],
+                    validation_terms: vec!["run targeted tests".to_string()],
+                }],
+            }),
             web: Some(WebExecutionSummary {
                 total: 2,
                 approved: 1,
@@ -517,6 +586,9 @@ mod tests {
         assert!(rendered.contains("Web sources"));
         assert!(rendered.contains("[W1] Example spec"));
         assert!(rendered.contains("Confidence\n  Level            medium"));
+        assert!(rendered.contains("Recursive planning"));
+        assert!(rendered.contains("Latest strategy               gap_targeted_followup"));
+        assert!(rendered.contains("anchors=parser, runtime"));
         assert!(rendered.contains("Web execution"));
         assert!(rendered.contains("Web-aware subqueries          2"));
         assert!(rendered.contains("Approval required             1"));

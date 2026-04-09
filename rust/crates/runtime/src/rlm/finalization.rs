@@ -12,8 +12,8 @@ use crate::hybrid::{
 use crate::json::JsonValue;
 use crate::trace::{TraceEventType, TraceLedger};
 use crate::ux::{
-    Citation, ConfidenceLevel, ConfidenceNote, EvidenceProvenance, FinalAnswer, WebExecutionDetail,
-    WebExecutionSummary,
+    Citation, ConfidenceLevel, ConfidenceNote, EvidenceProvenance, FinalAnswer, PlannerStep,
+    PlannerSummary, WebExecutionDetail, WebExecutionSummary,
 };
 use telemetry::SessionTracer;
 
@@ -98,11 +98,84 @@ fn summarize_web_execution(child_outputs: &[ChildSubqueryOutput]) -> Option<WebE
     })
 }
 
+fn summarize_planner(trace: &TraceLedger) -> Option<PlannerSummary> {
+    let steps = trace
+        .events
+        .iter()
+        .filter(|event| event.event_type == TraceEventType::RetrievalRequested)
+        .map(|event| PlannerStep {
+            iteration: event
+                .data
+                .get("iteration")
+                .and_then(JsonValue::as_i64)
+                .and_then(|value| u32::try_from(value).ok())
+                .unwrap_or(0),
+            strategy: event
+                .data
+                .get("plannerStrategy")
+                .and_then(JsonValue::as_str)
+                .unwrap_or("unknown")
+                .to_string(),
+            rationale: event
+                .data
+                .get("plannerRationale")
+                .and_then(JsonValue::as_str)
+                .unwrap_or("planner rationale unavailable")
+                .to_string(),
+            anchor_terms: event
+                .data
+                .get("plannerAnchorTerms")
+                .and_then(JsonValue::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(JsonValue::as_str)
+                        .map(ToString::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            gap_terms: event
+                .data
+                .get("plannerGapTerms")
+                .and_then(JsonValue::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(JsonValue::as_str)
+                        .map(ToString::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            validation_terms: event
+                .data
+                .get("plannerValidationTerms")
+                .and_then(JsonValue::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(JsonValue::as_str)
+                        .map(ToString::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
+        })
+        .collect::<Vec<_>>();
+
+    let latest = steps.last()?;
+    Some(PlannerSummary {
+        iterations: steps.len(),
+        latest_strategy: latest.strategy.clone(),
+        latest_rationale: latest.rationale.clone(),
+        steps,
+    })
+}
+
 fn format_recursive_answer(
     body: String,
     retrieval: &RetrievalResult,
     child_outputs: &[ChildSubqueryOutput],
     trace_id: &str,
+    trace: &TraceLedger,
     escalation: &EscalationOutcome,
 ) -> String {
     let citations = normalize_local_evidence(retrieval)
@@ -206,6 +279,7 @@ fn format_recursive_answer(
         body,
         citations,
         confidence: Some(confidence),
+        planner: summarize_planner(trace),
         web,
         trace_id: Some(trace_id.to_string()),
     }
@@ -235,6 +309,7 @@ pub(super) fn finalize_successful_run(
                 retrieval,
                 &child_outputs,
                 &trace.trace_id,
+                &trace,
                 &escalation,
             )
         } else {
@@ -244,6 +319,7 @@ pub(super) fn finalize_successful_run(
                 retrieval,
                 &child_outputs,
                 &trace.trace_id,
+                &trace,
                 &escalation,
             )
         }
@@ -342,6 +418,7 @@ pub(super) fn finalize_failed_run(
             retrieval,
             &child_outputs,
             &trace.trace_id,
+            &trace,
             &default_escalation_outcome(task, retrieval),
         )
     } else {
@@ -421,6 +498,7 @@ pub(super) fn finalize_empty_stop(
             retrieval,
             &[],
             &trace.trace_id,
+            &trace,
             &default_escalation_outcome(task, retrieval),
         )
     } else {

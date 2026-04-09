@@ -1158,6 +1158,10 @@ mod tests {
         assert_eq!(result.stop_reason, RecursiveStopReason::SubcallCap);
         assert_eq!(result.child_outputs.len(), 1);
         assert!(result.final_answer.contains("inspected"));
+        assert!(result.final_answer.contains("Recursive planning"));
+        assert!(result
+            .final_answer
+            .contains("Latest strategy               bootstrap"));
         assert_eq!(result.usage.iterations, 1);
         assert_eq!(result.usage.subcalls, 1);
         assert!(result
