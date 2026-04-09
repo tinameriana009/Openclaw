@@ -227,6 +227,46 @@ pub trait RecursiveRuntimeFactory<'a> {
     ) -> RecursiveConversationRuntime<'a, Self::Executor, Self::Aggregator>;
 }
 
+pub trait RecursiveTaskWorkspaceProvider<'a> {
+    fn workspace(&self) -> RecursiveTaskWorkspace<'a>;
+}
+
+pub trait RecursiveTaskRuntime<'a>:
+    RecursiveRuntimeFactory<'a> + RecursiveTaskWorkspaceProvider<'a>
+{
+    #[must_use]
+    fn prepare_task_run(
+        &self,
+        task_id: &'a str,
+        task: &'a str,
+        profile: ExecutionProfile,
+    ) -> PreparedRecursiveTaskRun {
+        prepare_recursive_task_run(RecursiveProfileTaskRequest {
+            workspace: self.workspace(),
+            task_id,
+            task,
+            profile,
+        })
+    }
+
+    fn run_task_envelope(
+        &self,
+        corpus: &'a CorpusManifest,
+        task_id: &'a str,
+        task: &'a str,
+        profile: ExecutionProfile,
+    ) -> Result<(RecursiveExecutionResult, RecursiveRunArtifacts), RecursiveRuntimeError> {
+        let prepared = self.prepare_task_run(task_id, task, profile);
+        let runtime = self.build_runtime(corpus);
+        prepared.run_with(&runtime)
+    }
+}
+
+impl<'a, T> RecursiveTaskRuntime<'a> for T where
+    T: RecursiveRuntimeFactory<'a> + RecursiveTaskWorkspaceProvider<'a>
+{
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecursiveTaskEnvelope<'a, F> {
     pub runtime: F,
@@ -238,40 +278,20 @@ pub struct RecursiveTaskEnvelope<'a, F> {
 
 impl<'a, F> RecursiveTaskEnvelope<'a, F>
 where
-    F: RecursiveRuntimeFactory<'a> + RecursiveTaskWorkspaceProvider<'a>,
+    F: RecursiveTaskRuntime<'a>,
 {
     #[must_use]
     pub fn prepare(&self) -> PreparedRecursiveTaskRun {
-        prepare_recursive_task_run(RecursiveProfileTaskRequest {
-            workspace: RecursiveTaskWorkspace {
-                cwd: self.workspace_cwd(),
-                session_id: self.workspace_session_id(),
-            },
-            task_id: self.task_id,
-            task: self.task,
-            profile: self.profile,
-        })
+        self.runtime
+            .prepare_task_run(self.task_id, self.task, self.profile)
     }
 
     pub fn run(
         &self,
     ) -> Result<(RecursiveExecutionResult, RecursiveRunArtifacts), RecursiveRuntimeError> {
-        let prepared = self.prepare();
-        let runtime = self.runtime.build_runtime(self.corpus);
-        prepared.run_with(&runtime)
+        self.runtime
+            .run_task_envelope(self.corpus, self.task_id, self.task, self.profile)
     }
-
-    fn workspace_cwd(&self) -> &'a Path {
-        self.runtime.workspace().cwd
-    }
-
-    fn workspace_session_id(&self) -> &'a str {
-        self.runtime.workspace().session_id
-    }
-}
-
-pub trait RecursiveTaskWorkspaceProvider<'a> {
-    fn workspace(&self) -> RecursiveTaskWorkspace<'a>;
 }
 
 #[derive(Debug, Clone, PartialEq)]

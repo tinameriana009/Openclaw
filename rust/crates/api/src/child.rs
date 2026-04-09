@@ -4,8 +4,9 @@ use std::sync::Arc;
 use runtime::{
     ChildSubqueryExecutor, ChildSubqueryOutput, ChildSubqueryRequest, ConfigLoader, EvidenceRecord,
     ExecutionProfile, PreparedRecursiveTaskRun, RecursiveExecutionResult, RecursiveRunArtifacts,
-    RecursiveRuntimeError, RecursiveRuntimeFactory, RecursiveTaskEnvelope, RecursiveTaskWorkspace,
-    RecursiveTaskWorkspaceProvider, WebAccessMode, WebEvidenceInput, WebExecutionOutcome,
+    RecursiveRuntimeError, RecursiveRuntimeFactory, RecursiveTaskEnvelope, RecursiveTaskRuntime,
+    RecursiveTaskWorkspace, RecursiveTaskWorkspaceProvider, WebAccessMode, WebEvidenceInput,
+    WebExecutionOutcome,
 };
 use tokio::runtime::Runtime;
 
@@ -387,6 +388,26 @@ impl<'a> ProviderRecursiveRuntimeConfig<'a> {
     ) -> runtime::RecursiveConversationRuntime<'a, ProviderBackedChildExecutor> {
         <Self as RecursiveRuntimeFactory<'a>>::build_runtime(self, corpus)
     }
+
+    #[must_use]
+    pub fn prepare_task_run(
+        &self,
+        task_id: &'a str,
+        task: &'a str,
+        profile: ExecutionProfile,
+    ) -> PreparedRecursiveTaskRun {
+        <Self as RecursiveTaskRuntime<'a>>::prepare_task_run(self, task_id, task, profile)
+    }
+
+    pub fn run_task(
+        &self,
+        corpus: &'a runtime::CorpusManifest,
+        task_id: &'a str,
+        task: &'a str,
+        profile: ExecutionProfile,
+    ) -> Result<(RecursiveExecutionResult, RecursiveRunArtifacts), RecursiveRuntimeError> {
+        <Self as RecursiveTaskRuntime<'a>>::run_task_envelope(self, corpus, task_id, task, profile)
+    }
 }
 
 impl<'a> RecursiveTaskWorkspaceProvider<'a> for ProviderRecursiveRuntimeConfig<'a> {
@@ -427,13 +448,20 @@ pub fn build_runtime_configured_provider_recursive_task_runtime<'a>(
 pub fn prepare_runtime_configured_provider_recursive_task_run(
     request: &ProviderRecursiveTaskRequest<'_>,
 ) -> ProviderPreparedRecursiveTaskRun {
-    request.prepare()
+    request
+        .runtime
+        .prepare_task_run(request.task_id, request.task, request.profile)
 }
 
 pub fn run_runtime_configured_provider_recursive_task(
     request: ProviderRecursiveTaskRequest<'_>,
 ) -> Result<(RecursiveExecutionResult, ProviderRecursiveRunArtifacts), RecursiveRuntimeError> {
-    request.run()
+    request.runtime.run_task(
+        request.corpus,
+        request.task_id,
+        request.task,
+        request.profile,
+    )
 }
 
 pub fn run_runtime_configured_provider_recursive_query(
@@ -1106,8 +1134,12 @@ mod tests {
             profile: ExecutionProfile::Balanced,
         };
 
-        let (result, artifacts) = request
-            .run()
+        let prepared = prepare_runtime_configured_provider_recursive_task_run(&request);
+        assert_eq!(prepared.session_id, "session-1");
+        assert_eq!(prepared.task_id, "task-1");
+        assert_eq!(prepared.task, "Summarize the guide");
+
+        let (result, artifacts) = run_runtime_configured_provider_recursive_task(request)
             .expect("shared recursive runner should succeed");
 
         assert!(result.usage.depth <= 1);
@@ -1124,6 +1156,29 @@ mod tests {
             .trace_artifact_path
             .as_ref()
             .is_some_and(|path| path.starts_with(&artifacts.trace_dir)));
+
+        let runtime_config = ProviderRecursiveRuntimeConfig {
+            cwd: &cwd,
+            session_id: "session-1",
+            active_model: Some("claude-sonnet-4-6"),
+            default_model: "claude-opus-4-6",
+        };
+        let rerun_prepared = runtime_config.prepare_task_run(
+            "task-2",
+            "Summarize the guide again",
+            ExecutionProfile::Balanced,
+        );
+        assert_eq!(rerun_prepared.task_id, "task-2");
+        let (rerun_result, rerun_artifacts) = runtime_config
+            .run_task(
+                &corpus,
+                "task-2",
+                "Summarize the guide again",
+                ExecutionProfile::Balanced,
+            )
+            .expect("runtime-native recursive runner should succeed");
+        assert!(rerun_result.usage.depth <= 1);
+        assert!(rerun_artifacts.telemetry_path.exists());
 
         let _ = fs::remove_dir_all(cwd);
     }

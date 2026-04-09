@@ -111,8 +111,8 @@ pub use rlm::{
     RecursiveConversationRuntime, RecursiveCorpusPeekResult, RecursiveExecutionMode,
     RecursiveExecutionResult, RecursiveIterationState, RecursiveProfileTaskRequest,
     RecursiveRunArtifacts, RecursiveRuntimeError, RecursiveRuntimeFactory, RecursiveRuntimeState,
-    RecursiveStopReason, RecursiveTaskEnvelope, RecursiveTaskRunRequest, RecursiveTaskWorkspace,
-    RecursiveTaskWorkspaceProvider,
+    RecursiveStopReason, RecursiveTaskEnvelope, RecursiveTaskRunRequest, RecursiveTaskRuntime,
+    RecursiveTaskWorkspace, RecursiveTaskWorkspaceProvider,
 };
 pub use sandbox::{
     build_linux_sandbox_command, detect_container_environment, detect_container_environment_from,

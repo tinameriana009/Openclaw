@@ -38,6 +38,7 @@ fn final_answer_matches_expected_fixture() {
             summary: "Covered by unit and regression tests.".to_string(),
             gaps: vec!["Recursive orchestration is still scaffold-level in this repo.".to_string()],
         }),
+        planner: None,
         web: None,
         trace_id: Some("trace-fixture-001".to_string()),
     };
