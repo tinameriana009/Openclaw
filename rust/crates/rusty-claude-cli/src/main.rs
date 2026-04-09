@@ -1498,6 +1498,8 @@ fn run_trace_command(
     session_path: Option<&Path>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     match (action, target, destination) {
+        (Some("review"), Some(target), None) => render_trace_review_status(target, cwd),
+        (Some("approvals"), None, None) => render_trace_approval_dashboard(cwd),
         (Some("approve"), Some(target), None) => {
             approve_trace_for_operator(target, cwd, session_path)
         }
@@ -1800,7 +1802,7 @@ fn create_web_approval_artifacts(
     fs::write(&packet_path, serde_json::to_string_pretty(&packet)?)?;
     let review_json_path = approval_packet_review_json_path(&packet_path);
     let review_markdown_path = approval_packet_review_markdown_path(&packet_path);
-    let operator_state = "approved for rerun";
+    let operator_state = "approved for explicit rerun";
     let next_step = "run /trace replay <trace-file> for a bounded rerun, or /trace resume <trace-file> to approve and rerun in one step";
     let review_json = json!({
         "schemaVersion": 1,
@@ -1918,6 +1920,114 @@ fn refresh_web_approval_review_index(
     );
     fs::write(&index_markdown_path, lines.join("\n"))?;
     Ok((index_json_path, index_markdown_path))
+}
+
+fn render_trace_review_status(
+    target: &str,
+    cwd: &Path,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let requested_path = resolve_trace_target_path(target, cwd);
+    let packet_path = if requested_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|name| name.ends_with(".json"))
+        && requested_path.to_string_lossy().contains("web-approvals")
+    {
+        requested_path.clone()
+    } else {
+        approval_packet_path_for_trace(&requested_path, cwd)?
+    };
+    let review_json_path = approval_packet_review_json_path(&packet_path);
+    if !packet_path.exists() {
+        return Ok(format!(
+            "Trace review\n  Result           no approval packet recorded yet\n  Trace            {}\n  Expected packet  {}\n  Next step        run /trace approve {} or /trace resume {}",
+            requested_path.display(),
+            packet_path.display(),
+            requested_path.display(),
+            requested_path.display(),
+        ));
+    }
+    let packet_text = fs::read_to_string(&packet_path)?;
+    let packet: WebApprovalPacket = serde_json::from_str(&packet_text)?;
+    let review_value = if review_json_path.exists() {
+        let text = fs::read_to_string(&review_json_path)?;
+        serde_json::from_str::<JsonValue>(&text)?
+    } else {
+        json!({
+            "operatorState": "approved for explicit rerun",
+            "nextStep": "run /trace replay <trace-file> for a bounded rerun, or /trace resume <trace-file> to approve and rerun in one step",
+            "replayTrace": JsonValue::Null,
+        })
+    };
+    let pending_queries = if packet.pending_queries.is_empty() {
+        "none".to_string()
+    } else {
+        packet.pending_queries.join("; ")
+    };
+    let replay_trace = review_value["replayTrace"]
+        .as_str()
+        .unwrap_or("<not yet rerun>");
+    Ok(format!(
+        "Trace review\n  Result           approval state loaded\n  Trace            {}\n  Packet           {}\n  Review JSON      {}\n  Operator state   {}\n  Pending queries  {}\n  Replay trace     {}\n  Replay command   {}\n  Next step        {}\n  Note             {}",
+        requested_path.display(),
+        packet_path.display(),
+        review_json_path.display(),
+        review_value["operatorState"].as_str().unwrap_or("unknown"),
+        pending_queries,
+        replay_trace,
+        packet.replay_command,
+        review_value["nextStep"].as_str().unwrap_or("inspect the approval packet and review markdown on disk"),
+        packet.operator_note.as_deref().unwrap_or("browser automation is still not available; this is an on-disk review surface only"),
+    ))
+}
+
+fn render_trace_approval_dashboard(cwd: &Path) -> Result<String, Box<dyn std::error::Error>> {
+    let (index_json_path, index_markdown_path) = refresh_web_approval_review_index(cwd)?;
+    let index_text = fs::read_to_string(&index_json_path)?;
+    let index_value: JsonValue = serde_json::from_str(&index_text)?;
+    let entries = index_value["entries"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let approved_for_rerun = entries
+        .iter()
+        .filter(|entry| {
+            entry["operatorState"].as_str() == Some("approved for rerun")
+                || entry["operatorState"].as_str() == Some("approved for explicit rerun")
+        })
+        .count();
+    let rerun_captured = entries
+        .iter()
+        .filter(|entry| entry["operatorState"].as_str() == Some("rerun captured for review"))
+        .count();
+    let mut lines = vec![
+        "Trace approvals".to_string(),
+        format!("  Review Index JSON {}", index_json_path.display()),
+        format!("  Review Index MD  {}", index_markdown_path.display()),
+        format!("  Entries          {}", entries.len()),
+        format!("  Awaiting rerun   {}", approved_for_rerun),
+        format!("  Rerun captured   {}", rerun_captured),
+    ];
+    if entries.is_empty() {
+        lines.push("  Note             no approval review artifacts exist yet".to_string());
+    } else {
+        lines.push("  Entries detail".to_string());
+        for entry in entries {
+            let trace_id = entry["traceId"].as_str().unwrap_or("unknown");
+            let state = entry["operatorState"].as_str().unwrap_or("unknown");
+            let next_step = entry["nextStep"].as_str().unwrap_or("inspect review json");
+            lines.push(format!("  - {} :: {}", trace_id, state));
+            lines.push(format!("    next: {}", next_step));
+            if let Some(replay_trace) = entry["replayTrace"].as_str() {
+                lines.push(format!("    replay trace: {}", replay_trace));
+            }
+        }
+        lines.push(
+            "  Note             on-disk dashboard only; no browser session automation exists yet"
+                .to_string(),
+        );
+    }
+    Ok(lines.join("\n"))
 }
 
 fn replay_trace_for_operator(

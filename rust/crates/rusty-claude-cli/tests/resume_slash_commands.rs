@@ -682,6 +682,126 @@ fn resumed_trace_resume_approves_reruns_and_refreshes_review_index() {
 }
 
 #[test]
+fn resumed_trace_review_reports_pending_or_rerun_state() {
+    let temp_dir = unique_temp_dir("resume-trace-review");
+    let project_dir = temp_dir.join("project");
+    fs::create_dir_all(project_dir.join(".claw").join("trace")).expect("trace dir should exist");
+    fs::create_dir_all(project_dir.join(".claw").join("sessions"))
+        .expect("sessions dir should exist");
+    fs::create_dir_all(project_dir.join(".claw").join("web-approvals"))
+        .expect("approvals dir should exist");
+
+    let session_path = project_dir
+        .join(".claw")
+        .join("sessions")
+        .join("session.jsonl");
+    Session::new()
+        .with_persistence_path(&session_path)
+        .save_to_path(&session_path)
+        .expect("session should persist");
+
+    let trace_path = project_dir.join(".claw").join("trace").join("trace.json");
+    fs::write(&trace_path, "{}").expect("placeholder trace should write");
+
+    let packet_path = project_dir
+        .join(".claw")
+        .join("web-approvals")
+        .join("trace-approval.json");
+    fs::write(
+        &packet_path,
+        r#"{
+          "schemaVersion":1,
+          "traceId":"trace-approval",
+          "sessionId":"session-1",
+          "task":"search the web for release status",
+          "corpusId":"demo-corpus",
+          "pendingQueries":["search the web for release status"],
+          "approvedAtMs":123,
+          "replayCommand":"claw --resume latest \"/corpus answer demo-corpus :: search the web for release status\"",
+          "operatorNote":"bounded rerun only"
+        }"#,
+    )
+    .expect("packet should write");
+    fs::write(
+        packet_path.with_extension("review.json"),
+        r#"{
+          "schemaVersion":1,
+          "traceId":"trace-approval",
+          "operatorState":"approved for explicit rerun",
+          "nextStep":"run /trace replay <trace-file>",
+          "replayTrace":null
+        }"#,
+    )
+    .expect("review json should write");
+
+    let trace_command = format!("/trace review {}", packet_path.to_str().expect("utf8 path"));
+    let output = run_claw(
+        &project_dir,
+        &[
+            "--resume",
+            session_path.to_str().expect("utf8 path"),
+            &trace_command,
+        ],
+    );
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("Trace review"));
+    assert!(stdout.contains("Operator state   approved for explicit rerun"));
+    assert!(stdout.contains("Replay trace     <not yet rerun>"));
+}
+
+#[test]
+fn resumed_trace_approvals_dashboard_lists_review_entries() {
+    let temp_dir = unique_temp_dir("resume-trace-approvals-dashboard");
+    let project_dir = temp_dir.join("project");
+    fs::create_dir_all(project_dir.join(".claw").join("sessions"))
+        .expect("sessions dir should exist");
+    fs::create_dir_all(project_dir.join(".claw").join("web-approvals"))
+        .expect("approvals dir should exist");
+
+    let session_path = project_dir
+        .join(".claw")
+        .join("sessions")
+        .join("session.jsonl");
+    Session::new()
+        .with_persistence_path(&session_path)
+        .save_to_path(&session_path)
+        .expect("session should persist");
+
+    fs::write(
+        project_dir
+            .join(".claw")
+            .join("web-approvals")
+            .join("trace-approval.review.json"),
+        r#"{
+          "schemaVersion":1,
+          "traceId":"trace-approval",
+          "approvalPacket":"/tmp/trace-approval.json",
+          "operatorState":"rerun captured for review",
+          "nextStep":"inspect replay trace",
+          "replayTrace":"/tmp/replay-trace.json",
+          "pendingQueries":["search the web for release status"]
+        }"#,
+    )
+    .expect("review json should write");
+
+    let output = run_claw(
+        &project_dir,
+        &[
+            "--resume",
+            session_path.to_str().expect("utf8 path"),
+            "/trace approvals",
+        ],
+    );
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("Trace approvals"));
+    assert!(stdout.contains("Entries          1"));
+    assert!(stdout.contains("Rerun captured   1"));
+    assert!(stdout.contains("trace-approval :: rerun captured for review"));
+}
+
+#[test]
 fn resume_latest_restores_the_most_recent_managed_session() {
     // given
     let temp_dir = unique_temp_dir("resume-latest");
