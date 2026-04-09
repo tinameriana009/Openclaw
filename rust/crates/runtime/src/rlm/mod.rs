@@ -31,11 +31,11 @@ pub use types::*;
 pub fn prepare_recursive_task_run(
     request: RecursiveProfileTaskRequest<'_>,
 ) -> PreparedRecursiveTaskRun {
-    let resolved = request.profile.resolve();
+    let resolved = request.spec.profile.resolve();
     PreparedRecursiveTaskRun {
         session_id: request.workspace.session_id.to_string(),
-        task_id: request.task_id.to_string(),
-        task: request.task.to_string(),
+        task_id: request.spec.task_id.to_string(),
+        task: request.spec.task.to_string(),
         budget: RuntimeBudget {
             max_depth: resolved
                 .rlm
@@ -2016,9 +2016,11 @@ mod tests {
                 cwd: &workspace_root,
                 session_id: "session-task-runner",
             },
-            task_id: "task-task-runner",
-            task: "trace aggregation export",
-            profile: ExecutionProfile::Balanced,
+            spec: RecursiveTaskSpec {
+                task_id: "task-task-runner",
+                task: "trace aggregation export",
+                profile: ExecutionProfile::Balanced,
+            },
         });
 
         let (result, artifacts) = runtime
@@ -2049,9 +2051,11 @@ mod tests {
                 cwd: &workspace_root,
                 session_id: "session-prepared",
             },
-            task_id: "task-prepared",
-            task: "investigate grounded execution",
-            profile: ExecutionProfile::Research,
+            spec: RecursiveTaskSpec {
+                task_id: "task-prepared",
+                task: "investigate grounded execution",
+                profile: ExecutionProfile::Research,
+            },
         });
 
         assert_eq!(prepared.session_id, "session-prepared");
@@ -2126,9 +2130,11 @@ mod tests {
                 },
             },
             corpus: &corpus,
-            task_id: "task-envelope",
-            task: "summarize recursive orchestration",
-            profile: ExecutionProfile::Balanced,
+            spec: RecursiveTaskSpec {
+                task_id: "task-envelope",
+                task: "summarize recursive orchestration",
+                profile: ExecutionProfile::Balanced,
+            },
         };
 
         let prepared = request.prepare();

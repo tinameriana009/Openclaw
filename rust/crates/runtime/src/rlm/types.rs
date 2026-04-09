@@ -172,12 +172,17 @@ pub struct RecursiveTaskWorkspace<'a> {
     pub session_id: &'a str,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RecursiveProfileTaskRequest<'a> {
-    pub workspace: RecursiveTaskWorkspace<'a>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecursiveTaskSpec<'a> {
     pub task_id: &'a str,
     pub task: &'a str,
     pub profile: ExecutionProfile,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecursiveProfileTaskRequest<'a> {
+    pub workspace: RecursiveTaskWorkspace<'a>,
+    pub spec: RecursiveTaskSpec<'a>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -231,6 +236,14 @@ pub trait RecursiveTaskWorkspaceProvider<'a> {
     fn workspace(&self) -> RecursiveTaskWorkspace<'a>;
 }
 
+pub trait RecursiveCorpusProvider<'a> {
+    fn corpus(&self) -> &'a CorpusManifest;
+}
+
+pub trait RecursiveTaskSpecProvider<'a> {
+    fn task_spec(&self) -> RecursiveTaskSpec<'a>;
+}
+
 pub trait RecursiveTaskRuntime<'a>:
     RecursiveRuntimeFactory<'a> + RecursiveTaskWorkspaceProvider<'a>
 {
@@ -243,9 +256,11 @@ pub trait RecursiveTaskRuntime<'a>:
     ) -> PreparedRecursiveTaskRun {
         prepare_recursive_task_run(RecursiveProfileTaskRequest {
             workspace: self.workspace(),
-            task_id,
-            task,
-            profile,
+            spec: RecursiveTaskSpec {
+                task_id,
+                task,
+                profile,
+            },
         })
     }
 
@@ -267,13 +282,33 @@ impl<'a, T> RecursiveTaskRuntime<'a> for T where
 {
 }
 
+pub trait RecursiveTaskProvider<'a>:
+    RecursiveTaskRuntime<'a> + RecursiveCorpusProvider<'a> + RecursiveTaskSpecProvider<'a>
+{
+    #[must_use]
+    fn prepare_task(&self) -> PreparedRecursiveTaskRun {
+        let spec = self.task_spec();
+        self.prepare_task_run(spec.task_id, spec.task, spec.profile)
+    }
+
+    fn run_task(
+        &self,
+    ) -> Result<(RecursiveExecutionResult, RecursiveRunArtifacts), RecursiveRuntimeError> {
+        let spec = self.task_spec();
+        self.run_task_envelope(self.corpus(), spec.task_id, spec.task, spec.profile)
+    }
+}
+
+impl<'a, T> RecursiveTaskProvider<'a> for T where
+    T: RecursiveTaskRuntime<'a> + RecursiveCorpusProvider<'a> + RecursiveTaskSpecProvider<'a>
+{
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecursiveTaskEnvelope<'a, F> {
     pub runtime: F,
     pub corpus: &'a CorpusManifest,
-    pub task_id: &'a str,
-    pub task: &'a str,
-    pub profile: ExecutionProfile,
+    pub spec: RecursiveTaskSpec<'a>,
 }
 
 impl<'a, F> RecursiveTaskEnvelope<'a, F>
@@ -283,14 +318,18 @@ where
     #[must_use]
     pub fn prepare(&self) -> PreparedRecursiveTaskRun {
         self.runtime
-            .prepare_task_run(self.task_id, self.task, self.profile)
+            .prepare_task_run(self.spec.task_id, self.spec.task, self.spec.profile)
     }
 
     pub fn run(
         &self,
     ) -> Result<(RecursiveExecutionResult, RecursiveRunArtifacts), RecursiveRuntimeError> {
-        self.runtime
-            .run_task_envelope(self.corpus, self.task_id, self.task, self.profile)
+        self.runtime.run_task_envelope(
+            self.corpus,
+            self.spec.task_id,
+            self.spec.task,
+            self.spec.profile,
+        )
     }
 }
 

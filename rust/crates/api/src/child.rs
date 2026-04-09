@@ -3,10 +3,11 @@ use std::sync::Arc;
 
 use runtime::{
     ChildSubqueryExecutor, ChildSubqueryOutput, ChildSubqueryRequest, ConfigLoader, EvidenceRecord,
-    ExecutionProfile, PreparedRecursiveTaskRun, RecursiveExecutionResult, RecursiveRunArtifacts,
-    RecursiveRuntimeError, RecursiveRuntimeFactory, RecursiveTaskEnvelope, RecursiveTaskRuntime,
-    RecursiveTaskWorkspace, RecursiveTaskWorkspaceProvider, WebAccessMode, WebEvidenceInput,
-    WebExecutionOutcome,
+    ExecutionProfile, PreparedRecursiveTaskRun, RecursiveCorpusProvider,
+    RecursiveExecutionResult, RecursiveRunArtifacts, RecursiveRuntimeError,
+    RecursiveRuntimeFactory, RecursiveTaskEnvelope, RecursiveTaskProvider, RecursiveTaskRuntime,
+    RecursiveTaskSpec, RecursiveTaskSpecProvider, RecursiveTaskWorkspace,
+    RecursiveTaskWorkspaceProvider, WebAccessMode, WebEvidenceInput, WebExecutionOutcome,
 };
 use tokio::runtime::Runtime;
 
@@ -431,6 +432,43 @@ impl<'a> RecursiveRuntimeFactory<'a> for ProviderRecursiveRuntimeConfig<'a> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderRecursiveTaskConfig<'a> {
+    pub runtime: ProviderRecursiveRuntimeConfig<'a>,
+    pub corpus: &'a runtime::CorpusManifest,
+    pub spec: RecursiveTaskSpec<'a>,
+}
+
+impl<'a> RecursiveTaskWorkspaceProvider<'a> for ProviderRecursiveTaskConfig<'a> {
+    fn workspace(&self) -> RecursiveTaskWorkspace<'a> {
+        self.runtime.workspace()
+    }
+}
+
+impl<'a> RecursiveRuntimeFactory<'a> for ProviderRecursiveTaskConfig<'a> {
+    type Executor = ProviderBackedChildExecutor;
+    type Aggregator = runtime::DefaultChildOutputAggregator;
+
+    fn build_runtime(
+        &self,
+        corpus: &'a runtime::CorpusManifest,
+    ) -> runtime::RecursiveConversationRuntime<'a, Self::Executor, Self::Aggregator> {
+        self.runtime.build_runtime(corpus)
+    }
+}
+
+impl<'a> RecursiveCorpusProvider<'a> for ProviderRecursiveTaskConfig<'a> {
+    fn corpus(&self) -> &'a runtime::CorpusManifest {
+        self.corpus
+    }
+}
+
+impl<'a> RecursiveTaskSpecProvider<'a> for ProviderRecursiveTaskConfig<'a> {
+    fn task_spec(&self) -> RecursiveTaskSpec<'a> {
+        self.spec
+    }
+}
+
 pub type ProviderRecursiveTaskRequest<'a> =
     RecursiveTaskEnvelope<'a, ProviderRecursiveRuntimeConfig<'a>>;
 pub type ProviderRecursiveRunArtifacts = RecursiveRunArtifacts;
@@ -448,20 +486,26 @@ pub fn build_runtime_configured_provider_recursive_task_runtime<'a>(
 pub fn prepare_runtime_configured_provider_recursive_task_run(
     request: &ProviderRecursiveTaskRequest<'_>,
 ) -> ProviderPreparedRecursiveTaskRun {
-    request
-        .runtime
-        .prepare_task_run(request.task_id, request.task, request.profile)
+    request.prepare()
+}
+
+#[must_use]
+pub fn prepare_runtime_configured_provider_recursive_task_config(
+    config: &ProviderRecursiveTaskConfig<'_>,
+) -> ProviderPreparedRecursiveTaskRun {
+    config.prepare_task()
 }
 
 pub fn run_runtime_configured_provider_recursive_task(
     request: ProviderRecursiveTaskRequest<'_>,
 ) -> Result<(RecursiveExecutionResult, ProviderRecursiveRunArtifacts), RecursiveRuntimeError> {
-    request.runtime.run_task(
-        request.corpus,
-        request.task_id,
-        request.task,
-        request.profile,
-    )
+    request.run()
+}
+
+pub fn run_runtime_configured_provider_recursive_task_config(
+    config: &ProviderRecursiveTaskConfig<'_>,
+) -> Result<(RecursiveExecutionResult, ProviderRecursiveRunArtifacts), RecursiveRuntimeError> {
+    config.run_task()
 }
 
 pub fn run_runtime_configured_provider_recursive_query(
@@ -474,7 +518,7 @@ pub fn run_runtime_configured_provider_recursive_query(
     active_model: Option<&str>,
     default_model: &str,
 ) -> Result<(RecursiveExecutionResult, ProviderRecursiveRunArtifacts), RecursiveRuntimeError> {
-    run_runtime_configured_provider_recursive_task(ProviderRecursiveTaskRequest {
+    run_runtime_configured_provider_recursive_task_config(&ProviderRecursiveTaskConfig {
         runtime: ProviderRecursiveRuntimeConfig {
             cwd,
             session_id,
@@ -482,9 +526,11 @@ pub fn run_runtime_configured_provider_recursive_query(
             default_model,
         },
         corpus,
-        task_id,
-        task,
-        profile,
+        spec: RecursiveTaskSpec {
+            task_id,
+            task,
+            profile,
+        },
     })
 }
 
@@ -1129,9 +1175,11 @@ mod tests {
                 default_model: "claude-opus-4-6",
             },
             corpus: &corpus,
-            task_id: "task-1",
-            task: "Summarize the guide",
-            profile: ExecutionProfile::Balanced,
+            spec: RecursiveTaskSpec {
+                task_id: "task-1",
+                task: "Summarize the guide",
+                profile: ExecutionProfile::Balanced,
+            },
         };
 
         let prepared = prepare_runtime_configured_provider_recursive_task_run(&request);
@@ -1169,14 +1217,21 @@ mod tests {
             ExecutionProfile::Balanced,
         );
         assert_eq!(rerun_prepared.task_id, "task-2");
-        let (rerun_result, rerun_artifacts) = runtime_config
-            .run_task(
-                &corpus,
-                "task-2",
-                "Summarize the guide again",
-                ExecutionProfile::Balanced,
-            )
-            .expect("runtime-native recursive runner should succeed");
+        let provider_task_config = ProviderRecursiveTaskConfig {
+            runtime: runtime_config.clone(),
+            corpus: &corpus,
+            spec: RecursiveTaskSpec {
+                task_id: "task-2",
+                task: "Summarize the guide again",
+                profile: ExecutionProfile::Balanced,
+            },
+        };
+        let provider_prepared =
+            prepare_runtime_configured_provider_recursive_task_config(&provider_task_config);
+        assert_eq!(provider_prepared.task_id, "task-2");
+        let (rerun_result, rerun_artifacts) =
+            run_runtime_configured_provider_recursive_task_config(&provider_task_config)
+                .expect("provider task config recursive runner should succeed");
         assert!(rerun_result.usage.depth <= 1);
         assert!(rerun_artifacts.telemetry_path.exists());
 
