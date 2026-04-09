@@ -2270,27 +2270,32 @@ fn apply_evidence_set_rerank(
     }
 
     let mut outline_support = std::collections::BTreeMap::<String, usize>::new();
+    let mut strongest_outline_focus = String::new();
+    let mut strongest_outline_focus_depth = 0usize;
+    let mut strongest_outline_focus_support = 0usize;
     for ordinal in &strong_hit_ordinals {
         let Some(chunk) = doc.chunks.iter().find(|chunk| chunk.ordinal == *ordinal) else {
             continue;
         };
-        let outline_path = chunk
-            .metadata
-            .get("outlinePath")
-            .and_then(JsonValue::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(JsonValue::as_str)
-                    .map(normalize_for_match)
-                    .filter(|segment| !segment.is_empty())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let outline_path = normalized_outline_path(chunk);
         for depth in 1..=outline_path.len() {
             let key = outline_path[..depth].join(" > ");
-            if !key.is_empty() {
-                *outline_support.entry(key).or_insert(0) += 1;
+            if key.is_empty() {
+                continue;
+            }
+            let support = {
+                let count = outline_support.entry(key.clone()).or_insert(0);
+                *count += 1;
+                *count
+            };
+            if support >= 2
+                && (depth > strongest_outline_focus_depth
+                    || (depth == strongest_outline_focus_depth
+                        && support > strongest_outline_focus_support))
+            {
+                strongest_outline_focus = key;
+                strongest_outline_focus_depth = depth;
+                strongest_outline_focus_support = support;
             }
         }
     }
@@ -2313,27 +2318,15 @@ fn apply_evidence_set_rerank(
             reasons.push(format!("evidence-set:local-cluster:{local_cluster}"));
         }
 
-        let max_outline_support = doc
+        let outline_keys = doc
             .chunks
             .iter()
             .find(|chunk| chunk.ordinal == hit.ordinal)
-            .and_then(|chunk| chunk.metadata.get("outlinePath"))
-            .and_then(JsonValue::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(JsonValue::as_str)
-                    .map(normalize_for_match)
-                    .filter(|segment| !segment.is_empty())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
-            .into_iter()
-            .scan(Vec::<String>::new(), |acc, segment| {
-                acc.push(segment);
-                Some(acc.join(" > "))
-            })
-            .filter_map(|key| outline_support.get(&key).copied())
+            .map(outline_support_keys)
+            .unwrap_or_default();
+        let max_outline_support = outline_keys
+            .iter()
+            .filter_map(|key| outline_support.get(key).copied())
             .max()
             .unwrap_or(0);
         if max_outline_support >= 2 {
@@ -2349,9 +2342,53 @@ fn apply_evidence_set_rerank(
                 "evidence-set:outline-support:{max_outline_support}"
             ));
         }
+        if strongest_outline_focus_support >= 2
+            && outline_keys
+                .iter()
+                .any(|key| key == &strongest_outline_focus)
+        {
+            let focus_bonus = if query_features.intent.continuity_lookup
+                || query_features.intent.explanatory_lookup
+            {
+                1.4 + strongest_outline_focus_depth as f64 * 0.45
+            } else {
+                1.0 + strongest_outline_focus_depth as f64 * 0.3
+            };
+            hit.hit.score += focus_bonus;
+            reasons.push(format!(
+                "evidence-set:outline-focus:{}x{}",
+                strongest_outline_focus_depth, strongest_outline_focus_support
+            ));
+        }
 
         hit.hit.reason = reasons.join(", ");
     }
+}
+
+fn normalized_outline_path(chunk: &CorpusChunk) -> Vec<String> {
+    chunk
+        .metadata
+        .get("outlinePath")
+        .and_then(JsonValue::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(JsonValue::as_str)
+                .map(normalize_for_match)
+                .filter(|segment| !segment.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn outline_support_keys(chunk: &CorpusChunk) -> Vec<String> {
+    normalized_outline_path(chunk)
+        .into_iter()
+        .scan(Vec::<String>::new(), |acc, segment| {
+            acc.push(segment);
+            Some(acc.join(" > "))
+        })
+        .collect()
 }
 
 fn split_reason_tokens(reason: &str) -> Vec<String> {
@@ -2394,7 +2431,7 @@ fn expand_query_token(token: &str) -> Vec<String> {
 }
 
 fn semantic_expansions(token: &str) -> Vec<SemanticTerm> {
-    let expansions = match token {
+    let mut expansions = match token {
         "auth" => vec![
             "authentication",
             "authenticate",
@@ -2433,13 +2470,36 @@ fn semantic_expansions(token: &str) -> Vec<SemanticTerm> {
         "retrieval" => vec!["search", "lookup", "index", "corpus"],
         _ => Vec::new(),
     };
+    expansions.extend(morphological_semantic_expansions(token));
+    let mut seen = std::collections::BTreeSet::new();
     expansions
         .into_iter()
+        .filter(|expanded_term| !expanded_term.is_empty() && *expanded_term != token)
+        .filter(|expanded_term| seen.insert((*expanded_term).to_string()))
         .map(|expanded_term| SemanticTerm {
             query_term: token.to_string(),
             expanded_term: expanded_term.to_string(),
         })
         .collect()
+}
+
+fn morphological_semantic_expansions(token: &str) -> Vec<&'static str> {
+    match token {
+        "rotate" | "rotated" | "rotates" | "rotation" => {
+            vec!["rotate", "rotated", "rotates", "rotation"]
+        }
+        "revoke" | "revoked" | "revokes" | "revocation" => {
+            vec!["revoke", "revoked", "revokes", "revocation"]
+        }
+        "refresh" | "refreshed" | "refreshes" => {
+            vec!["refresh", "refreshed", "refreshes"]
+        }
+        "session" | "sessions" => vec!["session", "sessions"],
+        "token" | "tokens" => vec!["token", "tokens"],
+        "queue" | "queued" | "queues" => vec!["queue", "queued", "queues"],
+        "retry" | "retries" | "retried" => vec!["retry", "retries", "retried"],
+        _ => Vec::new(),
+    }
 }
 
 fn language_hint_for_token(token: &str) -> Option<String> {
@@ -3765,6 +3825,63 @@ mod retrieval_gap_regression_tests {
                 || result.hits[0]
                     .reason
                     .contains("evidence-set:outline-support:")
+        );
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+    #[test]
+    fn search_uses_morphology_and_shared_outline_focus_for_semantic_reranking() {
+        let cwd = temp_dir("workspace-semantic-outline-focus");
+        let root = cwd.join("docs");
+        fs::create_dir_all(&root).expect("mkdir docs");
+        fs::write(
+            root.join("runbook.md"),
+            "# Identity
+
+## Session Rotation
+Rotated refresh tokens are audited after each deploy.
+
+### Revocation Cleanup
+Operators track rotated tokens, revoke stale sessions, and inspect token refresh errors after rotation.
+
+### Follow-up Checks
+Rotation health checks confirm revoked sessions stay invalid.
+",
+        )
+        .expect("write semantic focus doc");
+        fs::write(
+            root.join("notes.md"),
+            "# Notes
+
+A revocation checklist exists. A token may be refreshed during sign in.
+",
+        )
+        .expect("write distractor doc");
+
+        let manifest = attach_corpus(
+            &cwd,
+            &[root.clone()],
+            CorpusAttachOptions {
+                chunk_bytes: 80,
+                ..CorpusAttachOptions::default()
+            },
+        )
+        .expect("attach corpus");
+        let result = search_corpus(
+            &cwd,
+            &manifest.corpus_id,
+            "explain session rotate revoked token refresh flow",
+            5,
+            None,
+        )
+        .expect("search");
+
+        assert_eq!(result.hits[0].path, "runbook.md");
+        assert!(
+            result.hits[0].reason.contains("semantic-")
+                || result.hits[0]
+                    .reason
+                    .contains("evidence-set:outline-focus:")
         );
 
         let _ = fs::remove_dir_all(cwd);
