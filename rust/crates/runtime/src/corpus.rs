@@ -1260,6 +1260,8 @@ pub fn search_corpus_manifest(
         scored_hits.extend(document_hits);
     }
 
+    apply_cross_document_agreement_rerank(&query_features, &mut scored_hits);
+
     let mut hits = scored_hits
         .into_iter()
         .map(|entry| entry.hit)
@@ -2363,6 +2365,124 @@ fn apply_evidence_set_rerank(
 
         hit.hit.reason = reasons.join(", ");
     }
+}
+
+fn apply_cross_document_agreement_rerank(
+    query_features: &QueryFeatures,
+    scored_hits: &mut [ScoredChunkHit],
+) {
+    if scored_hits.len() < 2 {
+        return;
+    }
+
+    let strong_docs = scored_hits
+        .iter()
+        .filter(|hit| hit.full_coverage || hit.matched_token_count >= 2 || hit.hit.score >= 12.0)
+        .fold(
+            BTreeMap::<String, DocumentAgreementSummary>::new(),
+            |mut acc, hit| {
+                let summary = acc
+                    .entry(hit.hit.document_id.clone())
+                    .or_insert_with(|| DocumentAgreementSummary::from_hit(hit));
+                summary.observe(hit);
+                acc
+            },
+        );
+    if strong_docs.len() < 2 {
+        return;
+    }
+
+    let mut term_support = BTreeMap::<String, usize>::new();
+    let mut directory_support = BTreeMap::<String, usize>::new();
+    for summary in strong_docs.values() {
+        for term in &summary.matched_terms {
+            *term_support.entry(term.clone()).or_insert(0) += 1;
+        }
+        if !summary.parent_directory.is_empty() {
+            *directory_support
+                .entry(summary.parent_directory.clone())
+                .or_insert(0) += 1;
+        }
+    }
+
+    for hit in scored_hits.iter_mut() {
+        let Some(summary) = strong_docs.get(&hit.hit.document_id) else {
+            continue;
+        };
+        let mut reasons = split_reason_tokens(&hit.hit.reason);
+
+        let corroborated_terms = summary
+            .matched_terms
+            .iter()
+            .filter(|term| term_support.get(term.as_str()).copied().unwrap_or(0) >= 2)
+            .count();
+        if corroborated_terms >= 1 {
+            let term_bonus = if query_features.intent.continuity_lookup
+                || query_features.intent.explanatory_lookup
+                || query_features.intent.docs_lookup
+            {
+                1.5 + corroborated_terms as f64 * 0.75
+            } else {
+                1.0 + corroborated_terms as f64 * 0.45
+            };
+            hit.hit.score += term_bonus;
+            reasons.push(format!("cross-doc:term-agreement:{corroborated_terms}"));
+        }
+
+        let directory_peers = if summary.parent_directory.is_empty() {
+            0
+        } else {
+            directory_support
+                .get(&summary.parent_directory)
+                .copied()
+                .unwrap_or(0)
+                .saturating_sub(1)
+        };
+        if directory_peers >= 1 {
+            let directory_bonus = if query_features.intent.docs_lookup
+                || query_features.intent.continuity_lookup
+                || query_features.intent.explanatory_lookup
+            {
+                0.9 + directory_peers as f64 * 0.6
+            } else {
+                0.5 + directory_peers as f64 * 0.35
+            };
+            hit.hit.score += directory_bonus;
+            reasons.push(format!("cross-doc:path-neighborhood:{directory_peers}"));
+        }
+
+        hit.hit.reason = reasons.join(", ");
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct DocumentAgreementSummary {
+    parent_directory: String,
+    matched_terms: std::collections::BTreeSet<String>,
+}
+
+impl DocumentAgreementSummary {
+    fn from_hit(hit: &ScoredChunkHit) -> Self {
+        Self {
+            parent_directory: parent_directory_key(&hit.hit.path),
+            matched_terms: hit.hit.matched_terms.iter().cloned().collect(),
+        }
+    }
+
+    fn observe(&mut self, hit: &ScoredChunkHit) {
+        self.matched_terms
+            .extend(hit.hit.matched_terms.iter().cloned());
+        if self.parent_directory.is_empty() {
+            self.parent_directory = parent_directory_key(&hit.hit.path);
+        }
+    }
+}
+
+fn parent_directory_key(path: &str) -> String {
+    Path::new(path)
+        .parent()
+        .map(|parent| normalize_for_match(&parent.display().to_string()))
+        .unwrap_or_default()
 }
 
 fn normalized_outline_path(chunk: &CorpusChunk) -> Vec<String> {
@@ -3882,6 +4002,94 @@ A revocation checklist exists. A token may be refreshed during sign in.
                 || result.hits[0]
                     .reason
                     .contains("evidence-set:outline-focus:")
+        );
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_boosts_cross_document_agreement_for_related_docs() {
+        let cwd = temp_dir("workspace-cross-document-agreement");
+        let root = cwd.join("docs");
+        fs::create_dir_all(root.join("auth")).expect("mkdir auth docs");
+        fs::create_dir_all(root.join("ops")).expect("mkdir ops docs");
+        fs::write(
+            root.join("auth/session-rotation.md"),
+            "# Session Rotation
+
+Rotated refresh tokens are audited after each deploy.
+Revoked sessions are cleaned up during token rotation.
+",
+        )
+        .expect("write rotation doc");
+        fs::write(
+            root.join("auth/token-revocation.md"),
+            "# Token Revocation
+
+Token refresh failures trigger revocation cleanup.
+Session rotation keeps revoked refresh tokens invalid.
+",
+        )
+        .expect("write revocation doc");
+        fs::write(
+            root.join("ops/release-calendar.md"),
+            "# Release Calendar
+
+Rotation schedule for the release train and staffing coverage.
+",
+        )
+        .expect("write distractor doc");
+
+        let manifest = attach_corpus(
+            &cwd,
+            &[root.clone()],
+            CorpusAttachOptions {
+                chunk_bytes: 90,
+                ..CorpusAttachOptions::default()
+            },
+        )
+        .expect("attach corpus");
+        let result = search_corpus(
+            &cwd,
+            &manifest.corpus_id,
+            "explain session rotation revoked token refresh flow",
+            5,
+            None,
+        )
+        .expect("search");
+
+        let auth_hits = result
+            .hits
+            .iter()
+            .filter(|hit| hit.path.starts_with("auth/"))
+            .collect::<Vec<_>>();
+        assert!(
+            auth_hits.len() >= 2,
+            "expected two auth hits: {:#?}",
+            result.hits
+        );
+        assert!(
+            auth_hits
+                .iter()
+                .any(|hit| hit.reason.contains("cross-doc:term-agreement:")),
+            "expected cross-document term agreement in reasons: {:#?}",
+            result.hits
+        );
+        assert!(
+            auth_hits
+                .iter()
+                .any(|hit| hit.reason.contains("cross-doc:path-neighborhood:")),
+            "expected path-neighborhood agreement in reasons: {:#?}",
+            result.hits
+        );
+        assert!(
+            result
+                .hits
+                .iter()
+                .take(2)
+                .all(|hit| hit.path.starts_with("auth/")),
+            "expected related auth docs to outrank distractor: {:#?}",
+            result.hits
         );
 
         let _ = fs::remove_dir_all(cwd);
