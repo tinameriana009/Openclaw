@@ -130,11 +130,16 @@ if [[ -n "${PROVENANCE_SIGNING_KEY:-}" ]]; then
   echo "signed provenance: $provenance_path"
   echo "signed provenance signature: $signature_path"
   echo "signed provenance public key: $public_key_path"
+  if [[ -n "${PROVENANCE_SIGNING_CERT:-}" && -n "${PROVENANCE_TRUST_ROOT:-}" ]]; then
+    echo "signed provenance certificate: .claw/release-artifacts/release-provenance.cert.pem"
+    [[ -n "${PROVENANCE_SIGNING_CHAIN:-}" ]] && echo "signed provenance chain: .claw/release-artifacts/release-provenance.chain.pem"
+    echo "signed provenance trust root: .claw/release-artifacts/release-provenance.root.pem"
+  fi
   echo "release trust policy: $trust_policy_path"
   python3 ../tests/validate_signed_release_provenance.py "$provenance_path" "$signature_path" "$public_key_path" "$trust_policy_path"
   python3 ../tests/validate_release_trust_policy.py "$trust_policy_path" "$provenance_path" "$signature_path" "$public_key_path" "$manifest_path" "$attestation_path"
 else
-  echo "optional signed provenance: skipped (set PROVENANCE_SIGNING_KEY to emit release-provenance.json + .sig)"
+  echo "optional signed provenance: skipped (set PROVENANCE_SIGNING_KEY to emit release-provenance.json + .sig, optionally with PROVENANCE_SIGNING_CERT/PROVENANCE_TRUST_ROOT for a rooted X.509 chain)"
 fi
 
 if [[ "$release_candidate" == "1" ]]; then

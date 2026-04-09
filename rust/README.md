@@ -102,7 +102,7 @@ cd rust
 RELEASE_CANDIDATE=1 ./scripts/release-verify.sh
 ```
 
-That helper checks the active Rust toolchain first, then runs the locked workspace verification sequence. In RC mode it also runs the explicit release-candidate documentation gate, generates `.claw/release-artifacts/release-manifest.json` plus `.claw/release-artifacts/release-attestation.json`, and expects release notes/trust docs to stay aligned with the current `artifactKind` / `schemaVersion` / `compatVersion` contract. If you provide `PROVENANCE_SIGNING_KEY=/path/to/private-key.pem`, the same flow will also emit `.claw/release-artifacts/release-provenance.json`, `.claw/release-artifacts/release-provenance.sig`, and `.claw/release-artifacts/release-trust-policy.json`, then verify that signed bundle locally. That is a bounded signed provenance layer with a pinned local trust policy, not a claim of full hosted supply-chain security.
+That helper checks the active Rust toolchain first, then runs the locked workspace verification sequence. In RC mode it also runs the explicit release-candidate documentation gate, generates `.claw/release-artifacts/release-manifest.json` plus `.claw/release-artifacts/release-attestation.json`, and expects release notes/trust docs to stay aligned with the current `artifactKind` / `schemaVersion` / `compatVersion` contract. If you provide `PROVENANCE_SIGNING_KEY=/path/to/private-key.pem`, the same flow will also emit `.claw/release-artifacts/release-provenance.json`, `.claw/release-artifacts/release-provenance.sig`, and `.claw/release-artifacts/release-trust-policy.json`, then verify that signed bundle locally. If you additionally provide `PROVENANCE_SIGNING_CERT=/path/to/leaf-cert.pem` plus `PROVENANCE_TRUST_ROOT=/path/to/root-ca.pem` (and optionally `PROVENANCE_SIGNING_CHAIN=/path/to/intermediate-chain.pem`), that bundle will also pin and validate a supplied X.509 chain back to the provided root. This is still bounded release provenance, not a claim of Sigstore/SLSA-grade hosted supply-chain security.
 
 Manual equivalent:
 
@@ -349,7 +349,7 @@ Current baseline:
 - the release artifact manifest now also carries a small local provenance envelope (`schemaVersion=2`, `compatVersion=0.2`) with remotes, host/toolchain snapshot, declared verification commands, and hashed release materials
 - a paired `release-attestation.json` sidecar (`artifactKind=claw.release-attestation`, `schemaVersion=1`, `compatVersion=0.1`) binds the manifest hash and built binary hash into a more formal statement shape
 - trace and corpus artifact formats are documented, but still pre-1.0 contracts
-- there is not yet a dedicated migration layer for session / trace / corpus artifacts, and the signed release path is still a local/operator-managed trust model even with the new pinned trust-policy file
+- there is not yet a dedicated migration layer for session / trace / corpus artifacts, and even the improved signed release path remains operator-supplied trust material rather than public transparency-backed provenance
 - safest automation strategy today is pinning to a git tag or commit and parsing `.claw/` artifacts defensively
 
 If you build tooling around `.claw/trace/`, `.claw/corpus/`, or `.claw/telemetry/`, read [`docs/ARTIFACTS.md`](docs/ARTIFACTS.md) first.

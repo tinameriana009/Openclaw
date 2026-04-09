@@ -74,10 +74,10 @@ What is now strong:
 - key trust/release surfaces are hashed and machine-readable
 
 What is still missing:
-- no signed provenance or attestation
-- no packaged release artifact trust chain
+- no public transparency-backed or keyless provenance
+- no packaged/distributed release trust chain beyond operator-supplied local artifacts
 - no automatic fresh-run artifact verification pipeline end-to-end
-- trust is still mostly local/source-first rather than formal release provenance, even though the local manifest now carries better clone/build/verification context
+- trust is still mostly source-first and operator-anchored rather than public supply-chain provenance, even though the local manifest/attestation/signed bundle can now also pin a supplied X.509 root chain
 
 Why it still matters:
 - stronger release discipline improves confidence for reuse and handoff

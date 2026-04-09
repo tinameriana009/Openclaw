@@ -44,6 +44,32 @@ def verify_signature(provenance_path: Path, signature_path: Path, public_key_pat
     )
 
 
+def verify_public_key_matches_certificate(public_key_path: Path, certificate_path: Path) -> None:
+    cert_pub = subprocess.check_output(
+        ['openssl', 'x509', '-in', str(certificate_path), '-pubkey', '-noout'],
+        text=False,
+    )
+    cert_der = subprocess.check_output(
+        ['openssl', 'pkey', '-pubin', '-outform', 'DER'],
+        input=cert_pub,
+        text=False,
+    )
+    key_der = subprocess.check_output(
+        ['openssl', 'pkey', '-pubin', '-in', str(public_key_path), '-outform', 'DER'],
+        text=False,
+    )
+    if cert_der != key_der:
+        raise ValueError('signing certificate public key does not match the pinned public key')
+
+
+def verify_certificate_chain(certificate_path: Path, trust_root_path: Path, chain_path: Path | None) -> None:
+    argv = ['openssl', 'verify', '-CAfile', str(trust_root_path)]
+    if chain_path is not None:
+        argv.extend(['-untrusted', str(chain_path)])
+    argv.append(str(certificate_path))
+    subprocess.run(argv, check=True, capture_output=True, text=True)
+
+
 def main() -> int:
     policy_path = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else DEFAULT_POLICY
     provenance_path = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else DEFAULT_PROVENANCE
@@ -83,8 +109,8 @@ def main() -> int:
         return fail('Release trust policy compatVersion must be 0.1')
 
     policy_type = policy.get('policyType')
-    if policy_type != 'local-pinned-public-key':
-        return fail('Release trust policy policyType must be local-pinned-public-key')
+    if policy_type not in {'local-pinned-public-key', 'x509-rooted-public-key'}:
+        return fail('Release trust policy policyType must be local-pinned-public-key or x509-rooted-public-key')
 
     materials = policy.get('materials')
     if not isinstance(materials, dict):
@@ -158,6 +184,58 @@ def main() -> int:
         return fail('Release trust policy attestationBinding.attestationArtifactKind must match the attestation')
     if policy_attestation.get('provenancePredicateType') != provenance.get('predicateType'):
         return fail('Release trust policy attestationBinding.provenancePredicateType must match signed provenance predicateType')
+
+    x509_policy = policy.get('x509Identity')
+    signer_x509 = signer.get('x509Identity')
+    if policy_type == 'x509-rooted-public-key':
+        if not isinstance(x509_policy, dict):
+            return fail('Release trust policy x509Identity must be present for x509-rooted-public-key policy')
+        if not isinstance(signer_x509, dict):
+            return fail('Signed provenance signer.x509Identity must be present for x509-rooted-public-key policy')
+        certificate_path = RUST_ROOT / x509_policy.get('certificatePath', '')
+        trust_root_path = RUST_ROOT / x509_policy.get('trustRootPath', '')
+        chain_value = x509_policy.get('chainPath')
+        chain_path = RUST_ROOT / chain_value if isinstance(chain_value, str) else None
+        for path, label in [(certificate_path, 'X.509 certificate'), (trust_root_path, 'X.509 trust root')]:
+            if not path.exists():
+                return fail(f'{label} does not exist: {path}')
+        if materials.get('certificatePath') != certificate_path.relative_to(RUST_ROOT).as_posix():
+            return fail('Release trust policy materials.certificatePath must match x509Identity.certificatePath')
+        if materials.get('certificateSha256') != sha256_bytes(certificate_path.read_bytes()):
+            return fail('Release trust policy materials.certificateSha256 does not match the provided certificate')
+        if materials.get('trustRootPath') != trust_root_path.relative_to(RUST_ROOT).as_posix():
+            return fail('Release trust policy materials.trustRootPath must match x509Identity.trustRootPath')
+        if materials.get('trustRootSha256') != sha256_bytes(trust_root_path.read_bytes()):
+            return fail('Release trust policy materials.trustRootSha256 does not match the provided trust root')
+        if x509_policy.get('certificateSha256') != sha256_bytes(certificate_path.read_bytes()):
+            return fail('Release trust policy x509Identity.certificateSha256 does not match the provided certificate')
+        if x509_policy.get('trustRootSha256') != sha256_bytes(trust_root_path.read_bytes()):
+            return fail('Release trust policy x509Identity.trustRootSha256 does not match the provided trust root')
+        if x509_policy.get('certificateSubject') != signer_x509.get('certificateSubject'):
+            return fail('Release trust policy x509Identity.certificateSubject must match signed provenance signer.x509Identity.certificateSubject')
+        if x509_policy.get('certificateIssuer') != signer_x509.get('certificateIssuer'):
+            return fail('Release trust policy x509Identity.certificateIssuer must match signed provenance signer.x509Identity.certificateIssuer')
+        if chain_path is not None:
+            if not chain_path.exists():
+                return fail(f'X.509 chain bundle does not exist: {chain_path}')
+            if materials.get('chainPath') != chain_path.relative_to(RUST_ROOT).as_posix():
+                return fail('Release trust policy materials.chainPath must match x509Identity.chainPath')
+            if materials.get('chainSha256') != sha256_bytes(chain_path.read_bytes()):
+                return fail('Release trust policy materials.chainSha256 does not match the provided chain bundle')
+            if x509_policy.get('chainSha256') != sha256_bytes(chain_path.read_bytes()):
+                return fail('Release trust policy x509Identity.chainSha256 does not match the provided chain bundle')
+        elif 'chainPath' in materials or 'chainSha256' in materials:
+            return fail('Release trust policy chain materials must only be present when x509Identity.chainPath is set')
+        try:
+            verify_public_key_matches_certificate(public_key_path, certificate_path)
+            verify_certificate_chain(certificate_path, trust_root_path, chain_path)
+        except FileNotFoundError:
+            return fail('openssl is required to verify the release trust policy X.509 chain')
+        except (subprocess.CalledProcessError, ValueError) as exc:
+            detail = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) and exc.stderr else str(exc)
+            return fail(f'Release trust policy X.509 verification failed: {detail}')
+    elif x509_policy is not None or signer_x509 is not None:
+        return fail('Release trust policy x509Identity must only be present for x509-rooted-public-key policy')
 
     print(f'Release trust policy validation passed: {policy_path}')
     return 0

@@ -42,6 +42,24 @@ def verify_signature(provenance_path: Path, signature_path: Path, public_key_pat
     )
 
 
+def verify_public_key_matches_certificate(public_key_path: Path, certificate_path: Path) -> None:
+    cert_pub = subprocess.check_output(
+        ['openssl', 'x509', '-in', str(certificate_path), '-pubkey', '-noout'],
+        text=False,
+    )
+    cert_der = subprocess.check_output(
+        ['openssl', 'pkey', '-pubin', '-outform', 'DER'],
+        input=cert_pub,
+        text=False,
+    )
+    key_der = subprocess.check_output(
+        ['openssl', 'pkey', '-pubin', '-in', str(public_key_path), '-outform', 'DER'],
+        text=False,
+    )
+    if cert_der != key_der:
+        raise ValueError('signing certificate public key does not match the provided public key')
+
+
 def main() -> int:
     provenance_path = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else DEFAULT_PROVENANCE
     signature_path = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else DEFAULT_SIGNATURE
@@ -115,10 +133,41 @@ def main() -> int:
     if signer.get('signaturePath') != signature_path.relative_to(RUST_ROOT).as_posix():
         return fail('Signed provenance signer.signaturePath must match the signature path')
 
+    trust_model = verification.get('trustModel')
+    if trust_model not in {'local-pinned-public-key', 'x509-rooted-public-key'}:
+        return fail('Signed provenance verification.trustModel must be local-pinned-public-key or x509-rooted-public-key')
     if verification.get('trustPolicyPath') != trust_policy_path.relative_to(RUST_ROOT).as_posix():
         return fail('Signed provenance verification.trustPolicyPath must match the provided trust policy path')
-    if verification.get('trustModel') != 'local-pinned-public-key':
-        return fail('Signed provenance verification.trustModel must be local-pinned-public-key')
+
+    x509_identity = signer.get('x509Identity')
+    if trust_model == 'x509-rooted-public-key':
+        if not isinstance(x509_identity, dict):
+            return fail('Signed provenance signer.x509Identity must be present for x509-rooted-public-key trust')
+        certificate_path = RUST_ROOT / x509_identity.get('certificatePath', '')
+        trust_root_path = RUST_ROOT / x509_identity.get('trustRootPath', '')
+        chain_path_value = x509_identity.get('chainPath')
+        if not certificate_path.exists():
+            return fail(f'Signed provenance X.509 certificate does not exist: {certificate_path}')
+        if not trust_root_path.exists():
+            return fail(f'Signed provenance X.509 trust root does not exist: {trust_root_path}')
+        if x509_identity.get('certificateSha256') != sha256_bytes(certificate_path.read_bytes()):
+            return fail('Signed provenance signer.x509Identity.certificateSha256 does not match the provided certificate')
+        if x509_identity.get('trustRootSha256') != sha256_bytes(trust_root_path.read_bytes()):
+            return fail('Signed provenance signer.x509Identity.trustRootSha256 does not match the provided trust root')
+        if x509_identity.get('verificationMode') != 'openssl-verify-ca':
+            return fail('Signed provenance signer.x509Identity.verificationMode must be openssl-verify-ca')
+        try:
+            verify_public_key_matches_certificate(public_key_path, certificate_path)
+        except (subprocess.CalledProcessError, ValueError) as exc:
+            return fail(f'Signed provenance X.509 leaf/public key verification failed: {exc}')
+        if chain_path_value is not None:
+            chain_path = RUST_ROOT / chain_path_value
+            if not chain_path.exists():
+                return fail(f'Signed provenance X.509 chain does not exist: {chain_path}')
+            if x509_identity.get('chainSha256') != sha256_bytes(chain_path.read_bytes()):
+                return fail('Signed provenance signer.x509Identity.chainSha256 does not match the provided chain bundle')
+    elif x509_identity is not None:
+        return fail('Signed provenance signer.x509Identity must only be present for x509-rooted-public-key trust')
 
     commands = verification.get('commands')
     required_command = 'python3 ../tests/validate_signed_release_provenance.py <provenance-path> <signature-path> <public-key-path>'

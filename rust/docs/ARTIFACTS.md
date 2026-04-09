@@ -13,6 +13,7 @@ Current operator-relevant artifact locations:
 - `.claw/release-artifacts/release-manifest.json` — machine-readable release/build artifact manifest for the current verified workspace
 - `.claw/release-artifacts/release-attestation.json` — formal local provenance statement that binds the manifest hash to the built binary
 - `.claw/release-artifacts/release-provenance.json` + `.sig` — optional signed provenance bundle over the binary + manifest + attestation chain
+- `.claw/release-artifacts/release-provenance.cert.pem` / `.chain.pem` / `.root.pem` — optional rooted X.509 materials when the signer is backed by a supplied CA chain
 - `.claw/release-artifacts/release-trust-policy.json` — optional pinned trust-policy file for the signed provenance flow
 
 These files are useful for inspection, debugging, evaluation, and incident review.
@@ -220,12 +221,14 @@ If you need a bounded signed chain on top of that, `./scripts/sign-release-prove
 - `release-provenance.sig` — a detached OpenSSL SHA-256 signature over that bundle
 - `release-provenance.pub.pem` — the corresponding public key used for verification
 - `release-trust-policy.json` — a machine-readable local trust policy that pins the signer fingerprint, source metadata, and exact signed materials for this release flow
+- `release-provenance.cert.pem`, `release-provenance.chain.pem`, and `release-provenance.root.pem` — optional copied X.509 materials when you also provide `PROVENANCE_SIGNING_CERT`, `PROVENANCE_SIGNING_CHAIN`, and `PROVENANCE_TRUST_ROOT`
 
 Validation path for the signed bundle:
 
 ```bash
 cd rust
 PROVENANCE_SIGNING_KEY=./keys/release-private.pem ./scripts/sign-release-provenance.sh
+# optionally add PROVENANCE_SIGNING_CERT=./keys/release-leaf.pem PROVENANCE_TRUST_ROOT=./keys/root-ca.pem
 python3 ../tests/validate_signed_release_provenance.py \
   .claw/release-artifacts/release-provenance.json \
   .claw/release-artifacts/release-provenance.sig \
@@ -240,7 +243,7 @@ python3 ../tests/validate_release_trust_policy.py \
   .claw/release-artifacts/release-attestation.json
 ```
 
-This is still intentionally bounded. It improves tamper evidence for the local binary → manifest → attestation chain and turns the expected signer/material set into an explicit file instead of purely operator memory, but it does **not** claim a hosted builder identity, transparency-log inclusion, keyless signing, or a public package-registry provenance story. In other words: it is signed local provenance with a pinned local trust policy, not a full end-to-end supply-chain security system.
+This is still intentionally bounded. At minimum it improves tamper evidence for the local binary → manifest → attestation chain and turns the expected signer/material set into an explicit file instead of purely operator memory. If you attach `PROVENANCE_SIGNING_CERT` plus `PROVENANCE_TRUST_ROOT` (and optionally `PROVENANCE_SIGNING_CHAIN`), the bundle can also pin a supplied X.509 chain back to that root and verify it locally with `openssl verify`. Even then it does **not** claim transparency-log inclusion, keyless signing, public CA discovery, hosted builder identity, or a public package-registry provenance story. In other words: it is signed local provenance with either a pinned local key or a supplied rooted X.509 chain, not a full end-to-end supply-chain security system.
 
 ## Sessions
 
