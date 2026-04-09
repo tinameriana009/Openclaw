@@ -126,10 +126,13 @@ if [[ -n "${PROVENANCE_SIGNING_KEY:-}" ]]; then
   provenance_path=$(./scripts/sign-release-provenance.sh)
   signature_path=.claw/release-artifacts/release-provenance.sig
   public_key_path=.claw/release-artifacts/release-provenance.pub.pem
+  trust_policy_path=.claw/release-artifacts/release-trust-policy.json
   echo "signed provenance: $provenance_path"
   echo "signed provenance signature: $signature_path"
   echo "signed provenance public key: $public_key_path"
-  python3 ../tests/validate_signed_release_provenance.py "$provenance_path" "$signature_path" "$public_key_path"
+  echo "release trust policy: $trust_policy_path"
+  python3 ../tests/validate_signed_release_provenance.py "$provenance_path" "$signature_path" "$public_key_path" "$trust_policy_path"
+  python3 ../tests/validate_release_trust_policy.py "$trust_policy_path" "$provenance_path" "$signature_path" "$public_key_path" "$manifest_path" "$attestation_path"
 else
   echo "optional signed provenance: skipped (set PROVENANCE_SIGNING_KEY to emit release-provenance.json + .sig)"
 fi

@@ -13,6 +13,7 @@ Current operator-relevant artifact locations:
 - `.claw/release-artifacts/release-manifest.json` — machine-readable release/build artifact manifest for the current verified workspace
 - `.claw/release-artifacts/release-attestation.json` — formal local provenance statement that binds the manifest hash to the built binary
 - `.claw/release-artifacts/release-provenance.json` + `.sig` — optional signed provenance bundle over the binary + manifest + attestation chain
+- `.claw/release-artifacts/release-trust-policy.json` — optional pinned trust-policy file for the signed provenance flow
 
 These files are useful for inspection, debugging, evaluation, and incident review.
 
@@ -218,6 +219,7 @@ If you need a bounded signed chain on top of that, `./scripts/sign-release-prove
 - `release-provenance.json` — an in-toto-shaped signed provenance bundle that lists the binary, manifest, and attestation as subjects
 - `release-provenance.sig` — a detached OpenSSL SHA-256 signature over that bundle
 - `release-provenance.pub.pem` — the corresponding public key used for verification
+- `release-trust-policy.json` — a machine-readable local trust policy that pins the signer fingerprint, source metadata, and exact signed materials for this release flow
 
 Validation path for the signed bundle:
 
@@ -227,10 +229,18 @@ PROVENANCE_SIGNING_KEY=./keys/release-private.pem ./scripts/sign-release-provena
 python3 ../tests/validate_signed_release_provenance.py \
   .claw/release-artifacts/release-provenance.json \
   .claw/release-artifacts/release-provenance.sig \
-  .claw/release-artifacts/release-provenance.pub.pem
+  .claw/release-artifacts/release-provenance.pub.pem \
+  .claw/release-artifacts/release-trust-policy.json
+python3 ../tests/validate_release_trust_policy.py \
+  .claw/release-artifacts/release-trust-policy.json \
+  .claw/release-artifacts/release-provenance.json \
+  .claw/release-artifacts/release-provenance.sig \
+  .claw/release-artifacts/release-provenance.pub.pem \
+  .claw/release-artifacts/release-manifest.json \
+  .claw/release-artifacts/release-attestation.json
 ```
 
-This is still intentionally bounded. It improves tamper evidence for the local binary → manifest → attestation chain, but it does **not** claim a hosted builder identity, transparency-log inclusion, keyless signing, or a public package-registry provenance story. In other words: it is signed local provenance, not a full end-to-end supply-chain security system.
+This is still intentionally bounded. It improves tamper evidence for the local binary → manifest → attestation chain and turns the expected signer/material set into an explicit file instead of purely operator memory, but it does **not** claim a hosted builder identity, transparency-log inclusion, keyless signing, or a public package-registry provenance story. In other words: it is signed local provenance with a pinned local trust policy, not a full end-to-end supply-chain security system.
 
 ## Sessions
 

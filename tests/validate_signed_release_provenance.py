@@ -12,6 +12,7 @@ RUST_ROOT = REPO_ROOT / 'rust'
 DEFAULT_PROVENANCE = RUST_ROOT / '.claw' / 'release-artifacts' / 'release-provenance.json'
 DEFAULT_SIGNATURE = RUST_ROOT / '.claw' / 'release-artifacts' / 'release-provenance.sig'
 DEFAULT_PUBLIC_KEY = RUST_ROOT / '.claw' / 'release-artifacts' / 'release-provenance.pub.pem'
+DEFAULT_TRUST_POLICY = RUST_ROOT / '.claw' / 'release-artifacts' / 'release-trust-policy.json'
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -45,11 +46,13 @@ def main() -> int:
     provenance_path = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else DEFAULT_PROVENANCE
     signature_path = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else DEFAULT_SIGNATURE
     public_key_path = Path(sys.argv[3]).resolve() if len(sys.argv) > 3 else DEFAULT_PUBLIC_KEY
+    trust_policy_path = Path(sys.argv[4]).resolve() if len(sys.argv) > 4 else DEFAULT_TRUST_POLICY
 
     for path, label in [
         (provenance_path, 'Signed provenance'),
         (signature_path, 'Signed provenance signature'),
         (public_key_path, 'Signed provenance public key'),
+        (trust_policy_path, 'Release trust policy'),
     ]:
         if not path.exists():
             return fail(f'{label} does not exist: {path}')
@@ -112,13 +115,24 @@ def main() -> int:
     if signer.get('signaturePath') != signature_path.relative_to(RUST_ROOT).as_posix():
         return fail('Signed provenance signer.signaturePath must match the signature path')
 
+    if verification.get('trustPolicyPath') != trust_policy_path.relative_to(RUST_ROOT).as_posix():
+        return fail('Signed provenance verification.trustPolicyPath must match the provided trust policy path')
+    if verification.get('trustModel') != 'local-pinned-public-key':
+        return fail('Signed provenance verification.trustModel must be local-pinned-public-key')
+
     commands = verification.get('commands')
     required_command = 'python3 ../tests/validate_signed_release_provenance.py <provenance-path> <signature-path> <public-key-path>'
+    required_policy_command = (
+        'python3 ../tests/validate_release_trust_policy.py '
+        '<policy-path> <provenance-path> <signature-path> <public-key-path> <manifest-path> <attestation-path>'
+    )
     if not isinstance(commands, list) or required_command not in commands:
         return fail('Signed provenance verification.commands must include the signed provenance validator command')
+    if required_policy_command not in commands:
+        return fail('Signed provenance verification.commands must include the release trust policy validator command')
     notes = verification.get('notes')
-    if not isinstance(notes, list) or len(notes) < 2:
-        return fail('Signed provenance verification.notes must include at least two trust-boundary reminders')
+    if not isinstance(notes, list) or len(notes) < 3:
+        return fail('Signed provenance verification.notes must include at least three trust-boundary reminders')
 
     print(f'Signed release provenance validation passed: {provenance_path}')
     return 0

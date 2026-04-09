@@ -111,7 +111,8 @@ verification_commands = [
 
 optional_signing_commands = [
     './scripts/sign-release-provenance.sh',
-    'python3 ../tests/validate_signed_release_provenance.py <provenance-path> <signature-path> <public-key-path>',
+    'python3 ../tests/validate_signed_release_provenance.py <provenance-path> <signature-path> <public-key-path> [trust-policy-path]',
+    'python3 ../tests/validate_release_trust_policy.py <policy-path> <provenance-path> <signature-path> <public-key-path> <manifest-path> <attestation-path>',
 ]
 
 rc_note = (
@@ -192,7 +193,7 @@ manifest = {
             'This manifest records local provenance cues and hashed release surfaces for the current workspace.',
             'It is intentionally local-first and should not be treated as a hosted or transparency-backed attestation chain.',
             'A paired release-attestation.json binds this manifest hash into a more formal statement shape; optional signing can extend that into a signed local provenance bundle.',
-            'If you set PROVENANCE_SIGNING_KEY, also run ' + optional_signing_commands[0] + ' and ' + optional_signing_commands[1] + '.',
+            'If you set PROVENANCE_SIGNING_KEY, also run ' + optional_signing_commands[0] + ', ' + optional_signing_commands[1] + ', and ' + optional_signing_commands[2] + '.',
             rc_note,
         ],
     },
