@@ -81,6 +81,8 @@ pub struct PlannerStep {
     pub anchor_terms: Vec<String>,
     pub gap_terms: Vec<String>,
     pub validation_terms: Vec<String>,
+    pub progress_status: String,
+    pub progress_reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +90,8 @@ pub struct PlannerSummary {
     pub iterations: usize,
     pub latest_strategy: String,
     pub latest_rationale: String,
+    pub latest_progress_status: String,
+    pub latest_progress_reason: String,
     pub steps: Vec<PlannerStep>,
 }
 
@@ -325,6 +329,14 @@ impl FinalAnswer {
                     "  Latest rationale              {}",
                     planner.latest_rationale
                 ),
+                format!(
+                    "  Planner progress              {}",
+                    planner.latest_progress_status
+                ),
+                format!(
+                    "  Progress note                 {}",
+                    planner.latest_progress_reason
+                ),
             ];
             if !planner.steps.is_empty() {
                 planner_lines.push("  Iteration details".to_string());
@@ -383,6 +395,8 @@ fn render_planner_step(step: &PlannerStep) -> String {
     if !step.validation_terms.is_empty() {
         parts.push(format!("validation={}", step.validation_terms.join(", ")));
     }
+    parts.push(format!("progress={}", step.progress_status));
+    parts.push(format!("progress_note={}", step.progress_reason));
     parts.join("; ")
 }
 
@@ -535,6 +549,8 @@ mod tests {
                 iterations: 2,
                 latest_strategy: "gap_targeted_followup".to_string(),
                 latest_rationale: "carry forward explicit remaining-gap terms".to_string(),
+                latest_progress_status: "probing_open_gaps".to_string(),
+                latest_progress_reason: "recent child outputs still expose concrete unresolved gaps".to_string(),
                 steps: vec![PlannerStep {
                     iteration: 1,
                     strategy: "bootstrap".to_string(),
@@ -542,6 +558,8 @@ mod tests {
                     anchor_terms: vec!["parser".to_string(), "runtime".to_string()],
                     gap_terms: vec!["hook parity".to_string()],
                     validation_terms: vec!["run targeted tests".to_string()],
+                    progress_status: "expanding_evidence".to_string(),
+                    progress_reason: "only one child output exists, so the planner is broadening local evidence coverage".to_string(),
                 }],
             }),
             web: Some(WebExecutionSummary {
@@ -588,7 +606,10 @@ mod tests {
         assert!(rendered.contains("Confidence\n  Level            medium"));
         assert!(rendered.contains("Recursive planning"));
         assert!(rendered.contains("Latest strategy               gap_targeted_followup"));
+        assert!(rendered.contains("Planner progress              probing_open_gaps"));
+        assert!(rendered.contains("Progress note                 recent child outputs still expose concrete unresolved gaps"));
         assert!(rendered.contains("anchors=parser, runtime"));
+        assert!(rendered.contains("progress=expanding_evidence"));
         assert!(rendered.contains("Web execution"));
         assert!(rendered.contains("Web-aware subqueries          2"));
         assert!(rendered.contains("Approval required             1"));

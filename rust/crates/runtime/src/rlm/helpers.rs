@@ -19,6 +19,8 @@ pub(super) struct RetrievalPlan {
     pub anchor_terms: Vec<String>,
     pub gap_terms: Vec<String>,
     pub validation_terms: Vec<String>,
+    pub progress_status: &'static str,
+    pub progress_reason: &'static str,
 }
 
 pub(super) fn map_chunk(path: &str, chunk: &CorpusChunk) -> RecursiveContextSlice {
@@ -191,6 +193,49 @@ fn extract_section_terms(answer: &str, heading: &str, limit: usize) -> Vec<Strin
     collect_terms(captured.iter().map(String::as_str), limit)
 }
 
+fn collect_section_terms_across_outputs(
+    child_outputs: &[ChildSubqueryOutput],
+    heading: &str,
+    per_output_limit: usize,
+    total_limit: usize,
+) -> Vec<String> {
+    let mut terms = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for output in child_outputs.iter().rev() {
+        for term in extract_section_terms(&output.answer, heading, per_output_limit) {
+            if seen.insert(term.clone()) {
+                terms.push(term);
+                if terms.len() >= total_limit {
+                    return terms;
+                }
+            }
+        }
+    }
+    terms
+}
+
+fn repeated_section_terms(
+    child_outputs: &[ChildSubqueryOutput],
+    heading: &str,
+    limit: usize,
+) -> Vec<String> {
+    let Some((last, prior)) = child_outputs.split_last() else {
+        return Vec::new();
+    };
+    let current = extract_section_terms(&last.answer, heading, limit.saturating_mul(2));
+    let previous = prior
+        .last()
+        .map(|output| extract_section_terms(&output.answer, heading, limit.saturating_mul(2)))
+        .unwrap_or_default()
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    current
+        .into_iter()
+        .filter(|term| previous.contains(term))
+        .take(limit)
+        .collect()
+}
+
 fn build_follow_up_query(
     task: &str,
     last: &ChildSubqueryOutput,
@@ -198,6 +243,7 @@ fn build_follow_up_query(
     gap_terms: &[String],
     validation_terms: &[String],
     anchor_terms: &[String],
+    repeated_gap_terms: &[String],
 ) -> String {
     let mut query_parts = vec![task.to_string()];
 
@@ -211,6 +257,9 @@ fn build_follow_up_query(
     }
     if !gap_terms.is_empty() {
         query_parts.push(format!("remaining gaps {}", gap_terms.join(" ")));
+    }
+    if !repeated_gap_terms.is_empty() {
+        query_parts.push(format!("persistent gaps {}", repeated_gap_terms.join(" ")));
     }
     if !validation_terms.is_empty() {
         query_parts.push(format!("validation {}", validation_terms.join(" ")));
@@ -234,26 +283,23 @@ pub(super) fn build_iteration_plan(
             anchor_terms: collect_anchor_terms(task, child_outputs),
             gap_terms: Vec::new(),
             validation_terms: Vec::new(),
+            progress_status: "bootstrapping",
+            progress_reason: "no child evidence exists yet",
         };
     }
 
     let anchor_terms = collect_anchor_terms(task, child_outputs);
-    let findings_terms = child_outputs
-        .last()
-        .map(|last| extract_section_terms(&last.answer, "findings", 6))
-        .unwrap_or_default();
-    let gap_terms = child_outputs
-        .last()
-        .map(|last| extract_section_terms(&last.answer, "remaining gaps", 4))
-        .unwrap_or_default();
-    let validation_terms = child_outputs
-        .last()
-        .map(|last| extract_section_terms(&last.answer, "validation loop", 4))
-        .unwrap_or_default();
+    let findings_terms = collect_section_terms_across_outputs(child_outputs, "findings", 4, 8);
+    let gap_terms = collect_section_terms_across_outputs(child_outputs, "remaining gaps", 4, 6);
+    let validation_terms =
+        collect_section_terms_across_outputs(child_outputs, "validation loop", 4, 6);
+    let repeated_gap_terms = repeated_section_terms(child_outputs, "remaining gaps", 3);
     let last = child_outputs
         .last()
         .expect("child outputs should be non-empty for follow-up planning");
-    let strategy = if !gap_terms.is_empty() {
+    let strategy = if !repeated_gap_terms.is_empty() {
+        "persistent_gap_probe"
+    } else if !gap_terms.is_empty() {
         "gap_targeted_followup"
     } else if !validation_terms.is_empty() {
         "validation_targeted_followup"
@@ -262,14 +308,42 @@ pub(super) fn build_iteration_plan(
     } else {
         "evidence_followup"
     };
-    let rationale = if !gap_terms.is_empty() {
-        "re-query by carrying forward explicit remaining-gap and validation-loop terms from the last child response instead of only replaying the summary"
+    let rationale = if !repeated_gap_terms.is_empty() {
+        "re-query around repeated unresolved gaps and carry validation terms forward so the next pass tests the stubborn missing pieces instead of restating the same summary"
+    } else if !gap_terms.is_empty() {
+        "re-query by carrying forward explicit remaining-gap and validation-loop terms from recent child responses instead of only replaying the summary"
     } else if !validation_terms.is_empty() {
-        "re-query around the concrete validation loop from the last child response so the next pass can inspect the proposed check instead of only repeating the narrative summary"
+        "re-query around the concrete validation loop from recent child responses so the next pass can inspect the proposed checks instead of only repeating the narrative summary"
     } else if child_outputs.len() >= 2 {
         "re-query with stabilized findings and anchor terms to synthesize repeated evidence instead of only echoing the latest answer"
     } else {
         "re-query with the first child result and stable anchor terms to broaden evidence coverage"
+    };
+    let (progress_status, progress_reason) = if !repeated_gap_terms.is_empty() {
+        (
+            "stalled_on_gaps",
+            "recent child outputs are repeating unresolved gap terms",
+        )
+    } else if !gap_terms.is_empty() {
+        (
+            "probing_open_gaps",
+            "recent child outputs still expose concrete unresolved gaps",
+        )
+    } else if !validation_terms.is_empty() {
+        (
+            "testing_validation_loop",
+            "recent child outputs propose specific verification steps to inspect next",
+        )
+    } else if child_outputs.len() >= 2 {
+        (
+            "synthesizing",
+            "multiple child outputs exist, so the planner is trying to stabilize the evidence set",
+        )
+    } else {
+        (
+            "expanding_evidence",
+            "only one child output exists, so the planner is broadening local evidence coverage",
+        )
     };
 
     RetrievalPlan {
@@ -280,12 +354,15 @@ pub(super) fn build_iteration_plan(
             &gap_terms,
             &validation_terms,
             &anchor_terms,
+            &repeated_gap_terms,
         ),
         strategy,
         rationale,
         anchor_terms,
         gap_terms,
         validation_terms,
+        progress_status,
+        progress_reason,
     }
 }
 
@@ -649,6 +726,7 @@ mod tests {
 
         assert_eq!(plan.strategy, "bootstrap");
         assert_eq!(plan.query, "audit recursive runtime planner gaps");
+        assert_eq!(plan.progress_status, "bootstrapping");
         assert!(plan.anchor_terms.contains(&"recursive".to_string()));
         assert!(plan.anchor_terms.contains(&"runtime".to_string()));
         assert!(plan.anchor_terms.contains(&"planner".to_string()));
@@ -701,11 +779,33 @@ Validation loop: inspect bundle-summary.json and run python3 tests/validate_unre
         let plan = build_iteration_plan("audit recursive planner maturity", &[first]);
 
         assert_eq!(plan.strategy, "gap_targeted_followup");
+        assert_eq!(plan.progress_status, "probing_open_gaps");
         assert!(plan.gap_terms.contains(&"planner".to_string()));
         assert!(plan.gap_terms.contains(&"adaptive".to_string()));
         assert!(plan.validation_terms.contains(&"cargo".to_string()));
         assert!(plan.validation_terms.contains(&"runtime".to_string()));
         assert!(plan.query.contains("remaining gaps"));
         assert!(plan.query.contains("validation"));
+    }
+
+    #[test]
+    fn repeated_gaps_promote_persistent_gap_probe_strategy() {
+        let first = sample_child_output(
+            "Findings: first pass\nValidation loop: run cargo test -p runtime recursive_trace\nRemaining gaps: planner policy lacks adaptive retry budgeting",
+        );
+        let second = sample_child_output(
+            "Findings: second pass\nValidation loop: inspect trace export\nRemaining gaps: planner policy still lacks adaptive retry budgeting and stress coverage",
+        );
+        let plan = build_iteration_plan("audit recursive planner maturity", &[first, second]);
+
+        assert_eq!(plan.strategy, "persistent_gap_probe");
+        assert_eq!(plan.progress_status, "stalled_on_gaps");
+        assert!(plan.query.contains("persistent gaps"));
+        assert!(plan.gap_terms.contains(&"planner".to_string()));
+        assert!(plan.validation_terms.contains(&"cargo".to_string()));
+        assert!(
+            plan.validation_terms.contains(&"inspect".to_string())
+                || plan.validation_terms.contains(&"trace".to_string())
+        );
     }
 }

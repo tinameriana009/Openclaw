@@ -158,6 +158,18 @@ fn summarize_planner(trace: &TraceLedger) -> Option<PlannerSummary> {
                         .collect()
                 })
                 .unwrap_or_default(),
+            progress_status: event
+                .data
+                .get("plannerProgressStatus")
+                .and_then(JsonValue::as_str)
+                .unwrap_or("unknown")
+                .to_string(),
+            progress_reason: event
+                .data
+                .get("plannerProgressReason")
+                .and_then(JsonValue::as_str)
+                .unwrap_or("planner progress reason unavailable")
+                .to_string(),
         })
         .collect::<Vec<_>>();
 
@@ -166,6 +178,8 @@ fn summarize_planner(trace: &TraceLedger) -> Option<PlannerSummary> {
         iterations: steps.len(),
         latest_strategy: latest.strategy.clone(),
         latest_rationale: latest.rationale.clone(),
+        latest_progress_status: latest.progress_status.clone(),
+        latest_progress_reason: latest.progress_reason.clone(),
         steps,
     })
 }

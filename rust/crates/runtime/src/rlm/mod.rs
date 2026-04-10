@@ -772,6 +772,14 @@ where
                             .collect(),
                     ),
                 ),
+                (
+                    "plannerProgressStatus".to_string(),
+                    JsonValue::String(plan.progress_status.to_string()),
+                ),
+                (
+                    "plannerProgressReason".to_string(),
+                    JsonValue::String(plan.progress_reason.to_string()),
+                ),
             ]),
         );
         let retrieval = self.corpus_search(&plan.query, 6);
@@ -1334,6 +1342,11 @@ mod tests {
             Some(JsonValue::Array(values)) if values.is_empty()
         ));
         assert!(retrieval_event.data.contains_key("plannerRationale"));
+        assert_eq!(
+            retrieval_event.data.get("plannerProgressStatus"),
+            Some(&JsonValue::String("bootstrapping".to_string()))
+        );
+        assert!(retrieval_event.data.contains_key("plannerProgressReason"));
     }
 
     #[test]
