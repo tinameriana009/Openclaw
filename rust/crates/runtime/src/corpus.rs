@@ -3942,15 +3942,18 @@ mod retrieval_gap_regression_tests {
             result.hits.iter().any(|hit| hit.path == "auth.md"),
             "expected auth.md to appear in the top hits"
         );
+        let auth_hit = result
+            .hits
+            .iter()
+            .find(|hit| hit.path == "auth.md")
+            .expect("auth.md should be present");
         assert!(
-            result.hits.iter().any(|hit| {
-                hit.reason.contains("strategy:docs-first")
-                    || hit.reason.contains("strategy:docs-structure")
-                    || hit.reason.contains("intent:docs")
-                    || hit.reason.contains("section-heading:")
-                    || hit.reason.contains("semantic-section-heading:")
-                    || hit.reason.contains("outline-path")
-            })
+            auth_hit.reason.contains("strategy:docs-first")
+                || auth_hit.reason.contains("strategy:docs-structure")
+                || auth_hit.reason.contains("intent:docs")
+                || auth_hit.reason.contains("section-heading:")
+                || auth_hit.reason.contains("semantic-section-heading:")
+                || auth_hit.reason.contains("outline-path")
         );
 
         let _ = fs::remove_dir_all(cwd);
