@@ -109,11 +109,13 @@ pub use rlm::{
     ChildSubqueryExecutor, ChildSubqueryOutput, ChildSubqueryRequest, DefaultChildOutputAggregator,
     FallbackChildSubqueryExecutor, PreparedRecursiveTaskRun, RecursiveContextSlice,
     RecursiveConversationRuntime, RecursiveCorpusPeekResult, RecursiveExecutionMode,
-    RecursiveCorpusProvider, RecursiveExecutionResult, RecursiveIterationState,
-    RecursiveProfileTaskRequest, RecursiveRunArtifacts, RecursiveRuntimeError,
-    RecursiveRuntimeFactory, RecursiveRuntimeState, RecursiveStopReason, RecursiveTaskEnvelope,
-    RecursiveTaskProvider, RecursiveTaskRunRequest, RecursiveTaskRuntime, RecursiveTaskSpec,
+    RecursiveChildExecutorFactory, RecursiveCorpusProvider, RecursiveExecutionResult,
+    RecursiveIterationState, RecursiveProfileTaskRequest, RecursiveRunArtifacts,
+    RecursiveRuntimeError, RecursiveRuntimeFactory, RecursiveRuntimeState,
+    RecursiveStopReason, RecursiveTaskEnvelope, RecursiveTaskProvider,
+    RecursiveTaskRunRequest, RecursiveTaskRuntime, RecursiveTaskSpec,
     RecursiveTaskSpecProvider, RecursiveTaskWorkspace, RecursiveTaskWorkspaceProvider,
+    RuntimeConfiguredRecursiveTask,
 };
 pub use sandbox::{
     build_linux_sandbox_command, detect_container_environment, detect_container_environment_from,

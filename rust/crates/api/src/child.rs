@@ -3,11 +3,12 @@ use std::sync::Arc;
 
 use runtime::{
     ChildSubqueryExecutor, ChildSubqueryOutput, ChildSubqueryRequest, ConfigLoader, EvidenceRecord,
-    ExecutionProfile, PreparedRecursiveTaskRun, RecursiveCorpusProvider,
+    ExecutionProfile, PreparedRecursiveTaskRun, RecursiveChildExecutorFactory,
     RecursiveExecutionResult, RecursiveRunArtifacts, RecursiveRuntimeError,
-    RecursiveRuntimeFactory, RecursiveTaskEnvelope, RecursiveTaskProvider, RecursiveTaskRuntime,
-    RecursiveTaskSpec, RecursiveTaskSpecProvider, RecursiveTaskWorkspace,
-    RecursiveTaskWorkspaceProvider, WebAccessMode, WebEvidenceInput, WebExecutionOutcome,
+    RecursiveRuntimeFactory, RecursiveTaskEnvelope, RecursiveTaskProvider,
+    RecursiveTaskRuntime, RecursiveTaskSpec, RecursiveTaskWorkspace,
+    RecursiveTaskWorkspaceProvider, RuntimeConfiguredRecursiveTask, WebAccessMode,
+    WebEvidenceInput, WebExecutionOutcome,
 };
 use tokio::runtime::Runtime;
 
@@ -420,55 +421,16 @@ impl<'a> RecursiveTaskWorkspaceProvider<'a> for ProviderRecursiveRuntimeConfig<'
     }
 }
 
-impl<'a> RecursiveRuntimeFactory<'a> for ProviderRecursiveRuntimeConfig<'a> {
+impl<'a> RecursiveChildExecutorFactory for ProviderRecursiveRuntimeConfig<'a> {
     type Executor = ProviderBackedChildExecutor;
-    type Aggregator = runtime::DefaultChildOutputAggregator;
 
-    fn build_runtime(
-        &self,
-        corpus: &'a runtime::CorpusManifest,
-    ) -> runtime::RecursiveConversationRuntime<'a, Self::Executor, Self::Aggregator> {
-        runtime::RecursiveConversationRuntime::new(corpus, self.build_child_executor())
+    fn build_child_executor(&self) -> Self::Executor {
+        ProviderRecursiveRuntimeConfig::build_child_executor(self)
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderRecursiveTaskConfig<'a> {
-    pub runtime: ProviderRecursiveRuntimeConfig<'a>,
-    pub corpus: &'a runtime::CorpusManifest,
-    pub spec: RecursiveTaskSpec<'a>,
-}
-
-impl<'a> RecursiveTaskWorkspaceProvider<'a> for ProviderRecursiveTaskConfig<'a> {
-    fn workspace(&self) -> RecursiveTaskWorkspace<'a> {
-        self.runtime.workspace()
-    }
-}
-
-impl<'a> RecursiveRuntimeFactory<'a> for ProviderRecursiveTaskConfig<'a> {
-    type Executor = ProviderBackedChildExecutor;
-    type Aggregator = runtime::DefaultChildOutputAggregator;
-
-    fn build_runtime(
-        &self,
-        corpus: &'a runtime::CorpusManifest,
-    ) -> runtime::RecursiveConversationRuntime<'a, Self::Executor, Self::Aggregator> {
-        self.runtime.build_runtime(corpus)
-    }
-}
-
-impl<'a> RecursiveCorpusProvider<'a> for ProviderRecursiveTaskConfig<'a> {
-    fn corpus(&self) -> &'a runtime::CorpusManifest {
-        self.corpus
-    }
-}
-
-impl<'a> RecursiveTaskSpecProvider<'a> for ProviderRecursiveTaskConfig<'a> {
-    fn task_spec(&self) -> RecursiveTaskSpec<'a> {
-        self.spec
-    }
-}
-
+pub type ProviderRecursiveTaskConfig<'a> =
+    RuntimeConfiguredRecursiveTask<'a, ProviderRecursiveRuntimeConfig<'a>>;
 pub type ProviderRecursiveTaskRequest<'a> =
     RecursiveTaskEnvelope<'a, ProviderRecursiveRuntimeConfig<'a>>;
 pub type ProviderRecursiveRunArtifacts = RecursiveRunArtifacts;

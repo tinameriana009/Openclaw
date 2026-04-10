@@ -236,12 +236,33 @@ pub trait RecursiveTaskWorkspaceProvider<'a> {
     fn workspace(&self) -> RecursiveTaskWorkspace<'a>;
 }
 
+pub trait RecursiveChildExecutorFactory {
+    type Executor: ChildSubqueryExecutor;
+
+    fn build_child_executor(&self) -> Self::Executor;
+}
+
 pub trait RecursiveCorpusProvider<'a> {
     fn corpus(&self) -> &'a CorpusManifest;
 }
 
 pub trait RecursiveTaskSpecProvider<'a> {
     fn task_spec(&self) -> RecursiveTaskSpec<'a>;
+}
+
+impl<'a, T> RecursiveRuntimeFactory<'a> for T
+where
+    T: RecursiveTaskWorkspaceProvider<'a> + RecursiveChildExecutorFactory,
+{
+    type Executor = T::Executor;
+    type Aggregator = DefaultChildOutputAggregator;
+
+    fn build_runtime(
+        &self,
+        corpus: &'a CorpusManifest,
+    ) -> RecursiveConversationRuntime<'a, Self::Executor, Self::Aggregator> {
+        RecursiveConversationRuntime::new(corpus, self.build_child_executor())
+    }
 }
 
 pub trait RecursiveTaskRuntime<'a>:
@@ -309,6 +330,49 @@ pub struct RecursiveTaskEnvelope<'a, F> {
     pub runtime: F,
     pub corpus: &'a CorpusManifest,
     pub spec: RecursiveTaskSpec<'a>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuntimeConfiguredRecursiveTask<'a, R> {
+    pub runtime: R,
+    pub corpus: &'a CorpusManifest,
+    pub spec: RecursiveTaskSpec<'a>,
+}
+
+impl<'a, R> RecursiveTaskWorkspaceProvider<'a> for RuntimeConfiguredRecursiveTask<'a, R>
+where
+    R: RecursiveTaskWorkspaceProvider<'a>,
+{
+    fn workspace(&self) -> RecursiveTaskWorkspace<'a> {
+        self.runtime.workspace()
+    }
+}
+
+impl<'a, R> RecursiveCorpusProvider<'a> for RuntimeConfiguredRecursiveTask<'a, R> {
+    fn corpus(&self) -> &'a CorpusManifest {
+        self.corpus
+    }
+}
+
+impl<'a, R> RecursiveTaskSpecProvider<'a> for RuntimeConfiguredRecursiveTask<'a, R> {
+    fn task_spec(&self) -> RecursiveTaskSpec<'a> {
+        self.spec
+    }
+}
+
+impl<'a, R> RecursiveRuntimeFactory<'a> for RuntimeConfiguredRecursiveTask<'a, R>
+where
+    R: RecursiveRuntimeFactory<'a>,
+{
+    type Executor = R::Executor;
+    type Aggregator = R::Aggregator;
+
+    fn build_runtime(
+        &self,
+        corpus: &'a CorpusManifest,
+    ) -> RecursiveConversationRuntime<'a, Self::Executor, Self::Aggregator> {
+        self.runtime.build_runtime(corpus)
+    }
 }
 
 impl<'a, F> RecursiveTaskEnvelope<'a, F>
