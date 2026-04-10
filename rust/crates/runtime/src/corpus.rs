@@ -921,9 +921,31 @@ pub fn search_corpus_manifest(
             let normalized_outline = normalize_for_match(outline_text);
             let normalized_body = normalize_for_match(&body);
             let compact_body = normalized_body.replace(' ', "");
+            let mut semantic_supported_terms = std::collections::BTreeSet::new();
+            for semantic in &query_features.semantic_terms {
+                let body_semantic_hits = count_occurrences(&body, &semantic.expanded_term);
+                let path_semantic_hit = path_lower.contains(&semantic.expanded_term);
+                let root_semantic_hit = source_root_lower.contains(&semantic.expanded_term)
+                    || root_basename_lower.contains(&semantic.expanded_term);
+                let heading_semantic_hit = heading_text.contains(&semantic.expanded_term);
+                let chunk_heading_semantic_hit =
+                    chunk_heading_lower.contains(&semantic.expanded_term);
+                let outline_semantic_hit = outline_text_lower.contains(&semantic.expanded_term);
+                if body_semantic_hits > 0
+                    || path_semantic_hit
+                    || root_semantic_hit
+                    || heading_semantic_hit
+                    || chunk_heading_semantic_hit
+                    || outline_semantic_hit
+                {
+                    semantic_supported_terms.insert(semantic.query_term.clone());
+                }
+            }
+
             let mut score = 0.0_f64;
             let mut reasons = Vec::new();
             let mut matched_terms = Vec::new();
+            let mut lexical_supported_terms = std::collections::BTreeSet::new();
             let mut matched_tokens = 0usize;
             let mut in_order = true;
             let mut cursor = 0usize;
@@ -951,7 +973,8 @@ pub fn search_corpus_manifest(
                         .replace(' ', "")
                         .contains(&normalized_token)
                     && !root_hit;
-                if body_hits > 0
+                let semantic_support = semantic_supported_terms.contains(token);
+                let lexical_support = body_hits > 0
                     || preview_hits > 0
                     || path_hit
                     || root_hit
@@ -961,10 +984,16 @@ pub fn search_corpus_manifest(
                     || outline_hit
                     || compact_body_hit
                     || compact_path_hit
-                    || compact_root_hit
-                {
+                    || compact_root_hit;
+                if lexical_support || semantic_support {
                     matched_tokens += 1;
                     matched_terms.push(token.clone());
+                    if lexical_support {
+                        lexical_supported_terms.insert(token.clone());
+                    }
+                    if semantic_support && !lexical_support {
+                        reasons.push(format!("semantic-coverage:{token}"));
+                    }
                 }
                 let doc_freq = *token_stats.doc_freq.get(token).unwrap_or(&0);
                 let idf = inverse_document_frequency(total_docs, doc_freq);
@@ -1024,12 +1053,23 @@ pub fn search_corpus_manifest(
             if matched_tokens == 0 {
                 continue;
             }
+            let lexical_matched_tokens = lexical_supported_terms.len();
+            let semantic_only_tokens = matched_tokens.saturating_sub(lexical_matched_tokens);
             let coverage_ratio = matched_tokens as f64 / tokens.len() as f64;
             score += coverage_ratio * 5.0;
             reasons.push(format!("coverage:{matched_tokens}/{}", tokens.len()));
+            if semantic_only_tokens > 0 {
+                score += semantic_only_tokens as f64 * 0.6;
+                reasons.push(format!("semantic-support:{semantic_only_tokens}"));
+            }
             if matched_tokens == tokens.len() {
-                score += 3.0;
-                reasons.push("full-coverage".to_string());
+                if semantic_only_tokens == 0 {
+                    score += 3.0;
+                    reasons.push("full-coverage".to_string());
+                } else {
+                    score += 2.2;
+                    reasons.push("semantic-full-coverage".to_string());
+                }
             }
             if tokens.len() > 1 && in_order {
                 score += 2.0;
@@ -3592,6 +3632,57 @@ Credentials are validated before issuing session cookies.
                     || result.hits[0].reason.contains("semantic-")
             );
         }
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_counts_semantic_matches_toward_query_coverage() {
+        let cwd = temp_dir("workspace-semantic-coverage");
+        let root = cwd.join("docs");
+        fs::create_dir_all(&root).expect("mkdir");
+        fs::write(
+            root.join("identity.md"),
+            "# Authentication Overview
+Identity concepts.
+
+## Login Flow
+Credentials are validated before issuing session cookies.
+",
+        )
+        .expect("write identity doc");
+        fs::write(
+            root.join("architecture.md"),
+            "# Architecture
+General platform architecture notes without sign-in or authentication flow details.
+",
+        )
+        .expect("write distractor doc");
+
+        let manifest = attach_corpus(
+            &cwd,
+            &[root.clone()],
+            CorpusAttachOptions {
+                chunk_bytes: 96,
+                ..CorpusAttachOptions::default()
+            },
+        )
+        .expect("attach corpus");
+        let result = search_corpus(
+            &cwd,
+            &manifest.corpus_id,
+            "signin auth architecture",
+            5,
+            None,
+        )
+        .expect("search");
+
+        assert_eq!(result.hits[0].path, "identity.md");
+        assert!(
+            result.hits[0].reason.contains("semantic-support:")
+                || result.hits[0].reason.contains("semantic-full-coverage")
+                || result.hits[0].reason.contains("semantic-coverage:")
+        );
 
         let _ = fs::remove_dir_all(cwd);
     }
