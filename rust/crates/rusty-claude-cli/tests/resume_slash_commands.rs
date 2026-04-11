@@ -1063,7 +1063,7 @@ fn resumed_trace_handoff_generates_artifacts_for_specific_entry() {
           "corpusId":"demo-corpus",
           "pendingQueries":["search the web for release status"],
           "approvedAtMs":123,
-          "replayCommand":"claw --resume latest "/corpus answer demo-corpus :: search the web for release status"",
+          "replayCommand":"claw --resume latest \"/corpus answer demo-corpus :: search the web for release status\"",
           "operatorNote":"bounded rerun only"
         }"#,
     )
@@ -1159,46 +1159,95 @@ fn resumed_trace_handoff_defaults_to_next_inbox_item() {
         .save_to_path(&session_path)
         .expect("session should persist");
 
+    let approved_packet_path = project_dir
+        .join(".claw")
+        .join("web-approvals")
+        .join("trace-approved.json");
+    fs::write(
+        &approved_packet_path,
+        r#"{
+          "schemaVersion":1,
+          "traceId":"trace-approved",
+          "sessionId":"session-approved",
+          "task":"rerun the approved release-status search",
+          "corpusId":"demo-corpus",
+          "pendingQueries":["search the web for release status"],
+          "approvedAtMs":123,
+          "replayCommand":"claw --resume latest \"/corpus answer demo-corpus :: search the web for release status\""
+        }"#,
+    )
+    .expect("approved packet should write");
     fs::write(
         project_dir
             .join(".claw")
             .join("web-approvals")
             .join("trace-approved.review.json"),
-        r#"{
+        format!(
+            r#"{{
           "schemaVersion":1,
           "traceId":"trace-approved",
           "corpusId":"demo-corpus",
           "task":"rerun the approved release-status search",
-          "approvalPacket":"/tmp/trace-approved.json",
+          "approvalPacket":"{}",
           "operatorState":"approved for explicit rerun",
           "nextStep":"run /trace replay <trace-file>",
           "replayTrace":null,
-          "reviewCommand":"/trace review /tmp/trace-approved.json",
-          "replayTraceCommand":"/trace replay /tmp/trace-approved.json",
-          "resumeTraceCommand":"/trace resume /tmp/trace-approved.json",
+          "reviewCommand":"/trace review {}",
+          "replayTraceCommand":"/trace replay {}",
+          "resumeTraceCommand":"/trace resume {}",
           "pendingQueries":["search the web for release status"]
-        }"#,
+        }}"#,
+            approved_packet_path.display(),
+            approved_packet_path.display(),
+            approved_packet_path.display(),
+            approved_packet_path.display(),
+        ),
     )
     .expect("approved review json should write");
+
+    let captured_packet_path = project_dir
+        .join(".claw")
+        .join("web-approvals")
+        .join("trace-captured.json");
+    fs::write(
+        &captured_packet_path,
+        r#"{
+          "schemaVersion":1,
+          "traceId":"trace-captured",
+          "sessionId":"session-captured",
+          "task":"inspect the replay trace",
+          "corpusId":"demo-corpus",
+          "pendingQueries":["search the web for release status"],
+          "approvedAtMs":123,
+          "replayCommand":"claw --resume latest \"/corpus answer demo-corpus :: search the web for release status\""
+        }"#,
+    )
+    .expect("captured packet should write");
     fs::write(
         project_dir
             .join(".claw")
             .join("web-approvals")
             .join("trace-captured.review.json"),
-        r#"{
+        format!(
+            r#"{{
           "schemaVersion":1,
           "traceId":"trace-captured",
           "corpusId":"demo-corpus",
           "task":"inspect the replay trace",
-          "approvalPacket":"/tmp/trace-captured.json",
+          "approvalPacket":"{}",
           "operatorState":"rerun captured for review",
           "nextStep":"inspect replay trace",
           "replayTrace":"/tmp/replay-trace.json",
-          "reviewCommand":"/trace review /tmp/trace-captured.json",
-          "replayTraceCommand":"/trace replay /tmp/trace-captured.json",
-          "resumeTraceCommand":"/trace resume /tmp/trace-captured.json",
+          "reviewCommand":"/trace review {}",
+          "replayTraceCommand":"/trace replay {}",
+          "resumeTraceCommand":"/trace resume {}",
           "pendingQueries":["search the web for release status"]
-        }"#,
+        }}"#,
+            captured_packet_path.display(),
+            captured_packet_path.display(),
+            captured_packet_path.display(),
+            captured_packet_path.display(),
+        ),
     )
     .expect("captured review json should write");
 

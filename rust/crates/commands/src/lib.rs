@@ -215,7 +215,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         name: "trace",
         aliases: &[],
         summary: "Show, inspect, approve, or replay recursive trace-ledger web workflows",
-        argument_hint: Some("[summary <trace-file>|export <trace-file> [destination]|review <trace-file|approval-packet>|approvals|inbox|approve <trace-file>|replay <trace-file|approval-packet>|resume <trace-file|approval-packet>]"),
+        argument_hint: Some("[summary <trace-file>|export <trace-file> [destination]|review <trace-file|approval-packet>|approvals|inbox|handoff [trace-id|approval-packet]|approve <trace-file>|replay <trace-file|approval-packet>|resume <trace-file|approval-packet>]"),
         resume_supported: true,
     },
     SlashCommandSpec {
@@ -608,6 +608,21 @@ fn parse_trace_command(args: &[&str]) -> Result<SlashCommand, SlashCommandParseE
             "trace",
             "/trace inbox",
         )),
+        ["handoff"] => Ok(SlashCommand::Trace {
+            action: Some("handoff".to_string()),
+            target: None,
+            destination: None,
+        }),
+        ["handoff", target] => Ok(SlashCommand::Trace {
+            action: Some("handoff".to_string()),
+            target: Some((*target).to_string()),
+            destination: None,
+        }),
+        ["handoff", ..] => Err(command_error(
+            "Unexpected arguments for /trace handoff.",
+            "trace",
+            "/trace handoff [trace-id|approval-packet]",
+        )),
         ["approve", target] => Ok(SlashCommand::Trace {
             action: Some("approve".to_string()),
             target: Some((*target).to_string()),
@@ -640,10 +655,10 @@ fn parse_trace_command(args: &[&str]) -> Result<SlashCommand, SlashCommandParseE
         )),
         [action, ..] => Err(command_error(
             &format!(
-                "Unknown /trace action '{action}'. Use summary <trace-file>, export <trace-file> [destination], review <trace-file|approval-packet>, approvals, inbox, approve <trace-file>, replay <trace-file|approval-packet>, or resume <trace-file|approval-packet>."
+                "Unknown /trace action '{action}'. Use summary <trace-file>, export <trace-file> [destination], review <trace-file|approval-packet>, approvals, inbox, handoff [trace-id|approval-packet], approve <trace-file>, replay <trace-file|approval-packet>, or resume <trace-file|approval-packet>."
             ),
             "trace",
-            "/trace [summary <trace-file>|export <trace-file> [destination]|review <trace-file|approval-packet>|approvals|inbox|approve <trace-file>|replay <trace-file|approval-packet>|resume <trace-file|approval-packet>]",
+            "/trace [summary <trace-file>|export <trace-file> [destination]|review <trace-file|approval-packet>|approvals|inbox|handoff [trace-id|approval-packet]|approve <trace-file>|replay <trace-file|approval-packet>|resume <trace-file|approval-packet>]",
         )),
     }
 }
@@ -2276,9 +2291,9 @@ fn resolve_trace_path(cwd: &Path, input: &str) -> PathBuf {
 fn render_trace_usage(unexpected: Option<&str>) -> String {
     let mut lines = vec![
         "Trace".to_string(),
-        "  Usage            /trace [summary <trace-file>|export <trace-file> [destination]|review <trace-file|approval-packet>|approvals|inbox|approve <trace-file>|replay <trace-file|approval-packet>|resume <trace-file|approval-packet>]"
+        "  Usage            /trace [summary <trace-file>|export <trace-file> [destination]|review <trace-file|approval-packet>|approvals|inbox|handoff [trace-id|approval-packet]|approve <trace-file>|replay <trace-file|approval-packet>|resume <trace-file|approval-packet>]"
             .to_string(),
-        "  Direct CLI       claw trace [summary <trace-file>|export <trace-file> [destination]|review <trace-file|approval-packet>|approvals|inbox|approve <trace-file>|replay <trace-file|approval-packet>|resume <trace-file|approval-packet>]"
+        "  Direct CLI       claw trace [summary <trace-file>|export <trace-file> [destination]|review <trace-file|approval-packet>|approvals|inbox|handoff [trace-id|approval-packet]|approve <trace-file>|replay <trace-file|approval-packet>|resume <trace-file|approval-packet>]"
             .to_string(),
         "  Inputs           Trace ledger JSON files produced by the recursive runtime".to_string(),
     ];
@@ -2892,7 +2907,7 @@ mod tests {
         assert!(help.contains("/diff"));
         assert!(help.contains("/version"));
         assert!(help.contains("/export [file]"));
-        assert!(help.contains("/trace [summary <trace-file>|export <trace-file> [destination]|review <trace-file|approval-packet>|approvals|inbox|approve <trace-file>|replay <trace-file|approval-packet>|resume <trace-file|approval-packet>]"));
+        assert!(help.contains("/trace [summary <trace-file>|export <trace-file> [destination]|review <trace-file|approval-packet>|approvals|inbox|handoff [trace-id|approval-packet]|approve <trace-file>|replay <trace-file|approval-packet>|resume <trace-file|approval-packet>]"));
         assert!(help.contains("/session [list|switch <session-id>|fork [branch-name]]"));
         assert!(help.contains("/sandbox"));
         assert!(help.contains(
@@ -3289,7 +3304,7 @@ mod tests {
         let usage = handle_trace_slash_command(Some("inspect trace.json"), &cwd)
             .expect("unexpected args should return usage");
         assert!(usage.contains(
-            "Usage            /trace [summary <trace-file>|export <trace-file> [destination]|review <trace-file|approval-packet>|approvals|inbox|approve <trace-file>|replay <trace-file|approval-packet>|resume <trace-file|approval-packet>]"
+            "Usage            /trace [summary <trace-file>|export <trace-file> [destination]|review <trace-file|approval-packet>|approvals|inbox|handoff [trace-id|approval-packet]|approve <trace-file>|replay <trace-file|approval-packet>|resume <trace-file|approval-packet>]"
         ));
 
         let _ = fs::remove_dir_all(cwd);
