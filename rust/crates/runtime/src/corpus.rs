@@ -849,6 +849,12 @@ pub fn search_corpus_manifest(
     let filename_query = filename_like_query(&tokens);
     let token_stats = build_token_document_stats(manifest, path_filter, &tokens);
     let total_docs = token_stats.total_docs.max(1);
+    let total_query_idf_mass = tokens
+        .iter()
+        .map(|token| {
+            inverse_document_frequency(total_docs, *token_stats.doc_freq.get(token).unwrap_or(&0))
+        })
+        .sum::<f64>();
     let mut scored_hits = Vec::new();
     let mut total_candidate_chunks = 0_u32;
     let mut total_matching_chunks = 0_u32;
@@ -947,6 +953,9 @@ pub fn search_corpus_manifest(
             let mut matched_terms = Vec::new();
             let mut lexical_supported_terms = std::collections::BTreeSet::new();
             let mut matched_tokens = 0usize;
+            let mut matched_idf_mass = 0.0_f64;
+            let mut discriminative_matches = 0usize;
+            let mut rare_term_matches = 0usize;
             let mut in_order = true;
             let mut cursor = 0usize;
             let normalized_preview = normalize_for_match(&preview_lower);
@@ -1038,9 +1047,18 @@ pub fn search_corpus_manifest(
                     || compact_body_hit
                     || compact_path_hit
                     || compact_root_hit;
+                let doc_freq = *token_stats.doc_freq.get(token).unwrap_or(&0);
+                let idf = inverse_document_frequency(total_docs, doc_freq);
                 if lexical_support || semantic_support {
                     matched_tokens += 1;
+                    matched_idf_mass += idf;
                     matched_terms.push(token.clone());
+                    if is_discriminative_agreement_term(token) {
+                        discriminative_matches += 1;
+                    }
+                    if idf >= 1.8 {
+                        rare_term_matches += 1;
+                    }
                     if lexical_support {
                         lexical_supported_terms.insert(token.clone());
                     }
@@ -1048,8 +1066,6 @@ pub fn search_corpus_manifest(
                         reasons.push(format!("semantic-coverage:{token}"));
                     }
                 }
-                let doc_freq = *token_stats.doc_freq.get(token).unwrap_or(&0);
-                let idf = inverse_document_frequency(total_docs, doc_freq);
                 if body_hits > 0 {
                     score += body_hits as f64 * (1.5 + idf * 1.2);
                     reasons.push(format!("content:{token}x{body_hits}@{idf:.2}"));
@@ -1111,6 +1127,23 @@ pub fn search_corpus_manifest(
             let coverage_ratio = matched_tokens as f64 / tokens.len() as f64;
             score += coverage_ratio * 5.0;
             reasons.push(format!("coverage:{matched_tokens}/{}", tokens.len()));
+            if total_query_idf_mass > 0.0 {
+                let weighted_coverage = matched_idf_mass / total_query_idf_mass;
+                score += weighted_coverage * 4.4;
+                reasons.push(format!("idf-coverage:{weighted_coverage:.2}"));
+                if weighted_coverage >= 0.72 && discriminative_matches > 0 {
+                    score += 1.2 + discriminative_matches as f64 * 0.35;
+                    reasons.push(format!("idf-focus:discriminative:{discriminative_matches}"));
+                }
+                if coverage_ratio >= 0.6 && weighted_coverage + 0.18 < coverage_ratio {
+                    score -= 0.8;
+                    reasons.push("idf-dilution".to_string());
+                }
+            }
+            if rare_term_matches > 0 {
+                score += rare_term_matches as f64 * 0.75;
+                reasons.push(format!("rare-term-support:{rare_term_matches}"));
+            }
             if semantic_only_tokens > 0 {
                 score += semantic_only_tokens as f64 * 0.6;
                 reasons.push(format!("semantic-support:{semantic_only_tokens}"));
@@ -2847,9 +2880,8 @@ fn minimum_term_span(haystack: &str, tokens: &[String]) -> Option<usize> {
                 if other_index == token_index {
                     continue;
                 }
-                let &(candidate_start, candidate_end) = other_occurrences
-                    .iter()
-                    .min_by_key(|&&(start, end)| {
+                let &(candidate_start, candidate_end) =
+                    other_occurrences.iter().min_by_key(|&&(start, end)| {
                         anchor_start.abs_diff(start) + anchor_end.abs_diff(end)
                     })?;
                 min_start = min_start.min(candidate_start);
@@ -3356,8 +3388,8 @@ mod tests {
 
         let manifest = attach_corpus(&cwd, &[root.clone()], CorpusAttachOptions::default())
             .expect("attach corpus");
-        let result = search_corpus(&cwd, &manifest.corpus_id, "alpha beta gamma", 5, None)
-            .expect("search");
+        let result =
+            search_corpus(&cwd, &manifest.corpus_id, "alpha beta gamma", 5, None).expect("search");
 
         assert_eq!(result.hits[0].path, "clustered.md");
         assert!(result.hits[0].reason.contains("tight-span:"));
@@ -4469,6 +4501,13 @@ This architecture guide explains platform flow, session handling, token exchange
             "expected a specific auth document to rank first ahead of generic architecture overlap: {:#?}",
             result.hits
         );
+        assert!(
+            top_hit.reason.contains("idf-coverage:")
+                || top_hit.reason.contains("idf-focus:")
+                || top_hit.reason.contains("rare-term-support:"),
+            "expected idf-aware ranking reasons on the top auth hit: {:#?}",
+            result.hits
+        );
 
         let _ = fs::remove_dir_all(cwd);
     }
@@ -4492,11 +4531,15 @@ This architecture guide explains platform flow, session handling, token exchange
 
         let manifest = attach_corpus(&cwd, &[root.clone()], CorpusAttachOptions::default())
             .expect("attach corpus");
-        let result = search_corpus(&cwd, &manifest.corpus_id, "auth flow", 5, None)
-            .expect("search");
+        let result =
+            search_corpus(&cwd, &manifest.corpus_id, "auth flow", 5, None).expect("search");
 
         let top_hit = result.hits.first().expect("expected at least one hit");
-        assert_eq!(top_hit.path, "auth/session-flow.md", "expected auth doc to outrank author-guide substring overlap: {:#?}", result.hits);
+        assert_eq!(
+            top_hit.path, "auth/session-flow.md",
+            "expected auth doc to outrank author-guide substring overlap: {:#?}",
+            result.hits
+        );
         let author_rank = result
             .hits
             .iter()
@@ -4507,6 +4550,51 @@ This architecture guide explains platform flow, session handling, token exchange
                 None => true,
             },
             "expected author-guide to rank below the auth hit when query uses short token boundaries: {:#?}",
+            result.hits
+        );
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_prefers_rare_query_terms_over_generic_overlap_when_both_match() {
+        let cwd = temp_dir("workspace-idf-aware-ranking");
+        let root = cwd.join("docs");
+        fs::create_dir_all(root.join("auth")).expect("mkdir auth docs");
+        fs::create_dir_all(root.join("platform")).expect("mkdir platform docs");
+        fs::write(
+            root.join("auth/revocation-rotation.md"),
+            "# Revocation Rotation\n\nRevoked refresh tokens are rotated after incident review and revocation cleanup.\n",
+        )
+        .expect("write auth doc");
+        fs::write(
+            root.join("platform/overview.md"),
+            "# Architecture Overview\n\nThis guide explains architecture, session flow, token handling, platform overview, and general docs flow.\n",
+        )
+        .expect("write generic doc");
+
+        let manifest = attach_corpus(&cwd, &[root.clone()], CorpusAttachOptions::default())
+            .expect("attach corpus");
+        let result = search_corpus(
+            &cwd,
+            &manifest.corpus_id,
+            "architecture session token revoked rotation",
+            5,
+            None,
+        )
+        .expect("search");
+
+        let top_hit = result.hits.first().expect("expected at least one hit");
+        assert_eq!(
+            top_hit.path,
+            "auth/revocation-rotation.md",
+            "expected rarer revoked/rotation evidence to outrank generic architecture/session overlap: {:#?}",
+            result.hits
+        );
+        assert!(
+            top_hit.reason.contains("idf-coverage:")
+                || top_hit.reason.contains("rare-term-support:"),
+            "expected idf-aware reason on the top hit: {:#?}",
             result.hits
         );
 
@@ -4538,14 +4626,8 @@ The team discussed release ownership and staffing.
 
         let manifest = attach_corpus(&cwd, &[root.clone()], CorpusAttachOptions::default())
             .expect("attach corpus");
-        let result = search_corpus(
-            &cwd,
-            &manifest.corpus_id,
-            "release workflow",
-            5,
-            None,
-        )
-        .expect("search");
+        let result =
+            search_corpus(&cwd, &manifest.corpus_id, "release workflow", 5, None).expect("search");
 
         assert_eq!(result.hits[0].path, "release-lifecycle.md");
         assert!(
@@ -4581,8 +4663,8 @@ Deploy completed successfully and operators celebrated.
 
         let manifest = attach_corpus(&cwd, &[root.clone()], CorpusAttachOptions::default())
             .expect("attach corpus");
-        let result = search_corpus(&cwd, &manifest.corpus_id, "deployment error", 5, None)
-            .expect("search");
+        let result =
+            search_corpus(&cwd, &manifest.corpus_id, "deployment error", 5, None).expect("search");
 
         assert_eq!(result.hits[0].path, "runbook.md");
         assert!(
