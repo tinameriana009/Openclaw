@@ -7,9 +7,10 @@ use runtime::{
 };
 
 use crate::{
-    max_tokens_for_model, resolve_model_alias, AuthSource, ContentBlockDelta, InputContentBlock,
-    InputMessage, MessageRequest, MessageResponse, OutputContentBlock, PromptCache,
-    PromptCacheRecord, ProviderClient, ToolChoice, ToolDefinition, ToolResultContentBlock,
+    max_tokens_for_model, provider_bootstrap::ProviderRuntimeBootstrap, AuthSource,
+    ContentBlockDelta, InputContentBlock, InputMessage, MessageRequest, MessageResponse,
+    OutputContentBlock, PromptCache, PromptCacheRecord, ProviderClient, ToolChoice, ToolDefinition,
+    ToolResultContentBlock,
 };
 
 pub trait ProviderRuntimeObserver {
@@ -42,8 +43,7 @@ pub struct ProviderRuntimeApiClient<O = NoopProviderRuntimeObserver> {
 }
 
 struct ProviderRuntimeBuildContext {
-    client: ProviderClient,
-    model: String,
+    bootstrap: ProviderRuntimeBootstrap,
     tools: Vec<ToolDefinition>,
 }
 
@@ -52,37 +52,27 @@ impl ProviderRuntimeBuildContext {
         model: String,
         tools: Vec<ToolDefinition>,
         anthropic_auth: Option<AuthSource>,
+        prompt_cache_namespace: Option<&str>,
     ) -> Result<Self, String> {
-        let resolved_model = resolve_model_alias(&model).to_string();
-        let client =
-            ProviderClient::from_model_with_anthropic_auth(&resolved_model, anthropic_auth)
-                .map_err(|error| error.to_string())?;
         Ok(Self {
-            client,
-            model: resolved_model,
+            bootstrap: ProviderRuntimeBootstrap::new(model, anthropic_auth, prompt_cache_namespace)
+                .map_err(|error| error.to_string())?,
             tools,
         })
     }
 
-    fn into_api_client<O>(
-        self,
-        prompt_cache_namespace: Option<&str>,
-        observer: O,
-    ) -> Result<ProviderRuntimeApiClient<O>, String>
+    fn into_api_client<O>(self, observer: O) -> ProviderRuntimeApiClient<O>
     where
         O: ProviderRuntimeObserver,
     {
-        let client = match prompt_cache_namespace {
-            Some(namespace) => self.client.with_prompt_cache(PromptCache::new(namespace)),
-            None => self.client,
-        };
-        Ok(ProviderRuntimeApiClient {
-            runtime: tokio::runtime::Runtime::new().map_err(|error| error.to_string())?,
+        let (client, model, runtime) = self.bootstrap.into_parts();
+        ProviderRuntimeApiClient {
+            runtime,
             client,
-            model: self.model,
+            model,
             tools: self.tools,
             observer,
-        })
+        }
     }
 }
 
@@ -98,8 +88,10 @@ impl ProviderRuntimeApiClient<NoopProviderRuntimeObserver> {
         tools: Vec<ToolDefinition>,
         anthropic_auth: Option<AuthSource>,
     ) -> Result<Self, String> {
-        ProviderRuntimeBuildContext::new(model, tools, anthropic_auth)?
-            .into_api_client(None, NoopProviderRuntimeObserver)
+        Ok(
+            ProviderRuntimeBuildContext::new(model, tools, anthropic_auth, None)?
+                .into_api_client(NoopProviderRuntimeObserver),
+        )
     }
 }
 
@@ -143,8 +135,10 @@ fn build_provider_runtime_api_client_internal<O>(
 where
     O: ProviderRuntimeObserver,
 {
-    ProviderRuntimeBuildContext::new(model, tools, anthropic_auth)?
-        .into_api_client(prompt_cache_namespace, observer)
+    Ok(
+        ProviderRuntimeBuildContext::new(model, tools, anthropic_auth, prompt_cache_namespace)?
+            .into_api_client(observer),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

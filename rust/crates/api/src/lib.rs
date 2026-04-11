@@ -2,6 +2,7 @@ mod child;
 mod client;
 mod error;
 mod prompt_cache;
+mod provider_bootstrap;
 mod providers;
 mod runtime_client;
 mod sse;

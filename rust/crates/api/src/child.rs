@@ -12,8 +12,9 @@ use runtime::{
 use tokio::runtime::Runtime;
 
 use crate::{
-    max_tokens_for_model, minimal_web_research, resolve_startup_auth_source, ApiError, AuthSource,
-    InputMessage, MessageRequest, MessageResponse, OutputContentBlock, PromptCache, ProviderClient,
+    max_tokens_for_model, minimal_web_research, provider_bootstrap::ProviderRuntimeBootstrap,
+    resolve_startup_auth_source, ApiError, AuthSource, InputMessage, MessageRequest,
+    MessageResponse, OutputContentBlock, ProviderClient,
 };
 
 pub type WebEvidenceCollector = Arc<
@@ -95,6 +96,19 @@ impl ProviderChildExecutor {
         })
     }
 
+    fn from_bootstrap(
+        bootstrap: ProviderRuntimeBootstrap,
+        web_evidence_collector: WebEvidenceCollector,
+    ) -> Self {
+        let (client, model, runtime) = bootstrap.into_parts();
+        Self {
+            runtime,
+            client,
+            model,
+            web_evidence_collector,
+        }
+    }
+
     #[must_use]
     pub fn model(&self) -> &str {
         &self.model
@@ -107,10 +121,13 @@ pub fn build_provider_child_executor_with_config(
     web_evidence_collector: WebEvidenceCollector,
     config: ProviderChildExecutorConfig,
 ) -> Result<ProviderChildExecutor, String> {
-    let client = ProviderClient::from_model_with_anthropic_auth(model, anthropic_auth)
-        .map_err(|error| format_provider_child_init_reason(model, &error))?
-        .with_prompt_cache(PromptCache::new(&config.prompt_cache_namespace));
-    ProviderChildExecutor::new(client, model, web_evidence_collector)
+    let bootstrap =
+        ProviderRuntimeBootstrap::new(model, anthropic_auth, Some(&config.prompt_cache_namespace))
+            .map_err(|error| format_provider_child_init_reason(model, &error))?;
+    Ok(ProviderChildExecutor::from_bootstrap(
+        bootstrap,
+        web_evidence_collector,
+    ))
 }
 
 pub fn build_provider_child_executor(
