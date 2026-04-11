@@ -14,7 +14,7 @@ use reqwest::blocking::Client;
 use runtime::{
     edit_file, execute_bash, glob_search, grep_search, inspect_corpus, load_system_prompt,
     read_file, search_corpus, slice_corpus, write_file, BashCommandInput, ContentBlock,
-    ConversationRuntime, GrepSearchInput, PermissionMode, PermissionPolicy, Session, ToolError,
+    ConversationRuntime, GrepSearchInput, PermissionMode, PermissionPolicy, ToolError,
     ToolExecutor,
 };
 #[cfg(test)]

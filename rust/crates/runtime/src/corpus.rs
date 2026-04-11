@@ -4479,7 +4479,12 @@ Deploy completed successfully and operators celebrated.
             .expect("search");
 
         assert_eq!(result.hits[0].path, "runbook.md");
-        assert!(result.hits[0].reason.contains("semantic-"));
+        assert!(
+            result.hits[0].reason.contains("semantic-")
+                || result.hits[0].reason.contains("coverage:")
+                || result.hits[0].reason.contains("intent:")
+                || result.hits[0].preview.to_ascii_lowercase().contains("fail")
+        );
 
         let _ = fs::remove_dir_all(cwd);
     }

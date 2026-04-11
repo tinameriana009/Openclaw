@@ -28,9 +28,9 @@ use api::{
     render_extractive_child_answer, resolve_provider_child_model,
     resolve_runtime_provider_child_auth, resolve_startup_auth_source,
     run_runtime_configured_provider_recursive_query, AnthropicClient, ApiError, AuthSource,
-    NoopProviderRuntimeObserver, OutputContentBlock, PromptCache, ProviderClient,
-    ProviderRuntimeApiClient, ProviderRuntimeObserver, StreamEvent as ApiStreamEvent,
-    ToolDefinition,
+    MessageResponse, NoopProviderRuntimeObserver, OutputContentBlock, PromptCache,
+    ProviderClient, ProviderRuntimeApiClient, ProviderRuntimeObserver,
+    StreamEvent as ApiStreamEvent, ToolDefinition,
 };
 
 use commands::{
