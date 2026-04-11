@@ -1102,3 +1102,106 @@ fn unique_temp_dir(label: &str) -> PathBuf {
         std::process::id()
     ))
 }
+
+#[test]
+fn resumed_trace_inbox_prioritizes_next_actionable_entry() {
+    let temp_dir = unique_temp_dir("resume-trace-inbox");
+    let project_dir = temp_dir.join("project");
+    fs::create_dir_all(project_dir.join(".claw").join("sessions"))
+        .expect("sessions dir should exist");
+    fs::create_dir_all(project_dir.join(".claw").join("web-approvals"))
+        .expect("approvals dir should exist");
+
+    let session_path = project_dir
+        .join(".claw")
+        .join("sessions")
+        .join("session.jsonl");
+    Session::new()
+        .with_persistence_path(&session_path)
+        .save_to_path(&session_path)
+        .expect("session should persist");
+
+    fs::write(
+        project_dir
+            .join(".claw")
+            .join("web-approvals")
+            .join("trace-approved.review.json"),
+        r#"{
+          "schemaVersion":1,
+          "traceId":"trace-approved",
+          "corpusId":"demo-corpus",
+          "task":"rerun the approved release-status search",
+          "approvalPacket":"/tmp/trace-approved.json",
+          "operatorState":"approved for explicit rerun",
+          "nextStep":"run /trace replay <trace-file>",
+          "replayTrace":null,
+          "reviewCommand":"/trace review /tmp/trace-approved.json",
+          "replayTraceCommand":"/trace replay /tmp/trace-approved.json",
+          "resumeTraceCommand":"/trace resume /tmp/trace-approved.json",
+          "pendingQueries":["search the web for release status"]
+        }"#,
+    )
+    .expect("approved review json should write");
+    fs::write(
+        project_dir
+            .join(".claw")
+            .join("web-approvals")
+            .join("trace-captured.review.json"),
+        r#"{
+          "schemaVersion":1,
+          "traceId":"trace-captured",
+          "corpusId":"demo-corpus",
+          "task":"inspect the replay trace",
+          "approvalPacket":"/tmp/trace-captured.json",
+          "operatorState":"rerun captured for review",
+          "nextStep":"inspect replay trace",
+          "replayTrace":"/tmp/replay-trace.json",
+          "reviewCommand":"/trace review /tmp/trace-captured.json",
+          "replayTraceCommand":"/trace replay /tmp/trace-captured.json",
+          "resumeTraceCommand":"/trace resume /tmp/trace-captured.json",
+          "pendingQueries":["search the web for release status"]
+        }"#,
+    )
+    .expect("captured review json should write");
+
+    let output = run_claw(
+        &project_dir,
+        &[
+            "--resume",
+            session_path.to_str().expect("utf8 path"),
+            "/trace inbox",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\n\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("Trace inbox"), "stdout:\n{}", stdout);
+    assert!(stdout.contains("Ready to rerun     1"));
+    assert!(stdout.contains("Ready to review    1"));
+    assert!(stdout.contains("trace-approved :: Ready to rerun"));
+    assert!(stdout.contains("replay: /trace replay /tmp/trace-approved.json"));
+    assert!(stdout.contains("resume: /trace resume /tmp/trace-approved.json"));
+
+    let index_json: JsonValue = serde_json::from_str(
+        &fs::read_to_string(
+            project_dir
+                .join(".claw")
+                .join("web-approvals")
+                .join("index.json"),
+        )
+        .expect("index json should exist"),
+    )
+    .expect("index json should parse");
+    assert_eq!(index_json["summary"]["readyToRerun"], 1);
+    assert_eq!(index_json["summary"]["readyToReview"], 1);
+    let entries = index_json["entries"]
+        .as_array()
+        .expect("entries should exist");
+    assert_eq!(entries[0]["traceId"], "trace-approved");
+    assert_eq!(entries[0]["queueBucket"], "ready-to-rerun");
+    assert_eq!(entries[1]["queueBucket"], "ready-to-review");
+}

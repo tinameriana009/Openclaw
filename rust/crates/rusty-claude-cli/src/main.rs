@@ -1501,6 +1501,7 @@ fn run_trace_command(
     match (action, target, destination) {
         (Some("review"), Some(target), None) => render_trace_review_status(target, cwd),
         (Some("approvals"), None, None) => render_trace_approval_dashboard(cwd),
+        (Some("inbox"), None, None) => render_trace_inbox(cwd),
         (Some("approve"), Some(target), None) => {
             approve_trace_for_operator(target, cwd, session_path)
         }
@@ -2151,6 +2152,50 @@ fn create_web_approval_artifacts(
     })
 }
 
+fn review_queue_metadata(entry: &JsonValue) -> (u64, &'static str, &'static str, String) {
+    let state = entry["operatorState"].as_str().unwrap_or("unknown");
+    let replay_trace = entry["replayTrace"].as_str();
+    let pending_queries = entry["pendingQueries"]
+        .as_array()
+        .map(|values| values.len())
+        .unwrap_or(0);
+    match state {
+        "approved for rerun" | "approved for explicit rerun" => (
+            0,
+            "ready-to-rerun",
+            "Ready to rerun",
+            "run /trace replay or /trace resume to continue the approved trace".to_string(),
+        ),
+        "rerun captured for review" if replay_trace.is_some() => (
+            1,
+            "ready-to-review",
+            "Ready to review rerun",
+            "inspect the replay trace and decide whether another bounded rerun is needed".to_string(),
+        ),
+        "rerun completed without saved trace artifact" => (
+            2,
+            "needs-trace-recovery",
+            "Needs trace recovery",
+            "the rerun completed without a saved trace artifact; inspect the packet and rerun explicitly if needed".to_string(),
+        ),
+        _ if pending_queries > 0 => (
+            3,
+            "waiting-on-context",
+            "Waiting on context",
+            format!(
+                "{} approved query(s) remain queued for bounded operator follow-up",
+                pending_queries
+            ),
+        ),
+        _ => (
+            4,
+            "archived",
+            "Archived",
+            "no immediate bounded operator action is surfaced for this entry".to_string(),
+        ),
+    }
+}
+
 fn refresh_web_approval_review_index(
     cwd: &Path,
 ) -> Result<(PathBuf, PathBuf, PathBuf), Box<dyn std::error::Error>> {
@@ -2167,7 +2212,7 @@ fn refresh_web_approval_review_index(
         .collect::<Vec<_>>();
     entries.sort();
 
-    let review_entries = entries
+    let mut review_entries = entries
         .iter()
         .filter(|path| path.file_name().and_then(|v| v.to_str()) != Some("index.review"))
         .filter_map(|path| {
@@ -2193,9 +2238,32 @@ fn refresh_web_approval_review_index(
                     );
                 }
             }
+            let (priority, bucket, label, reason) = review_queue_metadata(&value);
+            value["queuePriority"] = JsonValue::from(priority);
+            value["queueBucket"] = JsonValue::String(bucket.to_string());
+            value["queueLabel"] = JsonValue::String(label.to_string());
+            value["queueReason"] = JsonValue::String(reason);
             Some(value)
         })
         .collect::<Vec<_>>();
+    review_entries.sort_by(|left, right| {
+        let left_priority = left["queuePriority"].as_u64().unwrap_or(u64::MAX);
+        let right_priority = right["queuePriority"].as_u64().unwrap_or(u64::MAX);
+        left_priority
+            .cmp(&right_priority)
+            .then_with(|| {
+                right["updatedAtMs"]
+                    .as_u64()
+                    .unwrap_or(0)
+                    .cmp(&left["updatedAtMs"].as_u64().unwrap_or(0))
+            })
+            .then_with(|| {
+                left["traceId"]
+                    .as_str()
+                    .unwrap_or("")
+                    .cmp(right["traceId"].as_str().unwrap_or(""))
+            })
+    });
     let awaiting_rerun = review_entries
         .iter()
         .filter(|entry| {
@@ -2235,6 +2303,9 @@ fn refresh_web_approval_review_index(
             "rerunMissingTrace": rerun_missing_trace,
             "pendingQueries": pending_query_total,
             "replayCount": review_entries.iter().map(|entry| entry["replayCount"].as_u64().unwrap_or(0)).sum::<u64>(),
+            "readyToRerun": review_entries.iter().filter(|entry| entry["queueBucket"].as_str() == Some("ready-to-rerun")).count(),
+            "readyToReview": review_entries.iter().filter(|entry| entry["queueBucket"].as_str() == Some("ready-to-review")).count(),
+            "needsTraceRecovery": review_entries.iter().filter(|entry| entry["queueBucket"].as_str() == Some("needs-trace-recovery")).count(),
         },
         "entries": review_entries,
     });
@@ -2256,6 +2327,27 @@ fn refresh_web_approval_review_index(
             .iter()
             .map(|entry| entry["replayCount"].as_u64().unwrap_or(0))
             .sum::<u64>()
+    ));
+    lines.push(format!(
+        "- Ready to rerun: {}",
+        review_entries
+            .iter()
+            .filter(|entry| entry["queueBucket"].as_str() == Some("ready-to-rerun"))
+            .count()
+    ));
+    lines.push(format!(
+        "- Ready to review rerun: {}",
+        review_entries
+            .iter()
+            .filter(|entry| entry["queueBucket"].as_str() == Some("ready-to-review"))
+            .count()
+    ));
+    lines.push(format!(
+        "- Needs trace recovery: {}",
+        review_entries
+            .iter()
+            .filter(|entry| entry["queueBucket"].as_str() == Some("needs-trace-recovery"))
+            .count()
     ));
     lines.push("".to_string());
     if review_entries.is_empty() {
@@ -2412,6 +2504,66 @@ fn render_trace_review_status(
         review_value["nextStep"].as_str().unwrap_or("inspect the approval packet and review markdown on disk"),
         packet.operator_note.as_deref().unwrap_or("browser automation is still not available; this is an on-disk review surface only"),
     ))
+}
+
+fn render_trace_inbox(cwd: &Path) -> Result<String, Box<dyn std::error::Error>> {
+    let (index_json_path, _, _) = refresh_web_approval_review_index(cwd)?;
+    let index_text = fs::read_to_string(&index_json_path)?;
+    let index_value: JsonValue = serde_json::from_str(&index_text)?;
+    let entries = index_value["entries"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let summary = &index_value["summary"];
+    let mut lines = vec![
+        "Trace inbox".to_string(),
+        format!("  Review Index JSON  {}", index_json_path.display()),
+        format!(
+            "  Entries            {}",
+            summary["entries"].as_u64().unwrap_or(entries.len() as u64)
+        ),
+        format!(
+            "  Ready to rerun     {}",
+            summary["readyToRerun"].as_u64().unwrap_or(0)
+        ),
+        format!(
+            "  Ready to review    {}",
+            summary["readyToReview"].as_u64().unwrap_or(0)
+        ),
+        format!(
+            "  Needs trace recovery {}",
+            summary["needsTraceRecovery"].as_u64().unwrap_or(0)
+        ),
+    ];
+    if let Some(next) = entries.first() {
+        lines.push("  Next item".to_string());
+        lines.push(format!(
+            "  - {} :: {}",
+            next["traceId"].as_str().unwrap_or("unknown"),
+            next["queueLabel"].as_str().unwrap_or("Unclassified")
+        ));
+        if let Some(task) = next["task"].as_str() {
+            lines.push(format!("    task: {}", task));
+        }
+        if let Some(reason) = next["queueReason"].as_str() {
+            lines.push(format!("    why now: {}", reason));
+        }
+        if let Some(next_step) = next["nextStep"].as_str() {
+            lines.push(format!("    next: {}", next_step));
+        }
+        if let Some(review_command) = next["reviewCommand"].as_str() {
+            lines.push(format!("    review: {}", review_command));
+        }
+        if let Some(replay_command) = next["replayTraceCommand"].as_str() {
+            lines.push(format!("    replay: {}", replay_command));
+        }
+        if let Some(resume_command) = next["resumeTraceCommand"].as_str() {
+            lines.push(format!("    resume: {}", resume_command));
+        }
+    } else {
+        lines.push("  Note               no approval review artifacts exist yet".to_string());
+    }
+    Ok(lines.join("\n"))
 }
 
 fn render_trace_approval_dashboard(cwd: &Path) -> Result<String, Box<dyn std::error::Error>> {

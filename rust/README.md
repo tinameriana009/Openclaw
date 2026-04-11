@@ -304,6 +304,7 @@ For the current bounded web-review loop:
 - `/trace replay ...` reruns an already approved packet and refreshes those review artifacts
 - `/trace resume ...` is the honest approve-and-rerun shortcut; it still does **not** provide browser automation
 - `.claw/web-approvals/index.{json,md,html}` acts as a lightweight on-disk operator dashboard for the saved review state, including explicit follow-up `/trace review|replay|resume` commands for each entry
+- `/trace inbox` turns that saved review state into a bounded operator queue: it prioritizes the next actionable approval packet, reports ready-to-rerun vs ready-to-review counts, and keeps the flow honest about remaining on-disk/static rather than a live web inbox
 
 ## High-value slash commands
 
