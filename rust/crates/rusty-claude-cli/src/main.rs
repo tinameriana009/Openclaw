@@ -1614,6 +1614,18 @@ fn html_escape(value: &str) -> String {
         .replace('\'', "&#39;")
 }
 
+fn trace_review_command(target: &Path) -> String {
+    format!("/trace review {}", target.display())
+}
+
+fn trace_replay_command(target: &Path) -> String {
+    format!("/trace replay {}", target.display())
+}
+
+fn trace_resume_command(target: &Path) -> String {
+    format!("/trace resume {}", target.display())
+}
+
 fn render_web_operator_review_markdown(
     packet: &WebApprovalPacket,
     packet_path: &Path,
@@ -1635,8 +1647,11 @@ fn render_web_operator_review_markdown(
     let replay_trace = replay_trace_path
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "not yet rerun".to_string());
+    let review_command = trace_review_command(packet_path);
+    let replay_trace_command = trace_replay_command(packet_path);
+    let resume_trace_command = trace_resume_command(packet_path);
     format!(
-        "# Web approval review\n\n- Trace ID: `{}`\n- Session ID: `{}`\n- Corpus: `{}`\n- Approval packet: `{}`\n- Original trace: `{}`\n- Replay trace: `{}`\n- Approved at ms: `{}`\n- Operator state: {}\n- Next step: {}\n\n## Task\n\n{}\n\n## Pending approved queries\n\n{}\n\n## Replay command\n\n```bash\n{}\n```\n\n## Operator note\n\n{}\n",
+        "# Web approval review\n\n- Trace ID: `{}`\n- Session ID: `{}`\n- Corpus: `{}`\n- Approval packet: `{}`\n- Original trace: `{}`\n- Replay trace: `{}`\n- Approved at ms: `{}`\n- Operator state: {}\n- Next step: {}\n\n## Task\n\n{}\n\n## Pending approved queries\n\n{}\n\n## Operator commands\n\n```bash\n{}\n{}\n{}\n{}\n```\n\n## Operator note\n\n{}\n",
         packet.trace_id,
         packet.session_id,
         packet.corpus_id,
@@ -1648,6 +1663,9 @@ fn render_web_operator_review_markdown(
         next_step,
         packet.task,
         pending_queries,
+        review_command,
+        replay_trace_command,
+        resume_trace_command,
         packet.replay_command,
         packet
             .operator_note
@@ -1677,12 +1695,14 @@ fn render_web_operator_review_html(
     let replay_trace = replay_trace_path
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "not yet rerun".to_string());
-    let operator_note = packet
-        .operator_note
-        .as_deref()
-        .unwrap_or("browser automation is still not available; rerun remains explicitly operator-driven");
+    let operator_note = packet.operator_note.as_deref().unwrap_or(
+        "browser automation is still not available; rerun remains explicitly operator-driven",
+    );
+    let review_command = trace_review_command(packet_path);
+    let replay_trace_command = trace_replay_command(packet_path);
+    let resume_trace_command = trace_resume_command(packet_path);
     format!(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\" />\n  <title>Web approval review · {trace_id}</title>\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n  <style>body{{font-family:Inter,system-ui,sans-serif;margin:2rem auto;max-width:960px;padding:0 1rem;line-height:1.5;background:#0b1020;color:#e5e7eb}}code,pre{{font-family:ui-monospace,SFMono-Regular,monospace;background:#111827;color:#e5e7eb}}pre{{padding:1rem;overflow:auto;border-radius:12px}}.card{{background:#111827;border:1px solid #243041;border-radius:16px;padding:1rem 1.25rem;margin:1rem 0}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0.75rem}}.label{{font-size:.82rem;color:#93c5fd;text-transform:uppercase;letter-spacing:.04em}}.value{{margin-top:.2rem;word-break:break-word}}.pill{{display:inline-block;padding:.25rem .6rem;border-radius:999px;background:#1d4ed8;color:#eff6ff;font-size:.9rem}}.note{{color:#cbd5e1}}a{{color:#93c5fd}}</style>\n</head>\n<body>\n  <h1>Web approval review</h1>\n  <p class=\"note\">Static operator web surface only. Browser automation and click-to-rerun controls do not exist yet.</p>\n  <div class=\"card\">\n    <div class=\"grid\">\n      <div><div class=\"label\">Trace ID</div><div class=\"value\"><code>{trace_id}</code></div></div>\n      <div><div class=\"label\">Session ID</div><div class=\"value\"><code>{session_id}</code></div></div>\n      <div><div class=\"label\">Corpus</div><div class=\"value\"><code>{corpus_id}</code></div></div>\n      <div><div class=\"label\">Approved at ms</div><div class=\"value\"><code>{approved_at_ms}</code></div></div>\n      <div><div class=\"label\">Operator state</div><div class=\"value\"><span class=\"pill\">{operator_state}</span></div></div>\n      <div><div class=\"label\">Next step</div><div class=\"value\">{next_step}</div></div>\n    </div>\n  </div>\n  <div class=\"card\">\n    <h2>Artifacts</h2>\n    <ul>\n      <li>Approval packet: <code>{packet_path}</code></li>\n      <li>Original trace: <code>{original_trace}</code></li>\n      <li>Replay trace: <code>{replay_trace}</code></li>\n    </ul>\n  </div>\n  <div class=\"card\">\n    <h2>Task</h2>\n    <p>{task}</p>\n  </div>\n  <div class=\"card\">\n    <h2>Pending approved queries</h2>\n    <ul>{pending_queries}</ul>\n  </div>\n  <div class=\"card\">\n    <h2>Replay command</h2>\n    <pre><code>{replay_command}</code></pre>\n  </div>\n  <div class=\"card\">\n    <h2>Operator note</h2>\n    <p>{operator_note}</p>\n  </div>\n</body>\n</html>\n",
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\" />\n  <title>Web approval review · {trace_id}</title>\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n  <style>body{{font-family:Inter,system-ui,sans-serif;margin:2rem auto;max-width:960px;padding:0 1rem;line-height:1.5;background:#0b1020;color:#e5e7eb}}code,pre{{font-family:ui-monospace,SFMono-Regular,monospace;background:#111827;color:#e5e7eb}}pre{{padding:1rem;overflow:auto;border-radius:12px}}.card{{background:#111827;border:1px solid #243041;border-radius:16px;padding:1rem 1.25rem;margin:1rem 0}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0.75rem}}.label{{font-size:.82rem;color:#93c5fd;text-transform:uppercase;letter-spacing:.04em}}.value{{margin-top:.2rem;word-break:break-word}}.pill{{display:inline-block;padding:.25rem .6rem;border-radius:999px;background:#1d4ed8;color:#eff6ff;font-size:.9rem}}.note{{color:#cbd5e1}}a{{color:#93c5fd}}</style>\n</head>\n<body>\n  <h1>Web approval review</h1>\n  <p class=\"note\">Static operator web surface only. Browser automation and click-to-rerun controls do not exist yet.</p>\n  <div class=\"card\">\n    <div class=\"grid\">\n      <div><div class=\"label\">Trace ID</div><div class=\"value\"><code>{trace_id}</code></div></div>\n      <div><div class=\"label\">Session ID</div><div class=\"value\"><code>{session_id}</code></div></div>\n      <div><div class=\"label\">Corpus</div><div class=\"value\"><code>{corpus_id}</code></div></div>\n      <div><div class=\"label\">Approved at ms</div><div class=\"value\"><code>{approved_at_ms}</code></div></div>\n      <div><div class=\"label\">Operator state</div><div class=\"value\"><span class=\"pill\">{operator_state}</span></div></div>\n      <div><div class=\"label\">Next step</div><div class=\"value\">{next_step}</div></div>\n    </div>\n  </div>\n  <div class=\"card\">\n    <h2>Artifacts</h2>\n    <ul>\n      <li>Approval packet: <code>{packet_path}</code></li>\n      <li>Original trace: <code>{original_trace}</code></li>\n      <li>Replay trace: <code>{replay_trace}</code></li>\n    </ul>\n  </div>\n  <div class=\"card\">\n    <h2>Task</h2>\n    <p>{task}</p>\n  </div>\n  <div class=\"card\">\n    <h2>Pending approved queries</h2>\n    <ul>{pending_queries}</ul>\n  </div>\n  <div class=\"card\">\n    <h2>Operator commands</h2>\n    <pre><code>{review_command}\n{replay_trace_command}\n{resume_trace_command}\n{replay_command}</code></pre>\n  </div>\n  <div class=\"card\">\n    <h2>Operator note</h2>\n    <p>{operator_note}</p>\n  </div>\n</body>\n</html>\n",
         trace_id = html_escape(&packet.trace_id),
         session_id = html_escape(&packet.session_id),
         corpus_id = html_escape(&packet.corpus_id),
@@ -1694,6 +1714,9 @@ fn render_web_operator_review_html(
         replay_trace = html_escape(&replay_trace),
         task = html_escape(&packet.task),
         pending_queries = pending_queries,
+        review_command = html_escape(&review_command),
+        replay_trace_command = html_escape(&replay_trace_command),
+        resume_trace_command = html_escape(&resume_trace_command),
         replay_command = html_escape(&packet.replay_command),
         operator_note = html_escape(operator_note),
     )
@@ -1701,7 +1724,10 @@ fn render_web_operator_review_html(
 
 fn render_web_approval_dashboard_html(index_value: &JsonValue) -> String {
     let summary = &index_value["summary"];
-    let entries = index_value["entries"].as_array().cloned().unwrap_or_default();
+    let entries = index_value["entries"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     let entry_cards = if entries.is_empty() {
         "<p>No review artifacts yet.</p>".to_string()
     } else {
@@ -1715,11 +1741,14 @@ fn render_web_approval_dashboard_html(index_value: &JsonValue) -> String {
                 let packet = html_escape(entry["approvalPacket"].as_str().unwrap_or("missing"));
                 let next_step = html_escape(entry["nextStep"].as_str().unwrap_or("inspect review json"));
                 let replay_trace = html_escape(entry["replayTrace"].as_str().unwrap_or("not yet rerun"));
+                let review_command = html_escape(entry["reviewCommand"].as_str().unwrap_or("/trace review <approval-packet>"));
+                let replay_command = html_escape(entry["replayTraceCommand"].as_str().unwrap_or("/trace replay <approval-packet>"));
+                let resume_command = html_escape(entry["resumeTraceCommand"].as_str().unwrap_or("/trace resume <approval-packet>"));
                 let pending = entry["pendingQueries"].as_array().map(|queries| {
                     let items = queries.iter().filter_map(|value| value.as_str()).map(|value| format!("<li><code>{}</code></li>", html_escape(value))).collect::<Vec<_>>().join("");
                     if items.is_empty() { "<li>none</li>".to_string() } else { items }
                 }).unwrap_or_else(|| "<li>none</li>".to_string());
-                format!("<section class=\"card\"><h2><code>{trace_id}</code></h2><p><span class=\"pill\">{state}</span></p><p>{task}</p><div class=\"grid\"><div><div class=\"label\">Corpus</div><div class=\"value\"><code>{corpus}</code></div></div><div><div class=\"label\">Packet</div><div class=\"value\"><code>{packet}</code></div></div><div><div class=\"label\">Replay trace</div><div class=\"value\"><code>{replay_trace}</code></div></div><div><div class=\"label\">Next step</div><div class=\"value\">{next_step}</div></div></div><h3>Pending queries</h3><ul>{pending}</ul></section>")
+                format!("<section class=\"card\"><h2><code>{trace_id}</code></h2><p><span class=\"pill\">{state}</span></p><p>{task}</p><div class=\"grid\"><div><div class=\"label\">Corpus</div><div class=\"value\"><code>{corpus}</code></div></div><div><div class=\"label\">Packet</div><div class=\"value\"><code>{packet}</code></div></div><div><div class=\"label\">Replay trace</div><div class=\"value\"><code>{replay_trace}</code></div></div><div><div class=\"label\">Next step</div><div class=\"value\">{next_step}</div></div></div><h3>Pending queries</h3><ul>{pending}</ul><h3>Operator commands</h3><pre><code>{review_command}\n{replay_command}\n{resume_command}</code></pre></section>")
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -1915,6 +1944,9 @@ fn create_web_approval_artifacts(
         "corpusId": packet.corpus_id.clone(),
         "task": packet.task.clone(),
         "approvalPacket": packet_path.display().to_string(),
+        "reviewCommand": trace_review_command(&packet_path),
+        "replayTraceCommand": trace_replay_command(&packet_path),
+        "resumeTraceCommand": trace_resume_command(&packet_path),
         "originalTrace": trace_path.display().to_string(),
         "replayTrace": JsonValue::Null,
         "approvedAtMs": packet.approved_at_ms,
@@ -2073,6 +2105,15 @@ fn refresh_web_approval_review_index(
             if let Some(next_step) = entry["nextStep"].as_str() {
                 lines.push(format!("  - next: {}", next_step));
             }
+            if let Some(review_command) = entry["reviewCommand"].as_str() {
+                lines.push(format!("  - review command: {}", review_command));
+            }
+            if let Some(replay_command) = entry["replayTraceCommand"].as_str() {
+                lines.push(format!("  - replay command: {}", replay_command));
+            }
+            if let Some(resume_command) = entry["resumeTraceCommand"].as_str() {
+                lines.push(format!("  - resume command: {}", resume_command));
+            }
             if let Some(replay_trace) = entry["replayTrace"].as_str() {
                 lines.push(format!("  - replay trace: {}", replay_trace));
             }
@@ -2094,7 +2135,10 @@ fn refresh_web_approval_review_index(
     );
     let index_markdown = lines.join("\n");
     fs::write(&index_markdown_path, &index_markdown)?;
-    fs::write(&index_html_path, render_web_approval_dashboard_html(&index_json))?;
+    fs::write(
+        &index_html_path,
+        render_web_approval_dashboard_html(&index_json),
+    )?;
     Ok((index_json_path, index_markdown_path, index_html_path))
 }
 
@@ -2216,6 +2260,15 @@ fn render_trace_approval_dashboard(cwd: &Path) -> Result<String, Box<dyn std::er
                 lines.push(format!("    packet: {}", packet));
             }
             lines.push(format!("    next: {}", next_step));
+            if let Some(review_command) = entry["reviewCommand"].as_str() {
+                lines.push(format!("    review: {}", review_command));
+            }
+            if let Some(replay_command) = entry["replayTraceCommand"].as_str() {
+                lines.push(format!("    replay: {}", replay_command));
+            }
+            if let Some(resume_command) = entry["resumeTraceCommand"].as_str() {
+                lines.push(format!("    resume: {}", resume_command));
+            }
             let pending = entry["pendingQueries"]
                 .as_array()
                 .into_iter()
@@ -2293,6 +2346,9 @@ fn replay_trace_for_operator(
         "corpusId": corpus_id,
         "task": task,
         "approvalPacket": packet_path.display().to_string(),
+        "reviewCommand": trace_review_command(&packet_path),
+        "replayTraceCommand": trace_replay_command(&packet_path),
+        "resumeTraceCommand": trace_resume_command(&packet_path),
         "originalTrace": original_trace_path.display().to_string(),
         "replayTrace": replay_trace_path.as_ref().map(|path| path.display().to_string()),
         "approvedAtMs": approved_at_ms,

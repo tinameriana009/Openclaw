@@ -382,6 +382,9 @@ fn resumed_trace_approve_writes_operator_packet_and_rerun_guidance() {
     .expect("review json should parse");
     assert_eq!(review_json["operatorState"], "approved for explicit rerun");
     assert_eq!(review_json["replayTrace"], JsonValue::Null);
+    assert!(review_json["reviewCommand"].as_str().unwrap().contains("/trace review"));
+    assert!(review_json["replayTraceCommand"].as_str().unwrap().contains("/trace replay"));
+    assert!(review_json["resumeTraceCommand"].as_str().unwrap().contains("/trace resume"));
 
     let review_markdown_path = stdout
         .lines()
@@ -392,6 +395,9 @@ fn resumed_trace_approve_writes_operator_packet_and_rerun_guidance() {
         fs::read_to_string(&review_markdown_path).expect("review markdown should exist");
     assert!(review_markdown.contains("# Web approval review"));
     assert!(review_markdown.contains("Replay trace: `not yet rerun`"));
+    assert!(review_markdown.contains("## Operator commands"));
+    assert!(review_markdown.contains("/trace replay "));
+    assert!(review_markdown.contains("/trace resume "));
 
     let review_html_path = stdout
         .lines()
@@ -401,6 +407,8 @@ fn resumed_trace_approve_writes_operator_packet_and_rerun_guidance() {
     let review_html = fs::read_to_string(&review_html_path).expect("review html should exist");
     assert!(review_html.contains("<h1>Web approval review</h1>"));
     assert!(review_html.contains("Static operator web surface only"));
+    assert!(review_html.contains("<h2>Operator commands</h2>"));
+    assert!(review_html.contains("/trace review "));
 }
 
 #[test]
@@ -538,6 +546,7 @@ fn resumed_trace_replay_updates_review_artifacts_with_rerun_trace() {
     .expect("review json should parse");
     assert_eq!(review_json["operatorState"], "rerun captured for review");
     assert!(review_json["replayTrace"].as_str().is_some());
+    assert!(review_json["reviewCommand"].as_str().unwrap().contains("/trace review"));
 
     let review_markdown_path = stdout
         .lines()
@@ -548,6 +557,7 @@ fn resumed_trace_replay_updates_review_artifacts_with_rerun_trace() {
         fs::read_to_string(&review_markdown_path).expect("review markdown should exist");
     assert!(review_markdown.contains("# Web approval review"));
     assert!(!review_markdown.contains("Replay trace: `not yet rerun`"));
+    assert!(review_markdown.contains("## Operator commands"));
 
     let review_html_path = stdout
         .lines()
@@ -557,6 +567,7 @@ fn resumed_trace_replay_updates_review_artifacts_with_rerun_trace() {
     let review_html = fs::read_to_string(&review_html_path).expect("review html should exist");
     assert!(review_html.contains("Web approval review"));
     assert!(review_html.contains("Replay trace"));
+    assert!(review_html.contains("Operator commands"));
 }
 
 #[test]
@@ -699,6 +710,8 @@ fn resumed_trace_resume_approves_reruns_and_refreshes_review_index() {
         fs::read_to_string(&index_markdown_path).expect("index markdown should exist");
     assert!(index_markdown.contains("# Web approval review index"));
     assert!(index_markdown.contains("trace `trace-approval` — rerun captured for review"));
+    assert!(index_markdown.contains("review command: /trace review"));
+    assert!(index_markdown.contains("resume command: /trace resume"));
     assert!(index_markdown.contains("not a browser UI or automation surface"));
 
     let index_html_path = stdout
@@ -709,6 +722,7 @@ fn resumed_trace_resume_approves_reruns_and_refreshes_review_index() {
     let index_html = fs::read_to_string(&index_html_path).expect("index html should exist");
     assert!(index_html.contains("<h1>Web approval dashboard</h1>"));
     assert!(index_html.contains("Static review surface generated on disk"));
+    assert!(index_html.contains("Operator commands"));
 }
 
 #[test]
@@ -838,6 +852,8 @@ fn resumed_trace_approvals_dashboard_lists_review_entries() {
     assert!(stdout.contains("task: search the web for release status"));
     assert!(stdout.contains("corpus: demo-corpus"));
     assert!(stdout.contains("packet: /tmp/trace-approval.json"));
+    assert!(stdout.contains("review: /trace review"));
+    assert!(stdout.contains("resume: /trace resume"));
     assert!(stdout.contains("pending: search the web for release status"));
 
     let index_markdown = fs::read_to_string(
@@ -851,6 +867,7 @@ fn resumed_trace_approvals_dashboard_lists_review_entries() {
     assert!(index_markdown.contains("- Pending approved queries: 1"));
     assert!(index_markdown.contains("- task: search the web for release status"));
     assert!(index_markdown.contains("- corpus: demo-corpus"));
+    assert!(index_markdown.contains("- review command: /trace review"));
 
     let index_html = fs::read_to_string(
         project_dir
@@ -861,6 +878,7 @@ fn resumed_trace_approvals_dashboard_lists_review_entries() {
     .expect("index html should exist");
     assert!(index_html.contains("Web approval dashboard"));
     assert!(index_html.contains("trace-approval"));
+    assert!(index_html.contains("Operator commands"));
 }
 
 #[test]
