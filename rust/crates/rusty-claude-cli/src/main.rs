@@ -28,9 +28,9 @@ use api::{
     render_extractive_child_answer, resolve_provider_child_model,
     resolve_runtime_provider_child_auth, resolve_startup_auth_source,
     run_runtime_configured_provider_recursive_query, AnthropicClient, ApiError, AuthSource,
-    ContentBlockDelta, InputContentBlock, InputMessage, MessageRequest, MessageResponse,
-    OutputContentBlock, PromptCache, ProviderClient, StreamEvent as ApiStreamEvent, ToolChoice,
-    ToolDefinition, ToolResultContentBlock,
+    NoopProviderRuntimeObserver, OutputContentBlock, PromptCache, ProviderClient,
+    ProviderRuntimeApiClient, ProviderRuntimeObserver, StreamEvent as ApiStreamEvent,
+    ToolDefinition,
 };
 
 use commands::{
@@ -2770,14 +2770,14 @@ struct RuntimePluginState {
 }
 
 struct BuiltRuntime {
-    runtime: Option<ConversationRuntime<AnthropicRuntimeClient, CliToolExecutor>>,
+    runtime: Option<ConversationRuntime<ProviderRuntimeApiClient<CliRuntimeObserver>, CliToolExecutor>>,
     plugin_registry: PluginRegistry,
     plugins_active: bool,
 }
 
 impl BuiltRuntime {
     fn new(
-        runtime: ConversationRuntime<AnthropicRuntimeClient, CliToolExecutor>,
+        runtime: ConversationRuntime<ProviderRuntimeApiClient<CliRuntimeObserver>, CliToolExecutor>,
         plugin_registry: PluginRegistry,
     ) -> Self {
         Self {
@@ -2806,7 +2806,7 @@ impl BuiltRuntime {
 }
 
 impl Deref for BuiltRuntime {
-    type Target = ConversationRuntime<AnthropicRuntimeClient, CliToolExecutor>;
+    type Target = ConversationRuntime<ProviderRuntimeApiClient<CliRuntimeObserver>, CliToolExecutor>;
 
     fn deref(&self) -> &Self::Target {
         self.runtime
@@ -5179,17 +5179,21 @@ fn build_runtime_with_plugin_state(
         plugin_registry,
     } = runtime_plugin_state;
     plugin_registry.initialize()?;
+    let tools = if enable_tools {
+        filter_tool_specs(&tool_registry, allowed_tools.as_ref())
+    } else {
+        Vec::new()
+    };
+    let api_client = ProviderRuntimeApiClient::new_with_auth(
+        model,
+        tools,
+        Some(resolve_cli_auth_source()?),
+    )?
+    .with_prompt_cache(session_id)
+    .with_observer(CliRuntimeObserver::new(emit_output, progress_reporter));
     let mut runtime = ConversationRuntime::new_with_features(
         session,
-        AnthropicRuntimeClient::new(
-            session_id,
-            model,
-            enable_tools,
-            emit_output,
-            allowed_tools.clone(),
-            tool_registry.clone(),
-            progress_reporter,
-        )?,
+        api_client,
         CliToolExecutor::new(allowed_tools.clone(), emit_output, tool_registry.clone()),
         permission_policy(permission_mode, &feature_config, &tool_registry)
             .map_err(std::io::Error::other)?,
@@ -5284,188 +5288,82 @@ impl runtime::PermissionPrompter for CliPermissionPrompter {
     }
 }
 
-struct AnthropicRuntimeClient {
-    runtime: tokio::runtime::Runtime,
-    client: AnthropicClient,
-    model: String,
-    enable_tools: bool,
-    emit_output: bool,
-    allowed_tools: Option<AllowedToolSet>,
-    tool_registry: GlobalToolRegistry,
-    progress_reporter: Option<InternalPromptProgressReporter>,
-}
-
-impl AnthropicRuntimeClient {
-    fn new(
-        session_id: &str,
-        model: String,
-        enable_tools: bool,
-        emit_output: bool,
-        allowed_tools: Option<AllowedToolSet>,
-        tool_registry: GlobalToolRegistry,
-        progress_reporter: Option<InternalPromptProgressReporter>,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(Self {
-            runtime: tokio::runtime::Runtime::new()?,
-            client: AnthropicClient::from_auth(resolve_cli_auth_source()?)
-                .with_base_url(api::read_base_url())
-                .with_prompt_cache(PromptCache::new(session_id)),
-            model,
-            enable_tools,
-            emit_output,
-            allowed_tools,
-            tool_registry,
-            progress_reporter,
-        })
-    }
-}
-
 fn resolve_cli_auth_source() -> Result<AuthSource, Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
     Ok(resolve_runtime_provider_child_auth(&cwd)?)
 }
 
-impl ApiClient for AnthropicRuntimeClient {
-    #[allow(clippy::too_many_lines)]
-    fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+struct CliRuntimeObserver {
+    emit_output: bool,
+    progress_reporter: Option<InternalPromptProgressReporter>,
+    renderer: TerminalRenderer,
+    markdown_stream: MarkdownStreamState,
+}
+
+impl CliRuntimeObserver {
+    fn new(emit_output: bool, progress_reporter: Option<InternalPromptProgressReporter>) -> Self {
+        Self {
+            emit_output,
+            progress_reporter,
+            renderer: TerminalRenderer::new(),
+            markdown_stream: MarkdownStreamState::default(),
+        }
+    }
+
+    fn flush_markdown(&mut self) -> Result<(), RuntimeError> {
+        if !self.emit_output {
+            return Ok(());
+        }
+        if let Some(rendered) = self.markdown_stream.flush(&self.renderer) {
+            let mut stdout = io::stdout();
+            write!(stdout, "{rendered}")
+                .and_then(|()| stdout.flush())
+                .map_err(|error| RuntimeError::new(error.to_string()))?;
+        }
+        Ok(())
+    }
+}
+
+impl ProviderRuntimeObserver for CliRuntimeObserver {
+    fn on_model_invoked(&mut self) {
         if let Some(progress_reporter) = &self.progress_reporter {
             progress_reporter.mark_model_phase();
         }
-        let message_request = MessageRequest {
-            model: self.model.clone(),
-            max_tokens: max_tokens_for_model(&self.model),
-            messages: convert_messages(&request.messages),
-            system: (!request.system_prompt.is_empty()).then(|| request.system_prompt.join("\n\n")),
-            tools: self
-                .enable_tools
-                .then(|| filter_tool_specs(&self.tool_registry, self.allowed_tools.as_ref())),
-            tool_choice: self.enable_tools.then_some(ToolChoice::Auto),
-            stream: true,
-        };
+    }
 
-        self.runtime.block_on(async {
-            let mut stream = self
-                .client
-                .stream_message(&message_request)
-                .await
-                .map_err(|error| RuntimeError::new(error.to_string()))?;
+    fn on_text_delta(&mut self, text: &str) -> Result<(), RuntimeError> {
+        if let Some(progress_reporter) = &self.progress_reporter {
+            progress_reporter.mark_text_phase(text);
+        }
+        if !self.emit_output || text.is_empty() {
+            return Ok(());
+        }
+        if let Some(rendered) = self.markdown_stream.push(&self.renderer, text) {
             let mut stdout = io::stdout();
-            let mut sink = io::sink();
-            let out: &mut dyn Write = if self.emit_output {
-                &mut stdout
-            } else {
-                &mut sink
-            };
-            let renderer = TerminalRenderer::new();
-            let mut markdown_stream = MarkdownStreamState::default();
-            let mut events = Vec::new();
-            let mut pending_tool: Option<(String, String, String)> = None;
-            let mut saw_stop = false;
-
-            while let Some(event) = stream
-                .next_event()
-                .await
-                .map_err(|error| RuntimeError::new(error.to_string()))?
-            {
-                match event {
-                    ApiStreamEvent::MessageStart(start) => {
-                        for block in start.message.content {
-                            push_output_block(block, out, &mut events, &mut pending_tool, true)?;
-                        }
-                    }
-                    ApiStreamEvent::ContentBlockStart(start) => {
-                        push_output_block(
-                            start.content_block,
-                            out,
-                            &mut events,
-                            &mut pending_tool,
-                            true,
-                        )?;
-                    }
-                    ApiStreamEvent::ContentBlockDelta(delta) => match delta.delta {
-                        ContentBlockDelta::TextDelta { text } => {
-                            if !text.is_empty() {
-                                if let Some(progress_reporter) = &self.progress_reporter {
-                                    progress_reporter.mark_text_phase(&text);
-                                }
-                                if let Some(rendered) = markdown_stream.push(&renderer, &text) {
-                                    write!(out, "{rendered}")
-                                        .and_then(|()| out.flush())
-                                        .map_err(|error| RuntimeError::new(error.to_string()))?;
-                                }
-                                events.push(AssistantEvent::TextDelta(text));
-                            }
-                        }
-                        ContentBlockDelta::InputJsonDelta { partial_json } => {
-                            if let Some((_, _, input)) = &mut pending_tool {
-                                input.push_str(&partial_json);
-                            }
-                        }
-                        ContentBlockDelta::ThinkingDelta { .. }
-                        | ContentBlockDelta::SignatureDelta { .. } => {}
-                    },
-                    ApiStreamEvent::ContentBlockStop(_) => {
-                        if let Some(rendered) = markdown_stream.flush(&renderer) {
-                            write!(out, "{rendered}")
-                                .and_then(|()| out.flush())
-                                .map_err(|error| RuntimeError::new(error.to_string()))?;
-                        }
-                        if let Some((id, name, input)) = pending_tool.take() {
-                            if let Some(progress_reporter) = &self.progress_reporter {
-                                progress_reporter.mark_tool_phase(&name, &input);
-                            }
-                            // Display tool call now that input is fully accumulated
-                            writeln!(out, "\n{}", format_tool_call_start(&name, &input))
-                                .and_then(|()| out.flush())
-                                .map_err(|error| RuntimeError::new(error.to_string()))?;
-                            events.push(AssistantEvent::ToolUse { id, name, input });
-                        }
-                    }
-                    ApiStreamEvent::MessageDelta(delta) => {
-                        events.push(AssistantEvent::Usage(delta.usage.token_usage()));
-                    }
-                    ApiStreamEvent::MessageStop(_) => {
-                        saw_stop = true;
-                        if let Some(rendered) = markdown_stream.flush(&renderer) {
-                            write!(out, "{rendered}")
-                                .and_then(|()| out.flush())
-                                .map_err(|error| RuntimeError::new(error.to_string()))?;
-                        }
-                        events.push(AssistantEvent::MessageStop);
-                    }
-                }
-            }
-
-            push_prompt_cache_record(&self.client, &mut events);
-
-            if !saw_stop
-                && events.iter().any(|event| {
-                    matches!(event, AssistantEvent::TextDelta(text) if !text.is_empty())
-                        || matches!(event, AssistantEvent::ToolUse { .. })
-                })
-            {
-                events.push(AssistantEvent::MessageStop);
-            }
-
-            if events
-                .iter()
-                .any(|event| matches!(event, AssistantEvent::MessageStop))
-            {
-                return Ok(events);
-            }
-
-            let response = self
-                .client
-                .send_message(&MessageRequest {
-                    stream: false,
-                    ..message_request.clone()
-                })
-                .await
+            write!(stdout, "{rendered}")
+                .and_then(|()| stdout.flush())
                 .map_err(|error| RuntimeError::new(error.to_string()))?;
-            let mut events = response_to_events(response, out)?;
-            push_prompt_cache_record(&self.client, &mut events);
-            Ok(events)
-        })
+        }
+        Ok(())
+    }
+
+    fn on_tool_use_ready(&mut self, name: &str, input: &str) -> Result<(), RuntimeError> {
+        if let Some(progress_reporter) = &self.progress_reporter {
+            progress_reporter.mark_tool_phase(name, input);
+        }
+        self.flush_markdown()?;
+        if !self.emit_output {
+            return Ok(());
+        }
+        let mut stdout = io::stdout();
+        writeln!(stdout, "\n{}", format_tool_call_start(name, input))
+            .and_then(|()| stdout.flush())
+            .map_err(|error| RuntimeError::new(error.to_string()))?;
+        Ok(())
+    }
+
+    fn on_message_stop(&mut self) -> Result<(), RuntimeError> {
+        self.flush_markdown()
     }
 }
 
@@ -6203,47 +6101,6 @@ fn permission_policy(
             policy.with_tool_requirement(name, required_permission)
         },
     ))
-}
-
-fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
-    messages
-        .iter()
-        .filter_map(|message| {
-            let role = match message.role {
-                MessageRole::System | MessageRole::User | MessageRole::Tool => "user",
-                MessageRole::Assistant => "assistant",
-            };
-            let content = message
-                .blocks
-                .iter()
-                .map(|block| match block {
-                    ContentBlock::Text { text } => InputContentBlock::Text { text: text.clone() },
-                    ContentBlock::ToolUse { id, name, input } => InputContentBlock::ToolUse {
-                        id: id.clone(),
-                        name: name.clone(),
-                        input: serde_json::from_str(input)
-                            .unwrap_or_else(|_| serde_json::json!({ "raw": input })),
-                    },
-                    ContentBlock::ToolResult {
-                        tool_use_id,
-                        output,
-                        is_error,
-                        ..
-                    } => InputContentBlock::ToolResult {
-                        tool_use_id: tool_use_id.clone(),
-                        content: vec![ToolResultContentBlock::Text {
-                            text: output.clone(),
-                        }],
-                        is_error: *is_error,
-                    },
-                })
-                .collect::<Vec<_>>();
-            (!content.is_empty()).then(|| InputMessage {
-                role: role.to_string(),
-                content,
-            })
-        })
-        .collect()
 }
 
 #[allow(clippy::too_many_lines)]
@@ -7809,32 +7666,6 @@ UU conflicted.rs",
         assert!(rendered.contains("cargo clippy --workspace --all-targets -- -D warnings"));
     }
 
-    #[test]
-    fn converts_tool_roundtrip_messages() {
-        let messages = vec![
-            ConversationMessage::user_text("hello"),
-            ConversationMessage::assistant(vec![ContentBlock::ToolUse {
-                id: "tool-1".to_string(),
-                name: "bash".to_string(),
-                input: "{\"command\":\"pwd\"}".to_string(),
-            }]),
-            ConversationMessage {
-                role: MessageRole::Tool,
-                blocks: vec![ContentBlock::ToolResult {
-                    tool_use_id: "tool-1".to_string(),
-                    tool_name: "bash".to_string(),
-                    output: "ok".to_string(),
-                    is_error: false,
-                }],
-                usage: None,
-            },
-        ];
-
-        let converted = super::convert_messages(&messages);
-        assert_eq!(converted.len(), 3);
-        assert_eq!(converted[1].role, "assistant");
-        assert_eq!(converted[2].role, "user");
-    }
     #[test]
     fn repl_help_mentions_history_completion_and_multiline() {
         let help = render_repl_help();

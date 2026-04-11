@@ -2,39 +2,92 @@ use std::collections::BTreeMap;
 
 use runtime::{
     ApiClient, ApiRequest, AssistantEvent, ContentBlock, ConversationMessage,
-    ConversationRuntime, MessageRole, PermissionPolicy, RuntimeError, Session, ToolExecutor,
+    ConversationRuntime, MessageRole, PermissionPolicy, PromptCacheEvent, RuntimeError, Session,
+    ToolExecutor,
 };
 
 use crate::{
-    max_tokens_for_model, resolve_model_alias, ContentBlockDelta, InputContentBlock, InputMessage,
-    MessageRequest, MessageResponse, OutputContentBlock, PromptCache, ProviderClient, ToolChoice,
-    ToolDefinition, ToolResultContentBlock,
+    max_tokens_for_model, resolve_model_alias, AuthSource, ContentBlockDelta, InputContentBlock,
+    InputMessage, MessageRequest, MessageResponse, OutputContentBlock, PromptCache,
+    PromptCacheRecord, ProviderClient, ToolChoice, ToolDefinition, ToolResultContentBlock,
 };
 
-pub struct ProviderRuntimeApiClient {
+pub trait ProviderRuntimeObserver {
+    fn on_model_invoked(&mut self) {}
+
+    fn on_text_delta(&mut self, _text: &str) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+
+    fn on_tool_use_ready(&mut self, _name: &str, _input: &str) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+
+    fn on_message_stop(&mut self) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopProviderRuntimeObserver;
+
+impl ProviderRuntimeObserver for NoopProviderRuntimeObserver {}
+
+pub struct ProviderRuntimeApiClient<O = NoopProviderRuntimeObserver> {
     runtime: tokio::runtime::Runtime,
     client: ProviderClient,
     model: String,
     tools: Vec<ToolDefinition>,
+    observer: O,
 }
 
-impl ProviderRuntimeApiClient {
+impl ProviderRuntimeApiClient<NoopProviderRuntimeObserver> {
     #[allow(clippy::needless_pass_by_value)]
     pub fn new(model: String, tools: Vec<ToolDefinition>) -> Result<Self, String> {
-        let model = resolve_model_alias(&model).clone();
-        let client = ProviderClient::from_model(&model).map_err(|error| error.to_string())?;
+        Self::new_with_auth(model, tools, None)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn new_with_auth(
+        model: String,
+        tools: Vec<ToolDefinition>,
+        anthropic_auth: Option<AuthSource>,
+    ) -> Result<Self, String> {
+        let resolved_model = resolve_model_alias(&model).to_string();
+        let client = ProviderClient::from_model_with_anthropic_auth(&resolved_model, anthropic_auth)
+            .map_err(|error| error.to_string())?;
         Ok(Self {
             runtime: tokio::runtime::Runtime::new().map_err(|error| error.to_string())?,
             client,
-            model,
+            model: resolved_model,
             tools,
+            observer: NoopProviderRuntimeObserver,
         })
     }
+}
 
+impl<O> ProviderRuntimeApiClient<O>
+where
+    O: ProviderRuntimeObserver,
+{
     #[must_use]
     pub fn with_prompt_cache(mut self, namespace: &str) -> Self {
         self.client = self.client.with_prompt_cache(PromptCache::new(namespace));
         self
+    }
+
+    #[must_use]
+    pub fn with_observer<NO>(self, observer: NO) -> ProviderRuntimeApiClient<NO>
+    where
+        NO: ProviderRuntimeObserver,
+    {
+        ProviderRuntimeApiClient {
+            runtime: self.runtime,
+            client: self.client,
+            model: self.model,
+            tools: self.tools,
+            observer,
+        }
     }
 
     #[must_use]
@@ -55,10 +108,34 @@ pub fn build_provider_conversation_runtime<T>(
 where
     T: ToolExecutor,
 {
+    build_provider_conversation_runtime_for_session(
+        Session::new(),
+        model,
+        tools,
+        prompt_cache_namespace,
+        tool_executor,
+        permission_policy,
+        system_prompt,
+    )
+}
+
+#[allow(clippy::needless_pass_by_value)]
+pub fn build_provider_conversation_runtime_for_session<T>(
+    session: Session,
+    model: String,
+    tools: Vec<ToolDefinition>,
+    prompt_cache_namespace: &str,
+    tool_executor: T,
+    permission_policy: PermissionPolicy,
+    system_prompt: Vec<String>,
+) -> Result<ConversationRuntime<ProviderRuntimeApiClient, T>, String>
+where
+    T: ToolExecutor,
+{
     let api_client = ProviderRuntimeApiClient::new(model, tools)?
         .with_prompt_cache(prompt_cache_namespace);
     Ok(ConversationRuntime::new(
-        Session::new(),
+        session,
         api_client,
         tool_executor,
         permission_policy,
@@ -66,9 +143,13 @@ where
     ))
 }
 
-impl ApiClient for ProviderRuntimeApiClient {
+impl<O> ApiClient for ProviderRuntimeApiClient<O>
+where
+    O: ProviderRuntimeObserver,
+{
     #[allow(clippy::too_many_lines)]
     fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+        self.observer.on_model_invoked();
         let message_request = MessageRequest {
             model: self.model.clone(),
             max_tokens: max_tokens_for_model(&self.model),
@@ -97,7 +178,14 @@ impl ApiClient for ProviderRuntimeApiClient {
                 match event {
                     crate::StreamEvent::MessageStart(start) => {
                         for block in start.message.content {
-                            push_output_block(block, 0, &mut events, &mut pending_tools, true);
+                            push_output_block(
+                                block,
+                                0,
+                                &mut events,
+                                &mut pending_tools,
+                                true,
+                                &mut self.observer,
+                            )?;
                         }
                     }
                     crate::StreamEvent::ContentBlockStart(start) => {
@@ -107,11 +195,13 @@ impl ApiClient for ProviderRuntimeApiClient {
                             &mut events,
                             &mut pending_tools,
                             true,
-                        );
+                            &mut self.observer,
+                        )?;
                     }
                     crate::StreamEvent::ContentBlockDelta(delta) => match delta.delta {
                         ContentBlockDelta::TextDelta { text } => {
                             if !text.is_empty() {
+                                self.observer.on_text_delta(&text)?;
                                 events.push(AssistantEvent::TextDelta(text));
                             }
                         }
@@ -125,6 +215,7 @@ impl ApiClient for ProviderRuntimeApiClient {
                     },
                     crate::StreamEvent::ContentBlockStop(stop) => {
                         if let Some((id, name, input)) = pending_tools.remove(&stop.index) {
+                            self.observer.on_tool_use_ready(&name, &input)?;
                             events.push(AssistantEvent::ToolUse { id, name, input });
                         }
                     }
@@ -133,6 +224,7 @@ impl ApiClient for ProviderRuntimeApiClient {
                     }
                     crate::StreamEvent::MessageStop(_) => {
                         saw_stop = true;
+                        self.observer.on_message_stop()?;
                         events.push(AssistantEvent::MessageStop);
                     }
                 }
@@ -164,7 +256,7 @@ impl ApiClient for ProviderRuntimeApiClient {
                 })
                 .await
                 .map_err(|error| RuntimeError::new(error.to_string()))?;
-            let mut events = response_to_events(response);
+            let mut events = response_to_events(response, &mut self.observer)?;
             push_prompt_cache_record(&self.client, &mut events);
             Ok(events)
         })
@@ -216,16 +308,21 @@ fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
         .collect()
 }
 
-fn push_output_block(
+fn push_output_block<O>(
     block: OutputContentBlock,
     index: u32,
     events: &mut Vec<AssistantEvent>,
     pending_tools: &mut BTreeMap<u32, (String, String, String)>,
     streaming: bool,
-) {
+    observer: &mut O,
+) -> Result<(), RuntimeError>
+where
+    O: ProviderRuntimeObserver,
+{
     match block {
         OutputContentBlock::Text { text } => {
             if !text.is_empty() {
+                observer.on_text_delta(&text)?;
                 events.push(AssistantEvent::TextDelta(text));
             }
         }
@@ -238,34 +335,117 @@ fn push_output_block(
             if streaming {
                 pending_tools.insert(index, (id, name, input));
             } else {
+                observer.on_tool_use_ready(&name, &input)?;
                 events.push(AssistantEvent::ToolUse { id, name, input });
             }
         }
         OutputContentBlock::Thinking { .. } | OutputContentBlock::RedactedThinking { .. } => {}
     }
+    Ok(())
 }
 
-fn response_to_events(response: MessageResponse) -> Vec<AssistantEvent> {
+fn response_to_events<O>(
+    response: MessageResponse,
+    observer: &mut O,
+) -> Result<Vec<AssistantEvent>, RuntimeError>
+where
+    O: ProviderRuntimeObserver,
+{
     let mut events = Vec::new();
     let mut pending_tools = BTreeMap::new();
     for (index, block) in response.content.into_iter().enumerate() {
-        push_output_block(block, index as u32, &mut events, &mut pending_tools, false);
+        push_output_block(
+            block,
+            index as u32,
+            &mut events,
+            &mut pending_tools,
+            false,
+            observer,
+        )?;
     }
+    observer.on_message_stop()?;
     events.push(AssistantEvent::Usage(response.usage.token_usage()));
     events.push(AssistantEvent::MessageStop);
-    events
+    Ok(events)
 }
 
 fn push_prompt_cache_record(client: &ProviderClient, events: &mut Vec<AssistantEvent>) {
     if let Some(record) = client.take_last_prompt_cache_record() {
-        if let Some(cache_break) = record.cache_break {
-            events.push(AssistantEvent::PromptCache(runtime::PromptCacheEvent {
-                unexpected: cache_break.unexpected,
-                reason: cache_break.reason,
-                previous_cache_read_input_tokens: cache_break.previous_cache_read_input_tokens,
-                current_cache_read_input_tokens: cache_break.current_cache_read_input_tokens,
-                token_drop: cache_break.token_drop,
-            }));
+        if let Some(event) = prompt_cache_record_to_runtime_event(record) {
+            events.push(AssistantEvent::PromptCache(event));
         }
+    }
+}
+
+fn prompt_cache_record_to_runtime_event(record: PromptCacheRecord) -> Option<PromptCacheEvent> {
+    let cache_break = record.cache_break?;
+    Some(PromptCacheEvent {
+        unexpected: cache_break.unexpected,
+        reason: cache_break.reason,
+        previous_cache_read_input_tokens: cache_break.previous_cache_read_input_tokens,
+        current_cache_read_input_tokens: cache_break.current_cache_read_input_tokens,
+        token_drop: cache_break.token_drop,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{prompt_cache_record_to_runtime_event, ProviderRuntimeObserver};
+    use crate::{CacheBreakEvent, PromptCacheRecord};
+    use runtime::RuntimeError;
+
+    #[derive(Default)]
+    struct RecordingObserver {
+        model_invocations: usize,
+        text_deltas: Vec<String>,
+        tools: Vec<(String, String)>,
+    }
+
+    impl ProviderRuntimeObserver for RecordingObserver {
+        fn on_model_invoked(&mut self) {
+            self.model_invocations += 1;
+        }
+
+        fn on_text_delta(&mut self, text: &str) -> Result<(), RuntimeError> {
+            self.text_deltas.push(text.to_string());
+            Ok(())
+        }
+
+        fn on_tool_use_ready(&mut self, name: &str, input: &str) -> Result<(), RuntimeError> {
+            self.tools.push((name.to_string(), input.to_string()));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn prompt_cache_records_convert_to_runtime_events() {
+        let event = prompt_cache_record_to_runtime_event(PromptCacheRecord {
+            cache_break: Some(CacheBreakEvent {
+                unexpected: true,
+                reason: "drop".to_string(),
+                previous_cache_read_input_tokens: 500,
+                current_cache_read_input_tokens: 100,
+                token_drop: 400,
+            }),
+            stats: crate::PromptCacheStats::default(),
+        })
+        .expect("prompt cache break should map to runtime event");
+
+        assert!(event.unexpected);
+        assert_eq!(event.token_drop, 400);
+    }
+
+    #[test]
+    fn observer_callbacks_can_record_runtime_activity() {
+        let mut observer = RecordingObserver::default();
+        observer.on_model_invoked();
+        observer.on_text_delta("hello").expect("text callback");
+        observer
+            .on_tool_use_ready("read_file", "{}")
+            .expect("tool callback");
+
+        assert_eq!(observer.model_invocations, 1);
+        assert_eq!(observer.text_deltas, vec!["hello"]);
+        assert_eq!(observer.tools, vec![("read_file".to_string(), "{}".to_string())]);
     }
 }

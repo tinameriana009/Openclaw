@@ -44,7 +44,8 @@ pub use providers::{
     detect_provider_kind, max_tokens_for_model, resolve_model_alias, ProviderKind,
 };
 pub use runtime_client::{
-    build_provider_conversation_runtime, ProviderRuntimeApiClient,
+    build_provider_conversation_runtime, build_provider_conversation_runtime_for_session,
+    NoopProviderRuntimeObserver, ProviderRuntimeApiClient, ProviderRuntimeObserver,
 };
 pub use sse::{parse_frame, SseParser};
 pub use types::{
