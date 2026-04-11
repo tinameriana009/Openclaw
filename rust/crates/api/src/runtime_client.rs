@@ -503,7 +503,7 @@ mod tests {
         build_provider_runtime_api_client_with_auth_and_observer,
         prompt_cache_record_to_runtime_event, ProviderRuntimeObserver,
     };
-    use crate::{CacheBreakEvent, PromptCacheRecord, ToolDefinition};
+    use crate::{AuthSource, CacheBreakEvent, PromptCacheRecord, ToolDefinition};
     use runtime::{
         ExecutionProfile, PermissionMode, PermissionPolicy, RuntimeError, RuntimeFeatureConfig,
         Session, ToolError, ToolExecutor,
@@ -569,7 +569,7 @@ mod tests {
                 input_schema: serde_json::json!({"type": "object"}),
             }],
             "runtime-client-test",
-            None,
+            Some(AuthSource::ApiKey("test-key".to_string())),
             RecordingObserver::default(),
         )
         .expect("provider runtime api client should build");
@@ -586,7 +586,7 @@ mod tests {
             "claude-opus-4-6".to_string(),
             Vec::new(),
             "runtime-client-test",
-            None,
+            Some(AuthSource::ApiKey("test-key".to_string())),
             NoopToolExecutor,
             PermissionPolicy::new(PermissionMode::WorkspaceWrite),
             vec!["system prompt".to_string()],
