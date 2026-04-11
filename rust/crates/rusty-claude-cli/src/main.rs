@@ -2381,18 +2381,31 @@ fn render_trace_review_status(
     let replay_trace = review_value["replayTrace"]
         .as_str()
         .unwrap_or("<not yet rerun>");
+    let review_status_path = approval_packet_review_status_path(&packet_path);
+    let review_status_value = if review_status_path.exists() {
+        serde_json::from_str::<JsonValue>(&fs::read_to_string(&review_status_path)?)?
+    } else {
+        json!({})
+    };
+    let lifecycle_entries = review_status_value["history"]
+        .as_array()
+        .map(|entries| entries.len())
+        .unwrap_or(0);
+    let replay_count = review_status_value["replayCount"].as_u64().unwrap_or(0);
     let review_markdown_path = approval_packet_review_markdown_path(&packet_path);
     let review_html_path = approval_packet_review_html_path(&packet_path);
     Ok(format!(
-        "Trace review\n  Result           approval state loaded\n  Trace            {}\n  Packet           {}\n  Review JSON      {}\n  Review Markdown  {}\n  Review HTML      {}\n  Review Status    {}\n  Review Log       {}\n  Operator state   {}\n  Pending queries  {}\n  Replay trace     {}\n  Replay command   {}\n  Next step        {}\n  Note             {}",
+        "Trace review\n  Result           approval state loaded\n  Trace            {}\n  Packet           {}\n  Review JSON      {}\n  Review Markdown  {}\n  Review HTML      {}\n  Review Status    {}\n  Review Log       {}\n  Operator state   {}\n  Lifecycle entries {}\n  Replay count     {}\n  Pending queries  {}\n  Replay trace     {}\n  Replay command   {}\n  Next step        {}\n  Note             {}",
         requested_path.display(),
         packet_path.display(),
         review_json_path.display(),
         review_markdown_path.display(),
         review_html_path.display(),
-        approval_packet_review_status_path(&packet_path).display(),
+        review_status_path.display(),
         approval_packet_review_log_path(&packet_path).display(),
         review_value["operatorState"].as_str().unwrap_or("unknown"),
+        lifecycle_entries,
+        replay_count,
         pending_queries,
         replay_trace,
         packet.replay_command,

@@ -346,6 +346,8 @@ fn resumed_trace_approve_writes_operator_packet_and_rerun_guidance() {
     assert!(stdout.contains("Review JSON      "));
     assert!(stdout.contains("Review Markdown  "));
     assert!(stdout.contains("Review HTML      "));
+    assert!(stdout.contains("Review Status    "));
+    assert!(stdout.contains("Review Log       "));
     assert!(stdout.contains("Pending queries  search the web for release status"));
     assert!(stdout.contains("Replay command   claw --resume"));
     assert!(stdout.contains("Replay trace     /trace replay"));
@@ -382,9 +384,18 @@ fn resumed_trace_approve_writes_operator_packet_and_rerun_guidance() {
     .expect("review json should parse");
     assert_eq!(review_json["operatorState"], "approved for explicit rerun");
     assert_eq!(review_json["replayTrace"], JsonValue::Null);
-    assert!(review_json["reviewCommand"].as_str().unwrap().contains("/trace review"));
-    assert!(review_json["replayTraceCommand"].as_str().unwrap().contains("/trace replay"));
-    assert!(review_json["resumeTraceCommand"].as_str().unwrap().contains("/trace resume"));
+    assert!(review_json["reviewCommand"]
+        .as_str()
+        .unwrap()
+        .contains("/trace review"));
+    assert!(review_json["replayTraceCommand"]
+        .as_str()
+        .unwrap()
+        .contains("/trace replay"));
+    assert!(review_json["resumeTraceCommand"]
+        .as_str()
+        .unwrap()
+        .contains("/trace resume"));
 
     let review_markdown_path = stdout
         .lines()
@@ -409,6 +420,31 @@ fn resumed_trace_approve_writes_operator_packet_and_rerun_guidance() {
     assert!(review_html.contains("Static operator web surface only"));
     assert!(review_html.contains("<h2>Operator commands</h2>"));
     assert!(review_html.contains("/trace review "));
+
+    let review_status_path = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("  Review Status    "))
+        .map(PathBuf::from)
+        .expect("review status path should be printed");
+    let review_status: JsonValue = serde_json::from_str(
+        &fs::read_to_string(&review_status_path).expect("review status should exist"),
+    )
+    .expect("review status should parse");
+    assert_eq!(
+        review_status["latestOperatorState"],
+        "approved for explicit rerun"
+    );
+    assert_eq!(review_status["replayCount"], 0);
+    assert_eq!(review_status["history"].as_array().unwrap().len(), 1);
+
+    let review_log_path = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("  Review Log       "))
+        .map(PathBuf::from)
+        .expect("review log path should be printed");
+    let review_log = fs::read_to_string(&review_log_path).expect("review log should exist");
+    assert!(review_log.contains("# Web approval lifecycle log"));
+    assert!(review_log.contains("Latest operator state: approved for explicit rerun"));
 }
 
 #[test]
@@ -533,6 +569,8 @@ fn resumed_trace_replay_updates_review_artifacts_with_rerun_trace() {
     assert!(stdout.contains("Review JSON      "));
     assert!(stdout.contains("Review Markdown  "));
     assert!(stdout.contains("Review HTML      "));
+    assert!(stdout.contains("Review Status    "));
+    assert!(stdout.contains("Review Log       "));
     assert!(stdout.contains("Replay trace     "));
 
     let review_json_path = stdout
@@ -546,7 +584,10 @@ fn resumed_trace_replay_updates_review_artifacts_with_rerun_trace() {
     .expect("review json should parse");
     assert_eq!(review_json["operatorState"], "rerun captured for review");
     assert!(review_json["replayTrace"].as_str().is_some());
-    assert!(review_json["reviewCommand"].as_str().unwrap().contains("/trace review"));
+    assert!(review_json["reviewCommand"]
+        .as_str()
+        .unwrap()
+        .contains("/trace review"));
 
     let review_markdown_path = stdout
         .lines()
@@ -568,6 +609,22 @@ fn resumed_trace_replay_updates_review_artifacts_with_rerun_trace() {
     assert!(review_html.contains("Web approval review"));
     assert!(review_html.contains("Replay trace"));
     assert!(review_html.contains("Operator commands"));
+
+    let review_status_path = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("  Review Status    "))
+        .map(PathBuf::from)
+        .expect("review status path should be printed");
+    let review_status: JsonValue = serde_json::from_str(
+        &fs::read_to_string(&review_status_path).expect("review status should exist"),
+    )
+    .expect("review status should parse");
+    assert_eq!(
+        review_status["latestOperatorState"],
+        "rerun captured for review"
+    );
+    assert_eq!(review_status["replayCount"], 1);
+    assert_eq!(review_status["history"].as_array().unwrap().len(), 1);
 }
 
 #[test]
@@ -672,6 +729,8 @@ fn resumed_trace_resume_approves_reruns_and_refreshes_review_index() {
     assert!(stdout.contains("Review Index JSON"));
     assert!(stdout.contains("Review Index MD"));
     assert!(stdout.contains("Review Index HTML"));
+    assert!(stdout.contains("Review Status    "));
+    assert!(stdout.contains("Review Log       "));
 
     let review_json_path = stdout
         .lines()
@@ -700,6 +759,8 @@ fn resumed_trace_resume_approves_reruns_and_refreshes_review_index() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0]["traceId"], "trace-approval");
     assert_eq!(entries[0]["operatorState"], "rerun captured for review");
+    assert_eq!(entries[0]["replayCount"], 1);
+    assert_eq!(index_json["summary"]["replayCount"], 1);
 
     let index_markdown_path = stdout
         .lines()
@@ -712,6 +773,9 @@ fn resumed_trace_resume_approves_reruns_and_refreshes_review_index() {
     assert!(index_markdown.contains("trace `trace-approval` — rerun captured for review"));
     assert!(index_markdown.contains("review command: /trace review"));
     assert!(index_markdown.contains("resume command: /trace resume"));
+    assert!(index_markdown.contains("review status:"));
+    assert!(index_markdown.contains("review log:"));
+    assert!(index_markdown.contains("replay count: 1"));
     assert!(index_markdown.contains("not a browser UI or automation surface"));
 
     let index_html_path = stdout
@@ -723,6 +787,91 @@ fn resumed_trace_resume_approves_reruns_and_refreshes_review_index() {
     assert!(index_html.contains("<h1>Web approval dashboard</h1>"));
     assert!(index_html.contains("Static review surface generated on disk"));
     assert!(index_html.contains("Operator commands"));
+    assert!(index_html.contains("Replay count"));
+}
+
+#[test]
+fn resumed_trace_review_accepts_bare_trace_id_and_reports_lifecycle_paths() {
+    let temp_dir = unique_temp_dir("resume-trace-review-by-id");
+    let project_dir = temp_dir.join("project");
+    fs::create_dir_all(project_dir.join(".claw").join("sessions"))
+        .expect("sessions dir should exist");
+    fs::create_dir_all(project_dir.join(".claw").join("web-approvals"))
+        .expect("approvals dir should exist");
+
+    let session_path = project_dir
+        .join(".claw")
+        .join("sessions")
+        .join("session.jsonl");
+    Session::new()
+        .with_persistence_path(&session_path)
+        .save_to_path(&session_path)
+        .expect("session should persist");
+
+    let packet_path = project_dir
+        .join(".claw")
+        .join("web-approvals")
+        .join("trace-approval.json");
+    fs::write(
+        &packet_path,
+        r#"{
+          "schemaVersion":1,
+          "traceId":"trace-approval",
+          "sessionId":"session-1",
+          "task":"search the web for release status",
+          "corpusId":"demo-corpus",
+          "pendingQueries":["search the web for release status"],
+          "approvedAtMs":123,
+          "replayCommand":"claw --resume latest \"/corpus answer demo-corpus :: search the web for release status\"",
+          "operatorNote":"bounded rerun only"
+        }"#,
+    )
+    .expect("packet should write");
+    fs::write(
+        packet_path.with_extension("review.json"),
+        r#"{
+          "schemaVersion":1,
+          "traceId":"trace-approval",
+          "operatorState":"approved for explicit rerun",
+          "nextStep":"run /trace replay <trace-file>",
+          "replayTrace":null
+        }"#,
+    )
+    .expect("review json should write");
+    fs::write(
+        packet_path.with_extension("review-status.json"),
+        r#"{
+          "schemaVersion":1,
+          "traceId":"trace-approval",
+          "latestOperatorState":"approved for explicit rerun",
+          "latestNextStep":"run /trace replay <trace-file>",
+          "replayCount":0,
+          "history":[{"recordedAtMs":123,"operatorState":"approved for explicit rerun"}]
+        }"#,
+    )
+    .expect("review status should write");
+    fs::write(
+        packet_path.with_extension("review-log.md"),
+        "# Web approval lifecycle log\n",
+    )
+    .expect("review log should write");
+
+    let output = run_claw(
+        &project_dir,
+        &[
+            "--resume",
+            session_path.to_str().expect("utf8 path"),
+            "/trace review trace-approval",
+        ],
+    );
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("Trace review"));
+    assert!(stdout.contains("Review Status    "));
+    assert!(stdout.contains("Review Log       "));
+    assert!(stdout.contains("Operator state   approved for explicit rerun"));
+    assert!(stdout.contains("Lifecycle entries 1"));
+    assert!(stdout.contains("Replay count     0"));
 }
 
 #[test]
@@ -793,6 +942,8 @@ fn resumed_trace_review_reports_pending_or_rerun_state() {
     assert!(stdout.contains("Review Markdown  "));
     assert!(stdout.contains("Review HTML      "));
     assert!(stdout.contains("Operator state   approved for explicit rerun"));
+    assert!(stdout.contains("Lifecycle entries 0"));
+    assert!(stdout.contains("Replay count     0"));
     assert!(stdout.contains("Replay trace     <not yet rerun>"));
 }
 
@@ -848,6 +999,7 @@ fn resumed_trace_approvals_dashboard_lists_review_entries() {
     assert!(stdout.contains("Entries            1"));
     assert!(stdout.contains("Rerun captured     1"));
     assert!(stdout.contains("Pending queries    1"));
+    assert!(stdout.contains("Recorded replays   0"));
     assert!(stdout.contains("trace-approval :: rerun captured for review"));
     assert!(stdout.contains("task: search the web for release status"));
     assert!(stdout.contains("corpus: demo-corpus"));
