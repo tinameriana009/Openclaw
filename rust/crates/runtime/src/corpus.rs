@@ -2454,6 +2454,7 @@ fn apply_cross_document_agreement_rerank(
         let corroborated_terms = summary
             .matched_terms
             .iter()
+            .filter(|term| is_discriminative_agreement_term(term))
             .filter(|term| term_support.get(term.as_str()).copied().unwrap_or(0) >= 2)
             .count();
         if corroborated_terms >= 1 {
@@ -2523,6 +2524,36 @@ fn parent_directory_key(path: &str) -> String {
         .parent()
         .map(|parent| normalize_for_match(&parent.display().to_string()))
         .unwrap_or_default()
+}
+
+fn is_discriminative_agreement_term(term: &str) -> bool {
+    if term.len() >= 6 {
+        return true;
+    }
+    !matches!(
+        term,
+        "docs"
+            | "doc"
+            | "guide"
+            | "readme"
+            | "manual"
+            | "overview"
+            | "explain"
+            | "architecture"
+            | "file"
+            | "path"
+            | "module"
+            | "code"
+            | "source"
+            | "flow"
+            | "token"
+            | "session"
+            | "auth"
+            | "config"
+            | "build"
+            | "test"
+            | "search"
+    )
 }
 
 fn normalized_outline_path(chunk: &CorpusChunk) -> Vec<String> {
@@ -4188,6 +4219,79 @@ Rotation schedule for the release train and staffing coverage.
                 .take(2)
                 .all(|hit| hit.path.starts_with("auth/")),
             "expected related auth docs to outrank distractor: {:#?}",
+            result.hits
+        );
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn cross_document_agreement_ignores_generic_query_terms_when_ranking() {
+        let cwd = temp_dir("workspace-cross-document-agreement-generic-terms");
+        let root = cwd.join("docs");
+        fs::create_dir_all(root.join("auth")).expect("mkdir auth docs");
+        fs::create_dir_all(root.join("platform")).expect("mkdir platform docs");
+        fs::write(
+            root.join("auth/session-rotation.md"),
+            "# Session Rotation
+
+Rotated refresh tokens are audited after each deploy.
+Revoked sessions are cleaned up during token rotation.
+",
+        )
+        .expect("write auth rotation doc");
+        fs::write(
+            root.join("auth/token-revocation.md"),
+            "# Token Revocation
+
+Token refresh failures trigger revocation cleanup.
+Session rotation keeps revoked refresh tokens invalid.
+",
+        )
+        .expect("write auth revocation doc");
+        fs::write(
+            root.join("platform/architecture.md"),
+            "# Architecture Overview
+
+This architecture guide explains platform flow, session handling, token exchange, and general docs structure.
+",
+        )
+        .expect("write generic distractor");
+
+        let manifest = attach_corpus(
+            &cwd,
+            &[root.clone()],
+            CorpusAttachOptions {
+                chunk_bytes: 90,
+                ..CorpusAttachOptions::default()
+            },
+        )
+        .expect("attach corpus");
+        let result = search_corpus(
+            &cwd,
+            &manifest.corpus_id,
+            "explain architecture session token flow revoked rotation",
+            5,
+            None,
+        )
+        .expect("search");
+
+        assert!(
+            result
+                .hits
+                .iter()
+                .take(2)
+                .all(|hit| hit.path.starts_with("auth/")),
+            "expected specific auth agreement to outrank generic architecture overlap: {:#?}",
+            result.hits
+        );
+        assert!(
+            result
+                .hits
+                .iter()
+                .filter(|hit| hit.path.starts_with("platform/"))
+                .all(|hit| !hit.reason.contains("cross-doc:term-agreement:")),
+            "generic platform doc should not get cross-doc term agreement for broad query terms: {:#?}",
             result.hits
         );
 
