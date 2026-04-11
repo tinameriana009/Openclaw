@@ -13,13 +13,12 @@ use plugins::PluginTool;
 use reqwest::blocking::Client;
 use runtime::{
     edit_file, execute_bash, glob_search, grep_search, inspect_corpus, load_system_prompt,
-    read_file, search_corpus, slice_corpus, write_file, BashCommandInput, ConversationRuntime,
-    GrepSearchInput, PermissionMode, PermissionPolicy, Session, ToolError, ToolExecutor,
+    read_file, search_corpus, slice_corpus, write_file, BashCommandInput, ContentBlock,
+    ConversationRuntime, GrepSearchInput, PermissionMode, PermissionPolicy, PromptCacheEvent,
+    Session, ToolError, ToolExecutor,
 };
 #[cfg(test)]
-use runtime::{
-    AssistantEvent, ContentBlock, ConversationMessage, MessageRole, PromptCacheEvent,
-};
+use runtime::{AssistantEvent, ConversationMessage, MessageRole};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 

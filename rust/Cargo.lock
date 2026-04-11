@@ -1576,7 +1576,6 @@ dependencies = [
  "runtime",
  "serde",
  "serde_json",
- "tokio",
 ]
 
 [[package]]

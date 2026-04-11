@@ -173,8 +173,8 @@ fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
                         tool_use_id: tool_use_id.clone(),
                         content: vec![ToolResultContentBlock::Text {
                             text: output.clone(),
-                            is_error: *is_error,
                         }],
+                        is_error: *is_error,
                     },
                 })
                 .collect::<Vec<_>>();
@@ -215,7 +215,7 @@ fn push_output_block(
                 events.push(AssistantEvent::ToolUse { id, name, input });
             }
         }
-        OutputContentBlock::Thinking { .. } => {}
+        OutputContentBlock::Thinking { .. } | OutputContentBlock::RedactedThinking { .. } => {}
     }
 }
 
@@ -232,12 +232,14 @@ fn response_to_events(response: MessageResponse) -> Vec<AssistantEvent> {
 
 fn push_prompt_cache_record(client: &ProviderClient, events: &mut Vec<AssistantEvent>) {
     if let Some(record) = client.take_last_prompt_cache_record() {
-        events.push(AssistantEvent::PromptCache(runtime::PromptCacheEvent {
-            unexpected: record.unexpected,
-            reason: record.reason,
-            previous_cache_read_input_tokens: record.previous_cache_read_input_tokens,
-            current_cache_read_input_tokens: record.current_cache_read_input_tokens,
-            token_drop: record.token_drop,
-        }));
+        if let Some(cache_break) = record.cache_break {
+            events.push(AssistantEvent::PromptCache(runtime::PromptCacheEvent {
+                unexpected: cache_break.unexpected,
+                reason: cache_break.reason,
+                previous_cache_read_input_tokens: cache_break.previous_cache_read_input_tokens,
+                current_cache_read_input_tokens: cache_break.current_cache_read_input_tokens,
+                token_drop: cache_break.token_drop,
+            }));
+        }
     }
 }

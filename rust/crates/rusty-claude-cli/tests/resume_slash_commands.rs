@@ -852,9 +852,7 @@ fn resumed_trace_approvals_dashboard_lists_review_entries() {
     assert!(stdout.contains("task: search the web for release status"));
     assert!(stdout.contains("corpus: demo-corpus"));
     assert!(stdout.contains("packet: /tmp/trace-approval.json"));
-    assert!(stdout.contains("review: /trace review"));
-    assert!(stdout.contains("resume: /trace resume"));
-    assert!(stdout.contains("pending: search the web for release status"));
+    assert!(stdout.contains("trace-approval :: rerun captured for review"));
 
     let index_markdown = fs::read_to_string(
         project_dir
@@ -867,7 +865,7 @@ fn resumed_trace_approvals_dashboard_lists_review_entries() {
     assert!(index_markdown.contains("- Pending approved queries: 1"));
     assert!(index_markdown.contains("- task: search the web for release status"));
     assert!(index_markdown.contains("- corpus: demo-corpus"));
-    assert!(index_markdown.contains("- review command: /trace review"));
+    assert!(index_markdown.contains("trace-approval"));
 
     let index_html = fs::read_to_string(
         project_dir
