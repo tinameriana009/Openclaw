@@ -297,6 +297,7 @@ The CLI help also exposes:
 /trace approve <trace-file>
 /trace replay <trace-file|approval-packet>
 /trace resume <trace-file|approval-packet>
+/trace handoff [trace-file|approval-packet|trace-id]
 ```
 
 For the current bounded web-review loop:
@@ -305,6 +306,7 @@ For the current bounded web-review loop:
 - `/trace resume ...` is the honest approve-and-rerun shortcut; it still does **not** provide browser automation
 - `.claw/web-approvals/index.{json,md,html}` acts as a lightweight on-disk operator dashboard for the saved review state, including explicit follow-up `/trace review|replay|resume` commands for each entry
 - `/trace inbox` turns that saved review state into a bounded operator queue: it prioritizes the next actionable approval packet, reports ready-to-rerun vs ready-to-review counts, and keeps the flow honest about remaining on-disk/static rather than a live web inbox
+- `/trace handoff [target]` materializes a per-item handoff bundle (`.handoff.{json,md}`) for the next operator; without a target it picks the current top inbox item instead of pretending a live assignment UI exists
 
 ## High-value slash commands
 

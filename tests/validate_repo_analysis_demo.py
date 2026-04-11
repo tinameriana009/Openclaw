@@ -50,6 +50,7 @@ def main() -> int:
         'bundle-checksums.txt',
         '/trace replay',
         '/trace resume',
+        '/trace handoff',
     ]:
         if needle not in readme_text:
             print(f'Repo analysis demo README is missing required operator cue: {needle}')
@@ -107,6 +108,7 @@ def main() -> int:
         'bundle-checksums.txt',
         '/trace replay <trace-file|approval-packet>',
         '/trace resume <trace-file|approval-packet>',
+        '/trace handoff [target]',
     ]:
         if needle not in script_text:
             print(f'run-repo-analysis-demo.sh is missing required lifecycle artifact or continuity command: {needle}')

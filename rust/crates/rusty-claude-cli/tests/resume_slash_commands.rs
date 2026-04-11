@@ -1032,6 +1032,192 @@ fn resumed_trace_approvals_dashboard_lists_review_entries() {
 }
 
 #[test]
+fn resumed_trace_handoff_generates_artifacts_for_specific_entry() {
+    let temp_dir = unique_temp_dir("resume-trace-handoff-specific");
+    let project_dir = temp_dir.join("project");
+    fs::create_dir_all(project_dir.join(".claw").join("sessions"))
+        .expect("sessions dir should exist");
+    fs::create_dir_all(project_dir.join(".claw").join("web-approvals"))
+        .expect("approvals dir should exist");
+
+    let session_path = project_dir
+        .join(".claw")
+        .join("sessions")
+        .join("session.jsonl");
+    Session::new()
+        .with_persistence_path(&session_path)
+        .save_to_path(&session_path)
+        .expect("session should persist");
+
+    let packet_path = project_dir
+        .join(".claw")
+        .join("web-approvals")
+        .join("trace-handoff.json");
+    fs::write(
+        &packet_path,
+        r#"{
+          "schemaVersion":1,
+          "traceId":"trace-handoff",
+          "sessionId":"session-1",
+          "task":"search the web for release status",
+          "corpusId":"demo-corpus",
+          "pendingQueries":["search the web for release status"],
+          "approvedAtMs":123,
+          "replayCommand":"claw --resume latest "/corpus answer demo-corpus :: search the web for release status"",
+          "operatorNote":"bounded rerun only"
+        }"#,
+    )
+    .expect("packet should write");
+    fs::write(
+        packet_path.with_extension("review.json"),
+        r#"{
+          "schemaVersion":1,
+          "traceId":"trace-handoff",
+          "corpusId":"demo-corpus",
+          "task":"search the web for release status",
+          "approvalPacket":"PLACEHOLDER",
+          "operatorState":"approved for explicit rerun",
+          "nextStep":"run /trace replay <trace-file>",
+          "replayTrace":null,
+          "reviewCommand":"/trace review PLACEHOLDER",
+          "replayTraceCommand":"/trace replay PLACEHOLDER",
+          "resumeTraceCommand":"/trace resume PLACEHOLDER",
+          "pendingQueries":["search the web for release status"]
+        }"#
+        .replace("PLACEHOLDER", packet_path.to_str().expect("utf8 path")),
+    )
+    .expect("review json should write");
+    fs::write(
+        packet_path.with_extension("review-status.json"),
+        r#"{
+          "schemaVersion":1,
+          "traceId":"trace-handoff",
+          "latestOperatorState":"approved for explicit rerun",
+          "latestNextStep":"run /trace replay <trace-file>",
+          "replayCount":0,
+          "history":[{"recordedAtMs":123,"operatorState":"approved for explicit rerun"}]
+        }"#,
+    )
+    .expect("review status should write");
+    fs::write(
+        packet_path.with_extension("review-log.md"),
+        "# Web approval lifecycle log
+",
+    )
+    .expect("review log should write");
+
+    let output = run_claw(
+        &project_dir,
+        &[
+            "--resume",
+            session_path.to_str().expect("utf8 path"),
+            "/trace handoff trace-handoff",
+        ],
+    );
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("Trace handoff"));
+    assert!(stdout.contains("Handoff JSON     "));
+    assert!(stdout.contains("Handoff Markdown "));
+    assert!(stdout.contains("Queue            Ready to rerun"));
+    assert!(stdout.contains("Review command   /trace review "));
+
+    let handoff_json: JsonValue = serde_json::from_str(
+        &fs::read_to_string(packet_path.with_extension("handoff.json"))
+            .expect("handoff json should exist"),
+    )
+    .expect("handoff json should parse");
+    assert_eq!(handoff_json["traceId"], "trace-handoff");
+    assert_eq!(handoff_json["queue"]["bucket"], "ready-to-rerun");
+    assert_eq!(handoff_json["selectedFromInbox"], false);
+    assert_eq!(
+        handoff_json["commands"]["resume"],
+        format!("/trace resume {}", packet_path.display())
+    );
+
+    let handoff_md = fs::read_to_string(packet_path.with_extension("handoff.md"))
+        .expect("handoff markdown should exist");
+    assert!(handoff_md.contains("# Trace operator handoff"));
+    assert!(handoff_md.contains("Static handoff artifact only."));
+}
+
+#[test]
+fn resumed_trace_handoff_defaults_to_next_inbox_item() {
+    let temp_dir = unique_temp_dir("resume-trace-handoff-default");
+    let project_dir = temp_dir.join("project");
+    fs::create_dir_all(project_dir.join(".claw").join("sessions"))
+        .expect("sessions dir should exist");
+    fs::create_dir_all(project_dir.join(".claw").join("web-approvals"))
+        .expect("approvals dir should exist");
+
+    let session_path = project_dir
+        .join(".claw")
+        .join("sessions")
+        .join("session.jsonl");
+    Session::new()
+        .with_persistence_path(&session_path)
+        .save_to_path(&session_path)
+        .expect("session should persist");
+
+    fs::write(
+        project_dir
+            .join(".claw")
+            .join("web-approvals")
+            .join("trace-approved.review.json"),
+        r#"{
+          "schemaVersion":1,
+          "traceId":"trace-approved",
+          "corpusId":"demo-corpus",
+          "task":"rerun the approved release-status search",
+          "approvalPacket":"/tmp/trace-approved.json",
+          "operatorState":"approved for explicit rerun",
+          "nextStep":"run /trace replay <trace-file>",
+          "replayTrace":null,
+          "reviewCommand":"/trace review /tmp/trace-approved.json",
+          "replayTraceCommand":"/trace replay /tmp/trace-approved.json",
+          "resumeTraceCommand":"/trace resume /tmp/trace-approved.json",
+          "pendingQueries":["search the web for release status"]
+        }"#,
+    )
+    .expect("approved review json should write");
+    fs::write(
+        project_dir
+            .join(".claw")
+            .join("web-approvals")
+            .join("trace-captured.review.json"),
+        r#"{
+          "schemaVersion":1,
+          "traceId":"trace-captured",
+          "corpusId":"demo-corpus",
+          "task":"inspect the replay trace",
+          "approvalPacket":"/tmp/trace-captured.json",
+          "operatorState":"rerun captured for review",
+          "nextStep":"inspect replay trace",
+          "replayTrace":"/tmp/replay-trace.json",
+          "reviewCommand":"/trace review /tmp/trace-captured.json",
+          "replayTraceCommand":"/trace replay /tmp/trace-captured.json",
+          "resumeTraceCommand":"/trace resume /tmp/trace-captured.json",
+          "pendingQueries":["search the web for release status"]
+        }"#,
+    )
+    .expect("captured review json should write");
+
+    let output = run_claw(
+        &project_dir,
+        &[
+            "--resume",
+            session_path.to_str().expect("utf8 path"),
+            "/trace handoff",
+        ],
+    );
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("Trace handoff"));
+    assert!(stdout.contains("Trace            trace-approved"));
+    assert!(stdout.contains("Queue            Ready to rerun"));
+}
+
+#[test]
 fn resume_latest_restores_the_most_recent_managed_session() {
     // given
     let temp_dir = unique_temp_dir("resume-latest");

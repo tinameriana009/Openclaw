@@ -73,6 +73,7 @@ resume_command=./target/debug/claw --resume latest
 trace_summary_command=./target/debug/claw --resume latest /trace summary .claw/trace/<trace-file>
 replay_command=/trace replay <trace-file|approval-packet>
 resume_trace_command=/trace resume <trace-file|approval-packet>
+trace_handoff_command=/trace handoff [target]
 review_index_json=$INDEX_JSON
 review_index_html=$INDEX_HTML
 EOF
@@ -179,6 +180,7 @@ Review steps for this run:
 5. If you intentionally want to re-run the approved trace path, use the current bounded commands:
    /trace replay <trace-file|approval-packet>
    /trace resume <trace-file|approval-packet>
+   /trace handoff [target]
 6. Check the cross-run review index for older bundles:
    $INDEX_HTML
    $INDEX_JSON
@@ -251,6 +253,7 @@ summary = {
         'traceSummary': './target/debug/claw --resume latest /trace summary .claw/trace/<trace-file>',
         'traceReplay': '/trace replay <trace-file|approval-packet>',
         'traceResume': '/trace resume <trace-file|approval-packet>',
+        'traceHandoff': '/trace handoff [target]',
     },
     'crossRunIndex': {
         'json': str(index_json_path),
@@ -279,6 +282,7 @@ review_status = {
     'traceSummaryCommand': './target/debug/claw --resume latest /trace summary .claw/trace/<trace-file>',
     'traceReplayCommand': '/trace replay <trace-file|approval-packet>',
     'traceResumeCommand': '/trace resume <trace-file|approval-packet>',
+    'traceHandoffCommand': '/trace handoff [target]',
     'reviewLog': 'review-log.md',
     'notes': 'Update this file by hand when review starts/completes so the shared index reflects the bounded operator state honestly.',
 }

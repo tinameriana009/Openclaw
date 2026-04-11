@@ -97,4 +97,4 @@ The staged run bundle is meant to survive operator handoff honestly:
 - `bundle-checksums.txt` lets the next operator confirm the staged bundle was not silently changed.
 - `.demo-artifacts/repo-analysis-demo/index.{json,html}` aggregates all staged runs into a static cross-run review surface.
 
-For a continued pass, prefer resuming the same session and grounding the next prompt in what you already verified manually. If you need the bounded trace lifecycle commands, use `/trace replay ...` and `/trace resume ...`; those preserve CLI continuity, but they still do **not** imply browser automation.
+For a continued pass, prefer resuming the same session and grounding the next prompt in what you already verified manually. If you need the bounded trace lifecycle commands, use `/trace replay ...`, `/trace resume ...`, and `/trace handoff [target]`; those preserve CLI continuity, but they still do **not** imply browser automation.

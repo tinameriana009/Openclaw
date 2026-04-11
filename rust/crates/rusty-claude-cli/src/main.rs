@@ -1502,6 +1502,7 @@ fn run_trace_command(
         (Some("review"), Some(target), None) => render_trace_review_status(target, cwd),
         (Some("approvals"), None, None) => render_trace_approval_dashboard(cwd),
         (Some("inbox"), None, None) => render_trace_inbox(cwd),
+        (Some("handoff"), target, None) => render_trace_handoff(target, cwd),
         (Some("approve"), Some(target), None) => {
             approve_trace_for_operator(target, cwd, session_path)
         }
@@ -1617,6 +1618,14 @@ fn approval_review_index_markdown_path(cwd: &Path) -> PathBuf {
 
 fn approval_review_index_html_path(cwd: &Path) -> PathBuf {
     cwd.join(".claw").join("web-approvals").join("index.html")
+}
+
+fn approval_packet_handoff_json_path(packet_path: &Path) -> PathBuf {
+    packet_path.with_extension("handoff.json")
+}
+
+fn approval_packet_handoff_markdown_path(packet_path: &Path) -> PathBuf {
+    packet_path.with_extension("handoff.md")
 }
 
 fn html_escape(value: &str) -> String {
@@ -2226,6 +2235,20 @@ fn refresh_web_approval_review_index(
             let review_log_path = approval_packet_review_log_path(&packet_path);
             value["reviewStatusPath"] = JsonValue::String(review_status_path.display().to_string());
             value["reviewLogPath"] = JsonValue::String(review_log_path.display().to_string());
+            if let Ok(packet_text) = fs::read_to_string(&packet_path) {
+                if let Ok(packet) = serde_json::from_str::<WebApprovalPacket>(&packet_text) {
+                    value["sessionId"] = JsonValue::String(packet.session_id.clone());
+                    if value["corpusId"].is_null() {
+                        value["corpusId"] = JsonValue::String(packet.corpus_id.clone());
+                    }
+                    if value["task"].is_null() {
+                        value["task"] = JsonValue::String(packet.task.clone());
+                    }
+                    if let Some(note) = packet.operator_note {
+                        value["operatorNote"] = JsonValue::String(note);
+                    }
+                }
+            }
             if let Ok(status_text) = fs::read_to_string(&review_status_path) {
                 if let Ok(status_value) = serde_json::from_str::<JsonValue>(&status_text) {
                     value["replayCount"] = status_value["replayCount"].clone();
@@ -2503,6 +2526,167 @@ fn render_trace_review_status(
         packet.replay_command,
         review_value["nextStep"].as_str().unwrap_or("inspect the approval packet and review markdown on disk"),
         packet.operator_note.as_deref().unwrap_or("browser automation is still not available; this is an on-disk review surface only"),
+    ))
+}
+
+fn render_trace_handoff(
+    target: Option<&str>,
+    cwd: &Path,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let selected_entry = if let Some(target) = target {
+        let (packet_path, _) = load_web_approval_packet(target, cwd)?;
+        let packet_path_text = packet_path.display().to_string();
+        None::<JsonValue>.or_else(|| {
+            let (index_json_path, _, _) = refresh_web_approval_review_index(cwd).ok()?;
+            let index_text = fs::read_to_string(index_json_path).ok()?;
+            let index_value: JsonValue = serde_json::from_str(&index_text).ok()?;
+            index_value["entries"].as_array().and_then(|entries| {
+                entries
+                    .iter()
+                    .find(|entry| {
+                        entry["approvalPacket"].as_str() == Some(packet_path_text.as_str())
+                            || entry["traceId"].as_str() == Some(target)
+                    })
+                    .cloned()
+            })
+        })
+    } else {
+        let (index_json_path, _, _) = refresh_web_approval_review_index(cwd)?;
+        let index_text = fs::read_to_string(index_json_path)?;
+        let index_value: JsonValue = serde_json::from_str(&index_text)?;
+        index_value["entries"]
+            .as_array()
+            .and_then(|entries| entries.first().cloned())
+    };
+
+    let entry = if let Some(entry) = selected_entry {
+        entry
+    } else if target.is_none() {
+        return Ok(
+            "Trace handoff\n  Result           no approval review artifacts exist yet\n  Next step        run /trace approve <trace-file> or /trace resume <trace-file> once a bounded web approval trace exists"
+                .to_string(),
+        );
+    } else {
+        let target = target.unwrap();
+        let (packet_path, packet) = load_web_approval_packet(target, cwd)?;
+        let review_json_path = approval_packet_review_json_path(&packet_path);
+        let review_status_path = approval_packet_review_status_path(&packet_path);
+        let review_value = if review_json_path.exists() {
+            serde_json::from_str::<JsonValue>(&fs::read_to_string(&review_json_path)?)?
+        } else {
+            json!({})
+        };
+        let status_value = if review_status_path.exists() {
+            serde_json::from_str::<JsonValue>(&fs::read_to_string(&review_status_path)?)?
+        } else {
+            json!({})
+        };
+        let (priority, bucket, label, reason) = review_queue_metadata(&review_value);
+        json!({
+            "traceId": packet.trace_id,
+            "sessionId": packet.session_id,
+            "corpusId": packet.corpus_id,
+            "task": packet.task,
+            "approvalPacket": packet_path.display().to_string(),
+            "operatorState": review_value["operatorState"].as_str().unwrap_or("approved for explicit rerun"),
+            "nextStep": review_value["nextStep"].as_str().unwrap_or("inspect the approval packet and review artifacts on disk"),
+            "pendingQueries": packet.pending_queries,
+            "reviewCommand": trace_review_command(&packet_path),
+            "replayTraceCommand": trace_replay_command(&packet_path),
+            "resumeTraceCommand": trace_resume_command(&packet_path),
+            "replayTrace": review_value["replayTrace"].clone(),
+            "reviewStatusPath": review_status_path.display().to_string(),
+            "reviewLogPath": approval_packet_review_log_path(&packet_path).display().to_string(),
+            "historyEntries": status_value["history"].as_array().map(|v| v.len()).unwrap_or(0),
+            "replayCount": status_value["replayCount"].as_u64().unwrap_or(0),
+            "queuePriority": priority,
+            "queueBucket": bucket,
+            "queueLabel": label,
+            "queueReason": reason,
+            "operatorNote": packet.operator_note,
+        })
+    };
+
+    let packet_path = PathBuf::from(
+        entry["approvalPacket"]
+            .as_str()
+            .ok_or("trace handoff requires approvalPacket in review entry")?,
+    );
+    let handoff_json_path = approval_packet_handoff_json_path(&packet_path);
+    let handoff_markdown_path = approval_packet_handoff_markdown_path(&packet_path);
+    let handoff = json!({
+        "schemaVersion": 1,
+        "traceId": entry["traceId"],
+        "selectedFromInbox": target.is_none(),
+        "approvalPacket": entry["approvalPacket"],
+        "reviewStatusPath": entry["reviewStatusPath"],
+        "reviewLogPath": entry["reviewLogPath"],
+        "operatorState": entry["operatorState"],
+        "queue": {
+            "bucket": entry["queueBucket"],
+            "label": entry["queueLabel"],
+            "reason": entry["queueReason"],
+        },
+        "task": entry["task"],
+        "sessionId": entry["sessionId"],
+        "corpusId": entry["corpusId"],
+        "nextStep": entry["nextStep"],
+        "historyEntries": entry["historyEntries"],
+        "replayCount": entry["replayCount"],
+        "pendingQueries": entry["pendingQueries"],
+        "replayTrace": entry["replayTrace"],
+        "commands": {
+            "review": entry["reviewCommand"],
+            "replay": entry["replayTraceCommand"],
+            "resume": entry["resumeTraceCommand"],
+        },
+        "operatorNote": entry["operatorNote"],
+        "caveat": "Static handoff artifact only. Browser automation and live web controls do not exist yet.",
+    });
+    fs::write(&handoff_json_path, serde_json::to_string_pretty(&handoff)?)?;
+
+    let pending_queries = entry["pendingQueries"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str())
+        .collect::<Vec<_>>();
+    let replay_trace = entry["replayTrace"].as_str().unwrap_or("<not yet rerun>");
+    let handoff_markdown = format!(
+        "# Trace operator handoff\n\n- Trace: `{}`\n- Approval packet: `{}`\n- Queue: {} ({})\n- Operator state: {}\n- Task: {}\n- Session: `{}`\n- Corpus: `{}`\n- Lifecycle entries: {}\n- Replay count: {}\n- Next step: {}\n- Pending queries: {}\n- Replay trace: {}\n\n## Commands\n\n```text\n{}\n{}\n{}\n```\n\n## Caveat\n\nStatic handoff artifact only. Browser automation and live web controls do not exist yet.\n",
+        entry["traceId"].as_str().unwrap_or("unknown"),
+        entry["approvalPacket"].as_str().unwrap_or("missing"),
+        entry["queueLabel"].as_str().unwrap_or("Unclassified"),
+        entry["queueReason"].as_str().unwrap_or("no queue reason recorded"),
+        entry["operatorState"].as_str().unwrap_or("unknown"),
+        entry["task"].as_str().unwrap_or("<missing task>"),
+        entry["sessionId"].as_str().unwrap_or("unknown-session"),
+        entry["corpusId"].as_str().unwrap_or("unknown-corpus"),
+        entry["historyEntries"].as_u64().unwrap_or(0),
+        entry["replayCount"].as_u64().unwrap_or(0),
+        entry["nextStep"].as_str().unwrap_or("inspect the approval packet and review artifacts on disk"),
+        if pending_queries.is_empty() { "none".to_string() } else { pending_queries.join(" | ") },
+        replay_trace,
+        entry["reviewCommand"].as_str().unwrap_or("/trace review <approval-packet>"),
+        entry["replayTraceCommand"].as_str().unwrap_or("/trace replay <approval-packet>"),
+        entry["resumeTraceCommand"].as_str().unwrap_or("/trace resume <approval-packet>"),
+    );
+    fs::write(&handoff_markdown_path, handoff_markdown)?;
+
+    Ok(format!(
+        "Trace handoff\n  Result           handoff artifact refreshed\n  Trace            {}\n  Packet           {}\n  Handoff JSON     {}\n  Handoff Markdown {}\n  Queue            {}\n  Operator state   {}\n  Lifecycle entries {}\n  Replay count     {}\n  Next step        {}\n  Review command   {}\n  Replay command   {}\n  Resume command   {}\n  Note             static handoff artifact only; browser automation and live web controls do not exist yet",
+        entry["traceId"].as_str().unwrap_or("unknown"),
+        packet_path.display(),
+        handoff_json_path.display(),
+        handoff_markdown_path.display(),
+        entry["queueLabel"].as_str().unwrap_or("Unclassified"),
+        entry["operatorState"].as_str().unwrap_or("unknown"),
+        entry["historyEntries"].as_u64().unwrap_or(0),
+        entry["replayCount"].as_u64().unwrap_or(0),
+        entry["nextStep"].as_str().unwrap_or("inspect the approval packet and review artifacts on disk"),
+        entry["reviewCommand"].as_str().unwrap_or("/trace review <approval-packet>"),
+        entry["replayTraceCommand"].as_str().unwrap_or("/trace replay <approval-packet>"),
+        entry["resumeTraceCommand"].as_str().unwrap_or("/trace resume <approval-packet>"),
     ))
 }
 
