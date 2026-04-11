@@ -118,6 +118,14 @@ def main() -> int:
         'prepare-blender-demo.sh',
         'prepare-unreal-demo.sh',
         'prepare-domain-demo-bundles.sh',
+        'operator-dashboard.html',
+        'bundle-summary.json',
+        'operator-handoff.json',
+        'review-status.json',
+        'review-log.md',
+        'index.html',
+        'index.json',
+        'bundle-checksums.txt',
     ]:
         require_contains(workflow_index_lower, needle, f'Workflow index is missing readiness cue: {needle}')
     require_contains(

@@ -416,7 +416,7 @@ cargo build --workspace --locked
 ./scripts/run-repo-analysis-demo.sh
 ```
 
-That wrapper captures outputs into `.demo-artifacts/repo-analysis-demo/` so the review loop is less ephemeral, and it now stages `bundle-summary.json`, `operator-handoff.json`, `bundle-checksums.txt`, and `operator-dashboard.html` for bounded review/resume continuity.
+That wrapper captures outputs into `.demo-artifacts/repo-analysis-demo/` so the review loop is less ephemeral, and it now stages `bundle-summary.json`, `operator-handoff.json`, `review-status.json`, `review-log.md`, `bundle-checksums.txt`, and `operator-dashboard.html` plus a cross-run `index.json` / `index.html` for bounded review/resume continuity.
 
 ## Minimal operator checklist
 

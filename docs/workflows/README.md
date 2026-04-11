@@ -82,7 +82,8 @@ If you want one especially concrete operator path, start with one of these demo 
 - [`../examples/repo-analysis-demo/operator-session-template.md`](../examples/repo-analysis-demo/operator-session-template.md)
 - [`../examples/repo-analysis-demo/next-prompt-template.md`](../examples/repo-analysis-demo/next-prompt-template.md)
 - [`../examples/repo-analysis-demo/trace-review-checklist.md`](../examples/repo-analysis-demo/trace-review-checklist.md)
-- staged continuity artifacts: `.demo-artifacts/repo-analysis-demo/<timestamp>/{operator-dashboard.html,bundle-summary.json,operator-handoff.json,bundle-checksums.txt}`
+- staged continuity artifacts: `.demo-artifacts/repo-analysis-demo/<timestamp>/{operator-dashboard.html,bundle-summary.json,operator-handoff.json,review-status.json,review-log.md,bundle-checksums.txt}`
+- cross-run static review index: `.demo-artifacts/repo-analysis-demo/{index.json,index.html}`
 
 ### Unreal runtime telemetry demo kit
 

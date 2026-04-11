@@ -29,7 +29,7 @@ cargo build --workspace --locked
 ```
 
 That runs the documented two-step prompt flow, resumes the same session for the follow-up, and captures both responses under `.demo-artifacts/repo-analysis-demo/<timestamp>/` for later review.
-It also stages `bundle-summary.json`, `operator-handoff.json`, `bundle-checksums.txt`, and a static `operator-dashboard.html` so another operator can review/resume the same run without guessing what happened.
+It also stages `bundle-summary.json`, `operator-handoff.json`, `review-status.json`, `review-log.md`, `bundle-checksums.txt`, and a static `operator-dashboard.html`, then refreshes `.demo-artifacts/repo-analysis-demo/index.{json,html}` so another operator can review/resume the same run and compare it against earlier passes without guessing what happened.
 
 If you want the raw one-liner instead, use:
 
@@ -54,7 +54,8 @@ If you want a more realistic operator path instead of a generic one-liner, use t
 - [`../examples/repo-analysis-demo/next-prompt-template.md`](../examples/repo-analysis-demo/next-prompt-template.md)
 - [`../examples/repo-analysis-demo/trace-review-checklist.md`](../examples/repo-analysis-demo/trace-review-checklist.md)
 - staged run dashboard: `.demo-artifacts/repo-analysis-demo/<timestamp>/operator-dashboard.html`
-- staged handoff metadata: `.demo-artifacts/repo-analysis-demo/<timestamp>/{bundle-summary.json,operator-handoff.json,bundle-checksums.txt}`
+- staged handoff metadata: `.demo-artifacts/repo-analysis-demo/<timestamp>/{bundle-summary.json,operator-handoff.json,review-status.json,review-log.md,bundle-checksums.txt}`
+- cross-run static index: `.demo-artifacts/repo-analysis-demo/{index.json,index.html}`
 
 ## Recommended flow
 
@@ -161,7 +162,8 @@ After the model answers:
 3. capture exact evidence, missed files, and weak claims in [`../examples/repo-analysis-demo/operator-session-template.md`](../examples/repo-analysis-demo/operator-session-template.md)
 4. inspect the trace if the model made a broad claim from thin evidence
 5. re-prompt with narrower file targets when needed using [`../examples/repo-analysis-demo/next-prompt-template.md`](../examples/repo-analysis-demo/next-prompt-template.md)
-6. if another operator is taking over, hand them the staged `operator-dashboard.html` and `operator-handoff.json` instead of a loose summary message
+6. if another operator is taking over, hand them the staged `operator-dashboard.html`, `operator-handoff.json`, `review-status.json`, and `review-log.md` instead of a loose summary message
+7. if you need to compare runs or see which bundles were actually reviewed, open `.demo-artifacts/repo-analysis-demo/index.html`
 
 You can also run a lightweight coherence check for the demo assets themselves:
 
@@ -176,5 +178,5 @@ That validates the docs/examples wiring, not the model's quality.
 - no graphical architecture explorer yet
 - no first-class saved workflow runner beyond normal sessions and prompts
 - very large repos still depend on corpus selection quality and prompt discipline
-- best trace UX is still the saved ledger on disk plus the staged static run dashboard, not a fully polished live in-app viewer
+- best trace/review UX is still the saved ledger on disk plus the staged static run dashboard and cross-run index, not a fully polished live in-app viewer
 - architecture validation is still operator-driven; the harness does not automatically certify that its summary is correct

@@ -43,6 +43,10 @@ def main() -> int:
         'operator-dashboard.html',
         'bundle-summary.json',
         'operator-handoff.json',
+        'review-status.json',
+        'review-log.md',
+        'index.html',
+        'index.json',
         'bundle-checksums.txt',
         '/trace replay',
         '/trace resume',
@@ -63,6 +67,10 @@ def main() -> int:
         'operator-dashboard.html',
         'bundle-summary.json',
         'operator-handoff.json',
+        'review-status.json',
+        'review-log.md',
+        'index.html',
+        'index.json',
         'bundle-checksums.txt',
     ]:
         if needle not in workflow_text:
@@ -77,6 +85,10 @@ def main() -> int:
         'operator-dashboard.html',
         'bundle-summary.json',
         'operator-handoff.json',
+        'review-status.json',
+        'review-log.md',
+        'index.html',
+        'index.json',
         'bundle-checksums.txt',
     ]:
         if needle not in index_text:
@@ -87,7 +99,11 @@ def main() -> int:
     for needle in [
         'bundle-summary.json',
         'operator-handoff.json',
+        'review-status.json',
+        'review-log.md',
         'operator-dashboard.html',
+        'index.json',
+        'index.html',
         'bundle-checksums.txt',
         '/trace replay <trace-file|approval-packet>',
         '/trace resume <trace-file|approval-packet>',
