@@ -2661,6 +2661,15 @@ fn semantic_expansions(token: &str) -> Vec<SemanticTerm> {
         "test" | "tests" => vec!["testing", "unit", "integration", "regression"],
         "search" => vec!["retrieval", "lookup", "index", "corpus"],
         "retrieval" => vec!["search", "lookup", "index", "corpus"],
+        "workflow" | "workflows" => vec!["flow", "pipeline", "lifecycle", "sequence"],
+        "flow" => vec!["workflow", "pipeline", "lifecycle", "sequence"],
+        "pipeline" => vec!["workflow", "flow", "lifecycle", "sequence"],
+        "lifecycle" => vec!["workflow", "flow", "pipeline", "sequence"],
+        "failure" | "failures" => vec!["error", "errors", "failed", "failing"],
+        "error" | "errors" => vec!["failure", "failures", "failed", "failing"],
+        "install" | "installation" => vec!["setup", "bootstrap", "initialize"],
+        "setup" => vec!["install", "installation", "bootstrap", "initialize"],
+        "bootstrap" => vec!["setup", "install", "installation", "initialize"],
         _ => Vec::new(),
     };
     expansions.extend(morphological_semantic_expansions(token));
@@ -4394,6 +4403,83 @@ This architecture guide explains platform flow, session handling, token exchange
             "expected a specific auth document to rank first ahead of generic architecture overlap: {:#?}",
             result.hits
         );
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_bridges_workflow_queries_to_lifecycle_and_pipeline_docs() {
+        let cwd = temp_dir("workspace-semantic-workflow-bridge");
+        let root = cwd.join("docs");
+        fs::create_dir_all(&root).expect("mkdir docs");
+        fs::write(
+            root.join("release-lifecycle.md"),
+            "# Release Lifecycle
+
+## Pipeline Sequence
+The release pipeline covers build verification, approval sequence, and deployment lifecycle checks.
+",
+        )
+        .expect("write lifecycle doc");
+        fs::write(
+            root.join("meeting-notes.md"),
+            "# Notes
+
+The team discussed release ownership and staffing.
+",
+        )
+        .expect("write distractor doc");
+
+        let manifest = attach_corpus(&cwd, &[root.clone()], CorpusAttachOptions::default())
+            .expect("attach corpus");
+        let result = search_corpus(
+            &cwd,
+            &manifest.corpus_id,
+            "release workflow",
+            5,
+            None,
+        )
+        .expect("search");
+
+        assert_eq!(result.hits[0].path, "release-lifecycle.md");
+        assert!(
+            result.hits[0].reason.contains("semantic-")
+                || result.hits[0].reason.contains("phrase:")
+                || result.hits[0].reason.contains("outline:")
+        );
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_bridges_error_queries_to_failure_wording() {
+        let cwd = temp_dir("workspace-semantic-error-failure-bridge");
+        let root = cwd.join("docs");
+        fs::create_dir_all(&root).expect("mkdir docs");
+        fs::write(
+            root.join("runbook.md"),
+            "# Incident Runbook
+
+Deployment failures trigger rollback checks and failed verification review.
+",
+        )
+        .expect("write failure doc");
+        fs::write(
+            root.join("status.md"),
+            "# Status
+
+Deploy completed successfully and operators celebrated.
+",
+        )
+        .expect("write distractor doc");
+
+        let manifest = attach_corpus(&cwd, &[root.clone()], CorpusAttachOptions::default())
+            .expect("attach corpus");
+        let result = search_corpus(&cwd, &manifest.corpus_id, "deployment error", 5, None)
+            .expect("search");
+
+        assert_eq!(result.hits[0].path, "runbook.md");
+        assert!(result.hits[0].reason.contains("semantic-"));
 
         let _ = fs::remove_dir_all(cwd);
     }
