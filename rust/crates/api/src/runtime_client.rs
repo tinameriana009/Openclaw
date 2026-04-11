@@ -41,6 +41,51 @@ pub struct ProviderRuntimeApiClient<O = NoopProviderRuntimeObserver> {
     observer: O,
 }
 
+struct ProviderRuntimeBuildContext {
+    client: ProviderClient,
+    model: String,
+    tools: Vec<ToolDefinition>,
+}
+
+impl ProviderRuntimeBuildContext {
+    fn new(
+        model: String,
+        tools: Vec<ToolDefinition>,
+        anthropic_auth: Option<AuthSource>,
+    ) -> Result<Self, String> {
+        let resolved_model = resolve_model_alias(&model).to_string();
+        let client =
+            ProviderClient::from_model_with_anthropic_auth(&resolved_model, anthropic_auth)
+                .map_err(|error| error.to_string())?;
+        Ok(Self {
+            client,
+            model: resolved_model,
+            tools,
+        })
+    }
+
+    fn into_api_client<O>(
+        self,
+        prompt_cache_namespace: Option<&str>,
+        observer: O,
+    ) -> Result<ProviderRuntimeApiClient<O>, String>
+    where
+        O: ProviderRuntimeObserver,
+    {
+        let client = match prompt_cache_namespace {
+            Some(namespace) => self.client.with_prompt_cache(PromptCache::new(namespace)),
+            None => self.client,
+        };
+        Ok(ProviderRuntimeApiClient {
+            runtime: tokio::runtime::Runtime::new().map_err(|error| error.to_string())?,
+            client,
+            model: self.model,
+            tools: self.tools,
+            observer,
+        })
+    }
+}
+
 impl ProviderRuntimeApiClient<NoopProviderRuntimeObserver> {
     #[allow(clippy::needless_pass_by_value)]
     pub fn new(model: String, tools: Vec<ToolDefinition>) -> Result<Self, String> {
@@ -53,17 +98,8 @@ impl ProviderRuntimeApiClient<NoopProviderRuntimeObserver> {
         tools: Vec<ToolDefinition>,
         anthropic_auth: Option<AuthSource>,
     ) -> Result<Self, String> {
-        let resolved_model = resolve_model_alias(&model).to_string();
-        let client =
-            ProviderClient::from_model_with_anthropic_auth(&resolved_model, anthropic_auth)
-                .map_err(|error| error.to_string())?;
-        Ok(Self {
-            runtime: tokio::runtime::Runtime::new().map_err(|error| error.to_string())?,
-            client,
-            model: resolved_model,
-            tools,
-            observer: NoopProviderRuntimeObserver,
-        })
+        ProviderRuntimeBuildContext::new(model, tools, anthropic_auth)?
+            .into_api_client(None, NoopProviderRuntimeObserver)
     }
 }
 
@@ -97,6 +133,64 @@ where
     }
 }
 
+fn build_provider_runtime_api_client_internal<O>(
+    model: String,
+    tools: Vec<ToolDefinition>,
+    prompt_cache_namespace: Option<&str>,
+    anthropic_auth: Option<AuthSource>,
+    observer: O,
+) -> Result<ProviderRuntimeApiClient<O>, String>
+where
+    O: ProviderRuntimeObserver,
+{
+    ProviderRuntimeBuildContext::new(model, tools, anthropic_auth)?
+        .into_api_client(prompt_cache_namespace, observer)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_provider_conversation_runtime_internal<T, O>(
+    session: Session,
+    model: String,
+    tools: Vec<ToolDefinition>,
+    prompt_cache_namespace: &str,
+    anthropic_auth: Option<AuthSource>,
+    tool_executor: T,
+    permission_policy: PermissionPolicy,
+    system_prompt: Vec<String>,
+    feature_config: Option<&RuntimeFeatureConfig>,
+    observer: O,
+) -> Result<ConversationRuntime<ProviderRuntimeApiClient<O>, T>, String>
+where
+    T: ToolExecutor,
+    O: ProviderRuntimeObserver,
+{
+    let api_client = build_provider_runtime_api_client_internal(
+        model,
+        tools,
+        Some(prompt_cache_namespace),
+        anthropic_auth,
+        observer,
+    )?;
+
+    Ok(match feature_config {
+        Some(config) => ConversationRuntime::new_with_features(
+            session,
+            api_client,
+            tool_executor,
+            permission_policy,
+            system_prompt,
+            config,
+        ),
+        None => ConversationRuntime::new(
+            session,
+            api_client,
+            tool_executor,
+            permission_policy,
+            system_prompt,
+        ),
+    })
+}
+
 #[allow(clippy::needless_pass_by_value)]
 pub fn build_provider_runtime_api_client(
     model: String,
@@ -113,9 +207,12 @@ pub fn build_provider_runtime_api_client_with_auth(
     prompt_cache_namespace: &str,
     anthropic_auth: Option<AuthSource>,
 ) -> Result<ProviderRuntimeApiClient, String> {
-    Ok(
-        ProviderRuntimeApiClient::new_with_auth(model, tools, anthropic_auth)?
-            .with_prompt_cache(prompt_cache_namespace),
+    build_provider_runtime_api_client_internal(
+        model,
+        tools,
+        Some(prompt_cache_namespace),
+        anthropic_auth,
+        NoopProviderRuntimeObserver,
     )
 }
 
@@ -130,13 +227,13 @@ pub fn build_provider_runtime_api_client_with_auth_and_observer<O>(
 where
     O: ProviderRuntimeObserver,
 {
-    Ok(build_provider_runtime_api_client_with_auth(
+    build_provider_runtime_api_client_internal(
         model,
         tools,
-        prompt_cache_namespace,
+        Some(prompt_cache_namespace),
         anthropic_auth,
-    )?
-    .with_observer(observer))
+        observer,
+    )
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -201,19 +298,18 @@ pub fn build_provider_conversation_runtime_with_auth_for_session<T>(
 where
     T: ToolExecutor,
 {
-    let api_client = build_provider_runtime_api_client_with_auth(
+    build_provider_conversation_runtime_internal(
+        session,
         model,
         tools,
         prompt_cache_namespace,
         anthropic_auth,
-    )?;
-    Ok(ConversationRuntime::new(
-        session,
-        api_client,
         tool_executor,
         permission_policy,
         system_prompt,
-    ))
+        None,
+        NoopProviderRuntimeObserver,
+    )
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -234,21 +330,18 @@ where
     T: ToolExecutor,
     O: ProviderRuntimeObserver,
 {
-    let api_client = build_provider_runtime_api_client_with_auth_and_observer(
+    build_provider_conversation_runtime_internal(
+        session,
         model,
         tools,
         prompt_cache_namespace,
         anthropic_auth,
-        observer,
-    )?;
-    Ok(ConversationRuntime::new_with_features(
-        session,
-        api_client,
         tool_executor,
         permission_policy,
         system_prompt,
-        feature_config,
-    ))
+        Some(feature_config),
+        observer,
+    )
 }
 
 impl<O> ApiClient for ProviderRuntimeApiClient<O>
