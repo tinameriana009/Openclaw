@@ -102,7 +102,7 @@ cd rust
 RELEASE_CANDIDATE=1 ./scripts/release-verify.sh
 ```
 
-That helper checks the active Rust toolchain first, then runs the locked workspace verification sequence. In RC mode it also runs the explicit release-candidate documentation gate, generates `.claw/release-artifacts/release-manifest.json` plus `.claw/release-artifacts/release-attestation.json`, and expects release notes/trust docs to stay aligned with the current `artifactKind` / `schemaVersion` / `compatVersion` contract. If you provide `PROVENANCE_SIGNING_KEY=/path/to/private-key.pem`, the same flow will also emit `.claw/release-artifacts/release-provenance.json`, `.claw/release-artifacts/release-provenance.sig`, and `.claw/release-artifacts/release-trust-policy.json`, then verify that signed bundle locally. If you additionally provide `PROVENANCE_SIGNING_CERT=/path/to/leaf-cert.pem` plus `PROVENANCE_TRUST_ROOT=/path/to/root-ca.pem` (and optionally `PROVENANCE_SIGNING_CHAIN=/path/to/intermediate-chain.pem`), that bundle will also pin and validate a supplied X.509 chain back to the provided root. This is still bounded release provenance, not a claim of Sigstore/SLSA-grade hosted supply-chain security.
+That helper checks the active Rust toolchain first, then runs the locked workspace verification sequence. In RC mode it also runs the explicit release-candidate documentation gate, generates `.claw/release-artifacts/release-manifest.json` plus `.claw/release-artifacts/release-attestation.json`, and expects release notes/trust docs to stay aligned with the current `artifactKind` / `schemaVersion` / `compatVersion` contract. If you provide `PROVENANCE_SIGNING_KEY=/path/to/private-key.pem`, the same flow will also emit `.claw/release-artifacts/release-provenance.json`, `.claw/release-artifacts/release-provenance.sig`, and `.claw/release-artifacts/release-trust-policy.json`, then verify that signed bundle locally. If you additionally provide `PROVENANCE_SIGNING_CERT=/path/to/leaf-cert.pem` plus `PROVENANCE_TRUST_ROOT=/path/to/root-ca.pem` (and optionally `PROVENANCE_SIGNING_CHAIN=/path/to/intermediate-chain.pem`), that bundle will also pin and validate a supplied X.509 chain back to the provided root. If you additionally set `EXTERNAL_PROVENANCE_WITNESS=1`, the release verification flow will also emit `.claw/release-artifacts/release-external-witness.json` and validate it as a bounded external repository/publication anchor layer over the signed bundle. This is still bounded release provenance, not a claim of Sigstore/SLSA-grade hosted supply-chain security.
 
 Manual equivalent:
 
@@ -303,7 +303,7 @@ For the current bounded web-review loop:
 - `/trace approve ...` records an approval packet plus `.review.{json,md}` artifacts
 - `/trace replay ...` reruns an already approved packet and refreshes those review artifacts
 - `/trace resume ...` is the honest approve-and-rerun shortcut; it still does **not** provide browser automation
-- `.claw/web-approvals/index.{json,md}` acts as a lightweight on-disk operator dashboard for the saved review state
+- `.claw/web-approvals/index.{json,md,html}` acts as a lightweight on-disk operator dashboard for the saved review state, including explicit follow-up `/trace review|replay|resume` commands for each entry
 
 ## High-value slash commands
 

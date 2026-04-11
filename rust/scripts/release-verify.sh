@@ -138,6 +138,13 @@ if [[ -n "${PROVENANCE_SIGNING_KEY:-}" ]]; then
   echo "release trust policy: $trust_policy_path"
   python3 ../tests/validate_signed_release_provenance.py "$provenance_path" "$signature_path" "$public_key_path" "$trust_policy_path"
   python3 ../tests/validate_release_trust_policy.py "$trust_policy_path" "$provenance_path" "$signature_path" "$public_key_path" "$manifest_path" "$attestation_path"
+  if [[ -n "${EXTERNAL_PROVENANCE_WITNESS:-}" ]]; then
+    witness_path=$(./scripts/generate-release-external-witness.sh)
+    echo "release external witness: $witness_path"
+    python3 ../tests/validate_release_external_witness.py "$witness_path" "$manifest_path" "$attestation_path" "$provenance_path" "$signature_path" "$trust_policy_path"
+  else
+    echo "optional external witness: skipped (set EXTERNAL_PROVENANCE_WITNESS=1 and optionally EXTERNAL_REPOSITORY_URL / EXTERNAL_RELEASE_TAG / EXTERNAL_* publication URLs to emit release-external-witness.json)"
+  fi
 else
   echo "optional signed provenance: skipped (set PROVENANCE_SIGNING_KEY to emit release-provenance.json + .sig, optionally with PROVENANCE_SIGNING_CERT/PROVENANCE_TRUST_ROOT for a rooted X.509 chain)"
 fi

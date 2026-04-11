@@ -15,6 +15,7 @@ Current operator-relevant artifact locations:
 - `.claw/release-artifacts/release-provenance.json` + `.sig` — optional signed provenance bundle over the binary + manifest + attestation chain
 - `.claw/release-artifacts/release-provenance.cert.pem` / `.chain.pem` / `.root.pem` — optional rooted X.509 materials when the signer is backed by a supplied CA chain
 - `.claw/release-artifacts/release-trust-policy.json` — optional pinned trust-policy file for the signed provenance flow
+- `.claw/release-artifacts/release-external-witness.json` — optional publication/witness layer that binds external repository or release URLs to the local signed provenance set
 
 These files are useful for inspection, debugging, evaluation, and incident review.
 
@@ -222,6 +223,7 @@ If you need a bounded signed chain on top of that, `./scripts/sign-release-prove
 - `release-provenance.pub.pem` — the corresponding public key used for verification
 - `release-trust-policy.json` — a machine-readable local trust policy that pins the signer fingerprint, source metadata, and exact signed materials for this release flow
 - `release-provenance.cert.pem`, `release-provenance.chain.pem`, and `release-provenance.root.pem` — optional copied X.509 materials when you also provide `PROVENANCE_SIGNING_CERT`, `PROVENANCE_SIGNING_CHAIN`, and `PROVENANCE_TRUST_ROOT`
+- `release-external-witness.json` — an optional witness file that records external repository anchors (commit/tree/tag) and/or publication URLs for the signed provenance bundle
 
 Validation path for the signed bundle:
 
@@ -244,6 +246,28 @@ python3 ../tests/validate_release_trust_policy.py \
 ```
 
 This is still intentionally bounded. At minimum it improves tamper evidence for the local binary → manifest → attestation chain and turns the expected signer/material set into an explicit file instead of purely operator memory. If you attach `PROVENANCE_SIGNING_CERT` plus `PROVENANCE_TRUST_ROOT` (and optionally `PROVENANCE_SIGNING_CHAIN`), the bundle can also pin a supplied X.509 chain back to that root and verify it locally with `openssl verify`. Even then it does **not** claim transparency-log inclusion, keyless signing, public CA discovery, hosted builder identity, or a public package-registry provenance story. In other words: it is signed local provenance with either a pinned local key or a supplied rooted X.509 chain, not a full end-to-end supply-chain security system.
+
+If you want a more formal external/publication breadcrumb on top of that signed bundle, `./scripts/generate-release-external-witness.sh` can generate `release-external-witness.json`. It records the current git commit/tree, optional exact release tag, any discovered GitHub-style repository URLs, and optional externally published URLs you provide via `EXTERNAL_*` environment variables (release notes, source tarball, provenance, trust policy, timestamp authority/token, transparency index, etc.). Validation path:
+
+```bash
+cd rust
+EXTERNAL_PROVENANCE_WITNESS=1 \
+PROVENANCE_SIGNING_KEY=./keys/release-private.pem \
+./scripts/release-verify.sh
+# or run it manually after sign-release-provenance.sh:
+EXTERNAL_REPOSITORY_URL=https://github.com/example/claw \
+EXTERNAL_RELEASE_TAG=v0.1.0-rc1 \
+./scripts/generate-release-external-witness.sh
+python3 ../tests/validate_release_external_witness.py \
+  .claw/release-artifacts/release-external-witness.json \
+  .claw/release-artifacts/release-manifest.json \
+  .claw/release-artifacts/release-attestation.json \
+  .claw/release-artifacts/release-provenance.json \
+  .claw/release-artifacts/release-provenance.sig \
+  .claw/release-artifacts/release-trust-policy.json
+```
+
+That witness layer is still only a bounded publication/anchor aid. It helps third parties re-fetch the referenced repo/release surfaces and compare hashes, but it does **not** prove those services verified the build, signer, or workflow. No transparency-log semantics, no keyless identity, no hosted-builder claims.
 
 ## Sessions
 
@@ -283,6 +307,6 @@ Useful future upgrades that are **not** implemented yet:
 - dedicated migration notes for session formats
 - stable machine-readable release manifests
 - built-in redaction or export-scrubbing helpers
-- signed release artifacts or packaged binaries
+- transparency-backed or keyless public provenance (the current signed + external-witness flow is still operator-managed and bounded)
 
 Until then, use tagged builds and this document together as the practical trust boundary.

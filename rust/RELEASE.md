@@ -35,7 +35,7 @@ cd rust
 RELEASE_CANDIDATE=1 ./scripts/release-verify.sh
 ```
 
-That RC mode keeps the same locked build/test gates, requires a clean working tree, runs `python3 ../tests/validate_release_candidate_readiness.py`, and emits a machine-readable release artifact manifest under `.claw/release-artifacts/release-manifest.json` plus a paired `.claw/release-artifacts/release-attestation.json` statement. Both are immediately re-validated against the current binary/docs via `python3 ../tests/validate_release_artifact_manifest.py` and `python3 ../tests/validate_release_attestation.py`. The manifest still captures local provenance cues such as git remotes/status, host toolchain snapshot, declared verification commands, `Cargo.lock`, and the manifest generator itself; the attestation sidecar binds the manifest hash and binary hash into a more formal statement shape. If you also provide `PROVENANCE_SIGNING_KEY=/path/to/private-key.pem`, `./scripts/release-verify.sh` will generate `.claw/release-artifacts/release-provenance.json`, `.claw/release-artifacts/release-provenance.sig`, and `.claw/release-artifacts/release-trust-policy.json`, then re-validate them with `python3 ../tests/validate_signed_release_provenance.py` and `python3 ../tests/validate_release_trust_policy.py`. If you additionally pass `PROVENANCE_SIGNING_CERT`, `PROVENANCE_TRUST_ROOT`, and optionally `PROVENANCE_SIGNING_CHAIN`, that flow also copies the X.509 materials into `.claw/release-artifacts/`, verifies the detached signature against the derived public key, and verifies the supplied certificate chain back to the provided root. That is still operator-supplied trust material rather than transparency-backed or keyless supply-chain identity, but it gives a more rooted bounded provenance chain than raw local key pinning alone. See [`docs/RELEASE_CANDIDATE.md`](docs/RELEASE_CANDIDATE.md) for the bounded RC flow.
+That RC mode keeps the same locked build/test gates, requires a clean working tree, runs `python3 ../tests/validate_release_candidate_readiness.py`, and emits a machine-readable release artifact manifest under `.claw/release-artifacts/release-manifest.json` plus a paired `.claw/release-artifacts/release-attestation.json` statement. Both are immediately re-validated against the current binary/docs via `python3 ../tests/validate_release_artifact_manifest.py` and `python3 ../tests/validate_release_attestation.py`. The manifest still captures local provenance cues such as git remotes/status, host toolchain snapshot, declared verification commands, `Cargo.lock`, and the manifest generator itself; the attestation sidecar binds the manifest hash and binary hash into a more formal statement shape. If you also provide `PROVENANCE_SIGNING_KEY=/path/to/private-key.pem`, `./scripts/release-verify.sh` will generate `.claw/release-artifacts/release-provenance.json`, `.claw/release-artifacts/release-provenance.sig`, and `.claw/release-artifacts/release-trust-policy.json`, then re-validate them with `python3 ../tests/validate_signed_release_provenance.py` and `python3 ../tests/validate_release_trust_policy.py`. If you additionally pass `PROVENANCE_SIGNING_CERT`, `PROVENANCE_TRUST_ROOT`, and optionally `PROVENANCE_SIGNING_CHAIN`, that flow also copies the X.509 materials into `.claw/release-artifacts/`, verifies the detached signature against the derived public key, and verifies the supplied certificate chain back to the provided root. If you set `EXTERNAL_PROVENANCE_WITNESS=1`, the same flow will also generate `.claw/release-artifacts/release-external-witness.json` and validate it with `python3 ../tests/validate_release_external_witness.py` as a bounded external publication/repository witness layer over the local signed bundle. That is still operator-supplied trust material rather than transparency-backed or keyless supply-chain identity, but it gives a more rooted bounded provenance chain than raw local key pinning alone. See [`docs/RELEASE_CANDIDATE.md`](docs/RELEASE_CANDIDATE.md) for the bounded RC flow.
 
 Manual equivalent:
 
@@ -70,6 +70,16 @@ python3 ../tests/validate_release_trust_policy.py \
   .claw/release-artifacts/release-provenance.pub.pem \
   .claw/release-artifacts/release-manifest.json \
   .claw/release-artifacts/release-attestation.json
+EXTERNAL_REPOSITORY_URL=https://github.com/example/claw \
+EXTERNAL_RELEASE_TAG=v0.1.0-rc1 \
+./scripts/generate-release-external-witness.sh
+python3 ../tests/validate_release_external_witness.py \
+  .claw/release-artifacts/release-external-witness.json \
+  .claw/release-artifacts/release-manifest.json \
+  .claw/release-artifacts/release-attestation.json \
+  .claw/release-artifacts/release-provenance.json \
+  .claw/release-artifacts/release-provenance.sig \
+  .claw/release-artifacts/release-trust-policy.json
 ```
 
 ### Operator sanity checks

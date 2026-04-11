@@ -113,6 +113,8 @@ optional_signing_commands = [
     './scripts/sign-release-provenance.sh',
     'python3 ../tests/validate_signed_release_provenance.py <provenance-path> <signature-path> <public-key-path> [trust-policy-path]',
     'python3 ../tests/validate_release_trust_policy.py <policy-path> <provenance-path> <signature-path> <public-key-path> <manifest-path> <attestation-path>',
+    './scripts/generate-release-external-witness.sh',
+    'python3 ../tests/validate_release_external_witness.py <witness-path> <manifest-path> <attestation-path> <provenance-path> <signature-path> <trust-policy-path>',
 ]
 optional_rooted_signing_hint = (
     'For a bounded external/rooted variant, also provide PROVENANCE_SIGNING_CERT and '
@@ -198,6 +200,7 @@ manifest = {
             'It is intentionally local-first and should not be treated as a hosted or transparency-backed attestation chain.',
             'A paired release-attestation.json binds this manifest hash into a more formal statement shape; optional signing can extend that into a signed local provenance bundle.',
             'If you set PROVENANCE_SIGNING_KEY, also run ' + optional_signing_commands[0] + ', ' + optional_signing_commands[1] + ', and ' + optional_signing_commands[2] + '.',
+            'For a bounded external/publication witness layer on top of the signed bundle, also run ' + optional_signing_commands[3] + ' and ' + optional_signing_commands[4] + '.',
             optional_rooted_signing_hint,
             rc_note,
         ],

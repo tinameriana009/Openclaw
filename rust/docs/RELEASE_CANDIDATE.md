@@ -26,6 +26,7 @@ An RC pass here means all of the following are true:
 - a fresh machine-readable release manifest can be generated and re-validated against the current binary/docs
 - a paired `release-attestation.json` can be generated and validated as a formal local provenance statement
 - if you provide `PROVENANCE_SIGNING_KEY`, a signed `release-provenance.json` + `.sig` bundle can be generated and validated as a bounded cryptographic chain over the binary/manifest/attestation set; adding `PROVENANCE_SIGNING_CERT` + `PROVENANCE_TRUST_ROOT` lets that bundle also pin a supplied X.509 chain back to a provided root
+- if you also enable `EXTERNAL_PROVENANCE_WITNESS=1`, a `release-external-witness.json` file can bind that signed bundle to explicit repository/tag/publication coordinates without claiming hosted-builder or transparency-log guarantees
 
 It does **not** mean every operator workflow is fully automated, every artifact is a permanent interchange contract, or the broader product is production-final.
 
@@ -38,6 +39,7 @@ It does **not** mean every operator workflow is fully automated, every artifact 
 5. Do one grounded run against a fresh `.claw/` state before tagging.
 6. Generate and validate `.claw/release-artifacts/release-manifest.json` and `.claw/release-artifacts/release-attestation.json` so the RC notes can point at exact current hashes/bytes for the binary and trust docs plus a formal statement envelope.
 7. If you maintain a release key, set `PROVENANCE_SIGNING_KEY` and generate `.claw/release-artifacts/release-provenance.json` plus `.sig` to publish a bounded signed provenance chain instead of unsigned local attestation only. If you also maintain a CA/root bundle, add `PROVENANCE_SIGNING_CERT`, `PROVENANCE_TRUST_ROOT`, and optionally `PROVENANCE_SIGNING_CHAIN` so the release artifacts pin that supplied chain explicitly.
+8. If you want a bounded external/publication breadcrumb too, set `EXTERNAL_PROVENANCE_WITNESS=1` and provide `EXTERNAL_RELEASE_TAG` and/or `EXTERNAL_*` URLs so `.claw/release-artifacts/release-external-witness.json` captures where third parties should independently re-fetch the repo/release surfaces.
 
 ## Fresh-state rule
 
