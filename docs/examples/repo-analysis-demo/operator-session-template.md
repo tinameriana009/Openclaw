@@ -14,6 +14,7 @@ Use this while reviewing a repo-analysis run so evidence, doubts, and follow-up 
 - Initial brief prompt:
 - Follow-up prompt(s):
 - Did you resume the same session? yes / no
+- If this is a later pass, which prior run bundle or dashboard did you inherit?
 
 ## Grounding review
 - Files the answer cited confidently:
@@ -33,6 +34,7 @@ Use this while reviewing a repo-analysis run so evidence, doubts, and follow-up 
 - Trace file(s) inspected:
 - Important missing evidence:
 - Broad claims that need re-checking:
+- If you replayed or resumed a saved trace, what changed between passes?
 
 ## Handoff payload
 - Exact follow-up question to ask next:

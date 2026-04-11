@@ -10,6 +10,7 @@ Use the same attached local corpus and stay explicit about uncertainty.
 Context from the previous run:
 - Profile used: [balanced/deep/research]
 - Prior artifacts reviewed: [.demo-artifacts/repo-analysis-demo/<timestamp>/...]
+- Dashboard or handoff bundle reviewed: [operator-dashboard.html / bundle-summary.json / operator-handoff.json]
 - Files already spot-checked manually: [src/main.py, src/runtime.py, ...]
 
 What I verified manually:
@@ -17,6 +18,7 @@ What I verified manually:
 - Missing or weakly supported claims: [list]
 - Important files/tests the last answer missed: [list]
 - Trace review findings: [list]
+- If this is a replay/resume pass, what changed since the last answer: [list]
 
 Task:
 [ask one narrow follow-up question]

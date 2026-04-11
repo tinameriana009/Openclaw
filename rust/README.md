@@ -19,7 +19,7 @@ Strongest current areas:
 - workflow demos for Blender, repo analysis, and Unreal
 
 Best current showcase path:
-- the repo-analysis flow, especially via `./scripts/run-repo-analysis-demo.sh`, because it exercises grounded local analysis, session resume, and trace review without depending on Blender or Unreal manual UI loops
+- the repo-analysis flow, especially via `./scripts/run-repo-analysis-demo.sh`, because it exercises grounded local analysis, session resume, trace review, and a static operator handoff/dashboard bundle without depending on Blender or Unreal manual UI loops
 
 Most realistic operator-prep helpers for the more manual workflows:
 - `./scripts/prepare-blender-demo.sh` validates the Blender demo kit, rebuilds the zip artifact, and stages a manual-review bundle under `.demo-artifacts/blender-demo/` with findings/prompt templates plus `bundle-summary.json`, `operator-handoff.json`, and `bundle-checksums.txt` for the next handoff
@@ -362,7 +362,7 @@ These are the important remaining rough edges from an operator point of view:
 - The install story is still source-first; there is no polished packaged release flow documented here yet.
 - The quickest reliable trace workflow is still “inspect `.claw/trace/` on disk”; the CLI trace UX is improving but the saved artifact path remains the safest one to depend on.
 - Corpus discoverability is much better than before, but the most advanced grounded-answer path should still be treated as an active harness surface rather than a finished product.
-- Web-aware behavior is more honest and traceable than before, including explicit approval-required child states, a dedicated final-answer `Web execution` section with per-status counts/subquery details, and richer provenance summaries, but it is still not a fully mature end-to-end operator web workflow.
+- Web-aware behavior is more honest and traceable than before, including explicit approval-required child states, a dedicated final-answer `Web execution` section with per-status counts/subquery details, richer provenance summaries, and static on-disk handoff/dashboard artifacts for the repo-analysis showcase, but it is still not a fully mature end-to-end operator web workflow.
 - Child execution is cleaner and more shared than before, but not yet fully runtime/provider-owned in every seam.
 - Recursive traces now capture novelty/progress signals per child step, retrieval requests carry lightweight planner metadata (strategy / rationale / anchor terms), and the final recursive answer surfaces a compact `Recursive planning` summary so operators can see what the heuristic planner was doing without opening the raw trace first.
 - Follow-up retrieval planning is now slightly more disciplined: later iterations prefer structured `Findings`, `Validation loop`, and `Remaining gaps` terms across recent child responses, explicitly mark when the loop appears to be probing open gaps versus stalling on repeated ones, and preserve that planner-progress metadata in the trace/final answer. This is still heuristic guidance rather than a full planner or formal verifier.
@@ -416,7 +416,7 @@ cargo build --workspace --locked
 ./scripts/run-repo-analysis-demo.sh
 ```
 
-That wrapper captures outputs into `.demo-artifacts/repo-analysis-demo/` so the review loop is less ephemeral.
+That wrapper captures outputs into `.demo-artifacts/repo-analysis-demo/` so the review loop is less ephemeral, and it now stages `bundle-summary.json`, `operator-handoff.json`, `bundle-checksums.txt`, and `operator-dashboard.html` for bounded review/resume continuity.
 
 ## Minimal operator checklist
 

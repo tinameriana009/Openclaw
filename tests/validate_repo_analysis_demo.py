@@ -40,6 +40,12 @@ def main() -> int:
         '.demo-artifacts/repo-analysis-demo/',
         'operator-session-template.md',
         'next-prompt-template.md',
+        'operator-dashboard.html',
+        'bundle-summary.json',
+        'operator-handoff.json',
+        'bundle-checksums.txt',
+        '/trace replay',
+        '/trace resume',
     ]:
         if needle not in readme_text:
             print(f'Repo analysis demo README is missing required operator cue: {needle}')
@@ -54,15 +60,40 @@ def main() -> int:
         'trace-review-checklist.md',
         'run-repo-analysis-demo.sh',
         '.demo-artifacts/repo-analysis-demo/',
+        'operator-dashboard.html',
+        'bundle-summary.json',
+        'operator-handoff.json',
+        'bundle-checksums.txt',
     ]:
         if needle not in workflow_text:
             print(f'Repo analysis workflow does not mention required demo asset/operator cue: {needle}')
             return 1
 
     index_text = (REPO_ROOT / 'docs' / 'workflows' / 'README.md').read_text().lower()
-    for needle in ['repo analysis demo kit', 'run-repo-analysis-demo.sh', 'best current end-to-end showcase path']:
+    for needle in [
+        'repo analysis demo kit',
+        'run-repo-analysis-demo.sh',
+        'best current end-to-end showcase path',
+        'operator-dashboard.html',
+        'bundle-summary.json',
+        'operator-handoff.json',
+        'bundle-checksums.txt',
+    ]:
         if needle not in index_text:
             print(f'Workflow index is missing required showcase cue: {needle}')
+            return 1
+
+    script_text = (REPO_ROOT / 'rust' / 'scripts' / 'run-repo-analysis-demo.sh').read_text()
+    for needle in [
+        'bundle-summary.json',
+        'operator-handoff.json',
+        'operator-dashboard.html',
+        'bundle-checksums.txt',
+        '/trace replay <trace-file|approval-packet>',
+        '/trace resume <trace-file|approval-packet>',
+    ]:
+        if needle not in script_text:
+            print(f'run-repo-analysis-demo.sh is missing required lifecycle artifact or continuity command: {needle}')
             return 1
 
     print('Repo analysis demo validation passed.')

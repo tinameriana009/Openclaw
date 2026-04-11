@@ -24,3 +24,4 @@ Re-prompt if the trace shows:
 - confident architecture claims with weak file evidence
 - no test evidence for output-contract claims
 - no uncertainty callouts despite obvious ambiguity
+- a replay/resume pass that repeated the same claim without new file evidence

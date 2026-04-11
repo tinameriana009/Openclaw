@@ -35,6 +35,7 @@ That helper:
 - resumes the same session for the file-path follow-up
 - saves both responses under `.demo-artifacts/repo-analysis-demo/<timestamp>/`
 - stages `operator-session-template.md`, `next-prompt-template.md`, and a findings template alongside the run outputs
+- emits `bundle-summary.json`, `operator-handoff.json`, `bundle-checksums.txt`, and a static `operator-dashboard.html` so the next operator has a durable review/resume bundle
 - prints the next validation/trace-review steps instead of pretending the run is self-certifying
 
 Optional overrides:
@@ -68,8 +69,9 @@ If you want a richer reasoning trail, repeat with `PROFILE=deep` or `PROFILE=res
 2. Compare the answer against [`expected-findings.md`](expected-findings.md).
 3. Use [`manual-validation-checklist.md`](manual-validation-checklist.md) while reading the referenced files.
 4. Capture exact evidence, weak spots, and handoff notes in [`operator-session-template.md`](operator-session-template.md).
-5. If the model made a surprising jump, inspect the trace using [`trace-review-checklist.md`](trace-review-checklist.md).
-6. Turn the review into the next grounded question with [`next-prompt-template.md`](next-prompt-template.md).
+5. Open `operator-dashboard.html` or inspect `bundle-summary.json` / `operator-handoff.json` if you are handing the run to another operator or picking it back up later.
+6. If the model made a surprising jump, inspect the trace using [`trace-review-checklist.md`](trace-review-checklist.md).
+7. Turn the review into the next grounded question with [`next-prompt-template.md`](next-prompt-template.md).
 
 ## Fast local coherence check
 
@@ -80,3 +82,14 @@ python3 tests/validate_repo_analysis_demo.py
 ```
 
 That check only verifies the demo assets and doc wiring. It does **not** score model quality for you.
+
+## Review / resume continuity
+
+The staged run bundle is meant to survive operator handoff honestly:
+
+- `operator-dashboard.html` is a static on-disk dashboard for the run, not a live web UI.
+- `bundle-summary.json` lists the run profile, bundle files, and exact continuity commands.
+- `operator-handoff.json` captures the minimum payload another operator needs to continue review.
+- `bundle-checksums.txt` lets the next operator confirm the staged bundle was not silently changed.
+
+For a continued pass, prefer resuming the same session and grounding the next prompt in what you already verified manually. If you need the bounded trace lifecycle commands, use `/trace replay ...` and `/trace resume ...`; those preserve CLI continuity, but they still do **not** imply browser automation.

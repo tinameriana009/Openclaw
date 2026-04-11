@@ -61,7 +61,7 @@ Prompt templates live in [`../prompts/`](../prompts/).
 
 Starter example briefs live in [`../examples/`](../examples/).
 
-If you want the best current end-to-end showcase path, start with the repo analysis demo kit and its helper script in `rust/scripts/run-repo-analysis-demo.sh`. It stays closest to what the harness can genuinely do today: grounded local analysis, session resume, and trace review without pretending to drive an external GUI.
+If you want the best current end-to-end showcase path, start with the repo analysis demo kit and its helper script in `rust/scripts/run-repo-analysis-demo.sh`. It stays closest to what the harness can genuinely do today: grounded local analysis, session resume, trace review, and static handoff/dashboard artifacts without pretending to drive an external GUI.
 
 If you want one especially concrete operator path, start with one of these demo kits:
 
@@ -82,6 +82,7 @@ If you want one especially concrete operator path, start with one of these demo 
 - [`../examples/repo-analysis-demo/operator-session-template.md`](../examples/repo-analysis-demo/operator-session-template.md)
 - [`../examples/repo-analysis-demo/next-prompt-template.md`](../examples/repo-analysis-demo/next-prompt-template.md)
 - [`../examples/repo-analysis-demo/trace-review-checklist.md`](../examples/repo-analysis-demo/trace-review-checklist.md)
+- staged continuity artifacts: `.demo-artifacts/repo-analysis-demo/<timestamp>/{operator-dashboard.html,bundle-summary.json,operator-handoff.json,bundle-checksums.txt}`
 
 ### Unreal runtime telemetry demo kit
 

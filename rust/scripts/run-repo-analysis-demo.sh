@@ -16,6 +16,10 @@ TRACE_HINT="$RUN_DIR/next-steps.txt"
 SESSION_TEMPLATE="$RUN_DIR/operator-session-template.md"
 NEXT_PROMPT_TEMPLATE="$RUN_DIR/next-prompt-template.md"
 REPORT_TEMPLATE="$RUN_DIR/operator-findings-template.md"
+SUMMARY_JSON="$RUN_DIR/bundle-summary.json"
+CHECKSUMS="$RUN_DIR/bundle-checksums.txt"
+HANDOFF_JSON="$RUN_DIR/operator-handoff.json"
+DASHBOARD_HTML="$RUN_DIR/operator-dashboard.html"
 
 mkdir -p "$RUN_DIR"
 
@@ -61,6 +65,10 @@ run_dir=$RUN_DIR
 step1_output=$STEP1_OUT
 step2_output=$STEP2_OUT
 started_at_utc=$TIMESTAMP
+resume_command=./target/debug/claw --resume latest
+trace_summary_command=./target/debug/claw --resume latest /trace summary .claw/trace/<trace-file>
+replay_command=/trace replay <trace-file|approval-packet>
+resume_trace_command=/trace resume <trace-file|approval-packet>
 EOF
 
 echo "== Repo analysis demo =="
@@ -109,6 +117,12 @@ cat >"$REPORT_TEMPLATE" <<'EOF'
 - Trace file(s):
 - Missing evidence:
 
+## Replay / resume continuity
+- Exact resume command used next:
+- Exact trace summary command used next:
+- If re-running, what changed between passes?
+- Which prior claim should be challenged first?
+
 ## Recommended next prompt
 - 
 EOF
@@ -125,11 +139,14 @@ Review steps for this run:
    ./target/debug/claw --resume latest /trace summary .claw/trace/<trace-file>
 4. Use the staged next-prompt template for the next narrowed ask:
    $NEXT_PROMPT_TEMPLATE
-5. Re-run the demo validator if you changed docs/assets:
+5. If you intentionally want to re-run the approved trace path, use the current bounded commands:
+   /trace replay <trace-file|approval-packet>
+   /trace resume <trace-file|approval-packet>
+6. Re-run the demo validator if you changed docs/assets:
    python3 tests/validate_repo_analysis_demo.py
 
 This helper only runs the documented prompt flow and captures outputs.
-It does not certify answer quality or verify the repository automatically.
+It does not certify answer quality, drive a browser, or verify the repository automatically.
 EOF
 
 cat >"$RUN_DIR/bundle-manifest.txt" <<EOF
@@ -140,7 +157,149 @@ operator-session-template.md
 next-prompt-template.md
 operator-findings-template.md
 next-steps.txt
+bundle-summary.json
+operator-handoff.json
+operator-dashboard.html
+bundle-checksums.txt
 EOF
+
+python3 - <<PY
+from __future__ import annotations
+
+import html
+import json
+from pathlib import Path
+
+run_dir = Path(${RUN_DIR@Q})
+summary_path = Path(${SUMMARY_JSON@Q})
+handoff_path = Path(${HANDOFF_JSON@Q})
+dashboard_path = Path(${DASHBOARD_HTML@Q})
+manifest_entries = [
+    line.strip()
+    for line in (run_dir / 'bundle-manifest.txt').read_text().splitlines()
+    if line.strip()
+]
+summary = {
+    'workflow': 'repo-analysis-demo',
+    'generatedAtUtc': ${TIMESTAMP@Q},
+    'runDir': str(run_dir),
+    'profile': ${PROFILE@Q},
+    'validatorCommand': 'python3 tests/validate_repo_analysis_demo.py',
+    'runCommands': [
+        './target/debug/claw --profile ' + ${PROFILE@Q} + ' --corpus ../src --corpus ../tests prompt <brief>',
+        './target/debug/claw --resume latest prompt <follow-up>',
+    ],
+    'manualValidationRequired': True,
+    'bundleEntries': manifest_entries,
+    'operatorHandoffFiles': [
+        'operator-session-template.md',
+        'operator-findings-template.md',
+        'next-prompt-template.md',
+        'next-steps.txt',
+        'operator-dashboard.html',
+    ],
+    'continuityCommands': {
+        'resumeSession': './target/debug/claw --resume latest',
+        'traceSummary': './target/debug/claw --resume latest /trace summary .claw/trace/<trace-file>',
+        'traceReplay': '/trace replay <trace-file|approval-packet>',
+        'traceResume': '/trace resume <trace-file|approval-packet>',
+    },
+    'caveats': [
+        'This helper only runs the documented prompt flow and stages review artifacts.',
+        'It does not certify answer quality, drive a browser, or verify the repository automatically.',
+    ],
+}
+summary_path.write_text(json.dumps(summary, indent=2) + '\n')
+
+handoff = {
+    'workflow': 'repo-analysis-demo',
+    'generatedAtUtc': ${TIMESTAMP@Q},
+    'runDir': str(run_dir),
+    'profile': ${PROFILE@Q},
+    'initialResponse': '01-brief-response.txt',
+    'followupResponse': '02-followup-response.txt',
+    'operatorChecklist': 'docs/examples/repo-analysis-demo/manual-validation-checklist.md',
+    'operatorSessionTemplate': 'operator-session-template.md',
+    'operatorFindingsTemplate': 'operator-findings-template.md',
+    'nextPromptTemplate': 'next-prompt-template.md',
+    'operatorDashboard': 'operator-dashboard.html',
+    'operatorNextStep': 'Review the two responses against expected-findings.md, inspect any surprising trace claims, and continue the same session with a narrower evidence-backed prompt.',
+    'automationStatus': 'staged-review-and-resume-only',
+    'manualValidationRequired': True,
+}
+handoff_path.write_text(json.dumps(handoff, indent=2) + '\n')
+
+def esc(value: str) -> str:
+    return html.escape(value, quote=True)
+
+dashboard_html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Repo analysis operator dashboard</title>
+  <style>
+    body {{ font-family: system-ui, sans-serif; margin: 2rem; line-height: 1.5; background: #0f172a; color: #e2e8f0; }}
+    code, pre {{ font-family: ui-monospace, monospace; background: #111827; color: #e5e7eb; }}
+    code {{ padding: 0.1rem 0.3rem; border-radius: 0.25rem; }}
+    pre {{ padding: 0.9rem; border-radius: 0.5rem; overflow-x: auto; }}
+    a {{ color: #93c5fd; }}
+    .card {{ background: #111827; padding: 1rem 1.2rem; border-radius: 0.75rem; margin-bottom: 1rem; border: 1px solid #334155; }}
+    ul {{ padding-left: 1.2rem; }}
+  </style>
+</head>
+<body>
+  <h1>Repo analysis operator dashboard</h1>
+  <p>Static run bundle for review, replay, and resume continuity. This is an on-disk handoff artifact, not a live web app.</p>
+
+  <div class="card">
+    <h2>Run summary</h2>
+    <ul>
+      <li><strong>Generated at:</strong> {esc(${TIMESTAMP@Q})}</li>
+      <li><strong>Profile:</strong> {esc(${PROFILE@Q})}</li>
+      <li><strong>Run dir:</strong> <code>{esc(str(run_dir))}</code></li>
+      <li><strong>Initial response:</strong> <code>01-brief-response.txt</code></li>
+      <li><strong>Follow-up response:</strong> <code>02-followup-response.txt</code></li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Review flow</h2>
+    <ol>
+      <li>Compare both responses against <code>docs/examples/repo-analysis-demo/expected-findings.md</code>.</li>
+      <li>Use <code>docs/examples/repo-analysis-demo/manual-validation-checklist.md</code> for file spot-checks.</li>
+      <li>Capture evidence and weak claims in <code>operator-session-template.md</code> and <code>operator-findings-template.md</code>.</li>
+      <li>Inspect trace evidence if the model made a jump that the files do not justify.</li>
+      <li>Continue the same session with <code>next-prompt-template.md</code> instead of starting over.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h2>Continuity commands</h2>
+    <pre>./target/debug/claw --resume latest
+./target/debug/claw --resume latest /trace summary .claw/trace/&lt;trace-file&gt;
+/trace replay &lt;trace-file|approval-packet&gt;
+/trace resume &lt;trace-file|approval-packet&gt;</pre>
+    <p>Replay/resume here means bounded CLI continuity over saved traces and approval packets. It does <strong>not</strong> mean browser automation or a live operator UI.</p>
+  </div>
+
+  <div class="card">
+    <h2>Bundle files</h2>
+    <ul>
+      {''.join(f'<li><code>{esc(entry)}</code></li>' for entry in manifest_entries)}
+    </ul>
+  </div>
+</body>
+</html>
+'''
+dashboard_path.write_text(dashboard_html)
+PY
+
+(
+  cd "$RUN_DIR"
+  find . -type f ! -name "$(basename "$CHECKSUMS")" -print0 \
+    | sort -z \
+    | xargs -0 sha256sum >"$CHECKSUMS"
+)
 
 echo
 cat "$TRACE_HINT"
