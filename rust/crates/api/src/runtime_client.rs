@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use runtime::{ApiClient, ApiRequest, AssistantEvent, ConversationMessage, ContentBlock, MessageRole, RuntimeError};
+use runtime::{
+    ApiClient, ApiRequest, AssistantEvent, ContentBlock, ConversationMessage,
+    ConversationRuntime, MessageRole, PermissionPolicy, RuntimeError, Session, ToolExecutor,
+};
 
 use crate::{
     max_tokens_for_model, resolve_model_alias, ContentBlockDelta, InputContentBlock, InputMessage,
@@ -38,6 +41,29 @@ impl ProviderRuntimeApiClient {
     pub fn model(&self) -> &str {
         &self.model
     }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+pub fn build_provider_conversation_runtime<T>(
+    model: String,
+    tools: Vec<ToolDefinition>,
+    prompt_cache_namespace: &str,
+    tool_executor: T,
+    permission_policy: PermissionPolicy,
+    system_prompt: Vec<String>,
+) -> Result<ConversationRuntime<ProviderRuntimeApiClient, T>, String>
+where
+    T: ToolExecutor,
+{
+    let api_client = ProviderRuntimeApiClient::new(model, tools)?
+        .with_prompt_cache(prompt_cache_namespace);
+    Ok(ConversationRuntime::new(
+        Session::new(),
+        api_client,
+        tool_executor,
+        permission_policy,
+        system_prompt,
+    ))
 }
 
 impl ApiClient for ProviderRuntimeApiClient {

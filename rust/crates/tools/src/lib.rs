@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use api::{ProviderRuntimeApiClient, ToolDefinition};
+use api::{build_provider_conversation_runtime, ProviderRuntimeApiClient, ToolDefinition};
 #[cfg(test)]
 use api::{
     InputContentBlock, InputMessage, MessageResponse, OutputContentBlock, ProviderClient,
@@ -1877,16 +1877,14 @@ fn build_agent_runtime(
             input_schema: spec.input_schema,
         })
         .collect::<Vec<_>>();
-    let api_client = ProviderRuntimeApiClient::new(model, tools)?
-        .with_prompt_cache(&job.manifest.agent_id);
-    let tool_executor = SubagentToolExecutor::new(allowed_tools);
-    Ok(ConversationRuntime::new(
-        Session::new(),
-        api_client,
-        tool_executor,
+    build_provider_conversation_runtime(
+        model,
+        tools,
+        &job.manifest.agent_id,
+        SubagentToolExecutor::new(allowed_tools),
         agent_permission_policy(),
         job.system_prompt.clone(),
-    ))
+    )
 }
 
 fn build_agent_system_prompt(subagent_type: &str) -> Result<Vec<String>, String> {
