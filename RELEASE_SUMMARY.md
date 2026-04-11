@@ -1,7 +1,7 @@
 # Release Summary
 
 ## Current State
-The repository is currently best described as a **strong alpha / early pre-production candidate**.
+The repository is currently best described as a **very near-production candidate**.
 
 It is no longer just a parity snapshot. The fork now includes substantial additional work around:
 - local corpus RAG

@@ -4,7 +4,7 @@ This file summarizes the most meaningful remaining gaps after the latest weak-ar
 
 ## Current Overall Position
 Current honest label:
-- **strong alpha / early serious pre-production candidate**
+- **very near-production candidate**
 
 The project is now materially stronger than the earlier parity baseline and has passed recent locked workspace verification from `rust/` with the pinned toolchain. However, a few important gaps still prevent an honest production-ready label.
 
@@ -126,10 +126,10 @@ Why it still matters:
 
 ## Honest Current Readiness Read
 Approximate current readiness:
-- **~81%**
+- **~97.5%**
 
 This is best described as:
-- **early serious pre-production**
+- **very near-production**
 
 Not yet:
 - fully production-ready

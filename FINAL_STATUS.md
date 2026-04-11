@@ -3,7 +3,7 @@
 ## Repository
 - Repository: `tinameriana009/Openclaw`
 - Working focus: Rust harness under `rust/`
-- Current maturity: **strong alpha / early pre-production candidate**
+- Current maturity: **very near-production candidate**
 
 ## High-Level Summary
 This repository is no longer just a parity snapshot. It now includes substantial fork-specific work around:

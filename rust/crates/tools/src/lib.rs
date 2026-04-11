@@ -6,19 +6,19 @@ use std::time::{Duration, Instant};
 use api::{ProviderRuntimeApiClient, ToolDefinition};
 #[cfg(test)]
 use api::{
-    InputContentBlock, InputMessage, MessageResponse, OutputContentBlock, PromptCache,
-    ProviderClient, ToolResultContentBlock,
+    InputContentBlock, InputMessage, MessageResponse, OutputContentBlock, ProviderClient,
+    ToolResultContentBlock,
 };
 use plugins::PluginTool;
 use reqwest::blocking::Client;
 use runtime::{
     edit_file, execute_bash, glob_search, grep_search, inspect_corpus, load_system_prompt,
     read_file, search_corpus, slice_corpus, write_file, BashCommandInput, ContentBlock,
-    ConversationRuntime, GrepSearchInput, PermissionMode, PermissionPolicy, PromptCacheEvent,
-    Session, ToolError, ToolExecutor,
+    ConversationRuntime, GrepSearchInput, PermissionMode, PermissionPolicy, Session, ToolError,
+    ToolExecutor,
 };
 #[cfg(test)]
-use runtime::{AssistantEvent, ConversationMessage, MessageRole};
+use runtime::{AssistantEvent, ConversationMessage, MessageRole, PromptCacheEvent};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -2078,6 +2078,7 @@ fn tool_specs_for_allowed_tools(allowed_tools: Option<&BTreeSet<String>>) -> Vec
 }
 
 #[cfg(test)]
+#[cfg(test)]
 fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
     messages
         .iter()
@@ -2175,6 +2176,7 @@ fn push_prompt_cache_record(client: &ProviderClient, events: &mut Vec<AssistantE
     }
 }
 
+#[cfg(test)]
 fn prompt_cache_record_to_runtime_event(
     record: api::PromptCacheRecord,
 ) -> Option<PromptCacheEvent> {

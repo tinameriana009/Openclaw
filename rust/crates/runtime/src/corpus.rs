@@ -1694,7 +1694,6 @@ fn chunk_document(
     let mut start = 0usize;
     let mut ordinal = 0u32;
     let bytes = text.as_bytes();
-    let mut active_heading = default_heading.clone();
     let mut heading_stack = default_heading
         .into_iter()
         .map(|heading| (1_u8, heading))
@@ -1737,7 +1736,7 @@ fn chunk_document(
                 heading_stack.clear();
                 heading_stack.push((1, latest.to_string()));
             }
-            active_heading = heading_stack.last().map(|(_, heading)| heading.clone());
+            let active_heading = heading_stack.last().map(|(_, heading)| heading.clone());
             let outline_path = heading_stack
                 .iter()
                 .map(|(_, heading)| heading.clone())
