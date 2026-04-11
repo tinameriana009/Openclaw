@@ -949,15 +949,68 @@ pub fn search_corpus_manifest(
             let mut matched_tokens = 0usize;
             let mut in_order = true;
             let mut cursor = 0usize;
+            let normalized_preview = normalize_for_match(&preview_lower);
+            let normalized_path_spaced = normalized_path.clone();
+            let normalized_root_spaced = normalized_source_root.clone();
+            let normalized_heading_text = normalized_headings.clone();
+            let normalized_outline_text = normalized_outline.clone();
             for token in &tokens {
-                let body_hits = count_occurrences(&body, token);
-                let preview_hits = count_occurrences(&preview_lower, token);
-                let path_hit = path_lower.contains(token);
-                let root_hit = source_root_lower.contains(token);
-                let heading_hit = heading_text.contains(token);
-                let chunk_heading_hit = chunk_heading_lower.contains(token);
-                let root_name_hit = root_basename_lower.contains(token);
-                let outline_hit = outline_text_lower.contains(token);
+                let boundary_preferred = prefers_boundary_matching(token);
+                let exact_body_hits = count_normalized_token_occurrences(&normalized_body, token);
+                let exact_preview_hits =
+                    count_normalized_token_occurrences(&normalized_preview, token);
+                let exact_path_hits =
+                    count_normalized_token_occurrences(&normalized_path_spaced, token);
+                let exact_root_hits =
+                    count_normalized_token_occurrences(&normalized_root_spaced, token);
+                let exact_heading_hits =
+                    count_normalized_token_occurrences(&normalized_heading_text, token);
+                let exact_chunk_heading_hits =
+                    count_normalized_token_occurrences(&normalized_chunk_heading, token);
+                let exact_outline_hits =
+                    count_normalized_token_occurrences(&normalized_outline_text, token);
+                let exact_root_name_hits =
+                    count_normalized_token_occurrences(&normalized_root_basename, token);
+                let body_hits = if boundary_preferred {
+                    exact_body_hits
+                } else {
+                    count_occurrences(&body, token)
+                };
+                let preview_hits = if boundary_preferred {
+                    exact_preview_hits
+                } else {
+                    count_occurrences(&preview_lower, token)
+                };
+                let path_hit = if boundary_preferred {
+                    exact_path_hits > 0
+                } else {
+                    path_lower.contains(token)
+                };
+                let root_hit = if boundary_preferred {
+                    exact_root_hits > 0
+                } else {
+                    source_root_lower.contains(token)
+                };
+                let heading_hit = if boundary_preferred {
+                    exact_heading_hits > 0
+                } else {
+                    heading_text.contains(token)
+                };
+                let chunk_heading_hit = if boundary_preferred {
+                    exact_chunk_heading_hits > 0
+                } else {
+                    chunk_heading_lower.contains(token)
+                };
+                let root_name_hit = if boundary_preferred {
+                    exact_root_name_hits > 0
+                } else {
+                    root_basename_lower.contains(token)
+                };
+                let outline_hit = if boundary_preferred {
+                    exact_outline_hits > 0
+                } else {
+                    outline_text_lower.contains(token)
+                };
                 let normalized_token = normalize_for_match(token).replace(' ', "");
                 let compact_body_hit = normalized_token.len() >= 4
                     && !normalized_token.is_empty()
@@ -2754,6 +2807,19 @@ fn count_occurrences(haystack: &str, needle: &str) -> usize {
     haystack.match_indices(needle).count()
 }
 
+fn count_normalized_token_occurrences(haystack: &str, needle: &str) -> usize {
+    if haystack.is_empty() || needle.is_empty() {
+        return 0;
+    }
+    let padded_haystack = format!(" {haystack} ");
+    let padded_needle = format!(" {needle} ");
+    padded_haystack.match_indices(&padded_needle).count()
+}
+
+fn prefers_boundary_matching(token: &str) -> bool {
+    token.len() <= 4 && token.chars().all(|ch| ch.is_ascii_alphabetic())
+}
+
 fn minimum_term_span(haystack: &str, tokens: &[String]) -> Option<usize> {
     if tokens.is_empty() {
         return None;
@@ -4401,6 +4467,46 @@ This architecture guide explains platform flow, session handling, token exchange
         assert!(
             top_hit.path.starts_with("auth/"),
             "expected a specific auth document to rank first ahead of generic architecture overlap: {:#?}",
+            result.hits
+        );
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_avoids_short_token_substring_false_positives_for_auth_queries() {
+        let cwd = temp_dir("workspace-auth-boundary-matching");
+        let root = cwd.join("docs");
+        fs::create_dir_all(root.join("auth")).expect("mkdir auth docs");
+        fs::create_dir_all(root.join("writing")).expect("mkdir writing docs");
+        fs::write(
+            root.join("auth/session-flow.md"),
+            "# Auth Session Flow\n\nAuth session token refresh and login callback handling live here.\n",
+        )
+        .expect("write auth doc");
+        fs::write(
+            root.join("writing/author-guide.md"),
+            "# Author Guide\n\nAuthor workflow, authoring checklist, and editorial review notes.\n",
+        )
+        .expect("write distractor doc");
+
+        let manifest = attach_corpus(&cwd, &[root.clone()], CorpusAttachOptions::default())
+            .expect("attach corpus");
+        let result = search_corpus(&cwd, &manifest.corpus_id, "auth flow", 5, None)
+            .expect("search");
+
+        let top_hit = result.hits.first().expect("expected at least one hit");
+        assert_eq!(top_hit.path, "auth/session-flow.md", "expected auth doc to outrank author-guide substring overlap: {:#?}", result.hits);
+        let author_rank = result
+            .hits
+            .iter()
+            .position(|hit| hit.path == "writing/author-guide.md");
+        assert!(
+            match author_rank {
+                Some(index) => index > 0,
+                None => true,
+            },
+            "expected author-guide to rank below the auth hit when query uses short token boundaries: {:#?}",
             result.hits
         );
 
