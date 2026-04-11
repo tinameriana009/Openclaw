@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import math
 import re
 from collections import Counter
 from dataclasses import dataclass
+from functools import lru_cache
 
 from .commands import PORTED_COMMANDS
 from .context import PortContext, build_port_context, render_context
@@ -115,15 +117,25 @@ class PortRuntime:
         }
 
         selected: list[RoutedMatch] = []
+        family_counts: Counter[tuple[str, str]] = Counter()
         for kind in ('command', 'tool'):
             if by_kind[kind]:
-                selected.append(by_kind[kind].pop(0))
+                match = by_kind[kind].pop(0)
+                selected.append(match)
+                family_counts[(kind, self._family_key(match.source_hint))] += 1
 
         leftovers = sorted(
             [match for matches in by_kind.values() for match in matches],
             key=lambda item: (-item.score, item.kind, item.name),
         )
-        selected.extend(leftovers[: max(0, limit - len(selected))])
+        for match in leftovers:
+            if len(selected) >= limit:
+                break
+            family_key = (match.kind, self._family_key(match.source_hint))
+            if family_counts[family_key] >= 2:
+                continue
+            selected.append(match)
+            family_counts[family_key] += 1
         return selected[:limit]
 
     def bootstrap_session(self, prompt: str, limit: int = 5) -> RuntimeSession:
@@ -254,40 +266,45 @@ class PortRuntime:
         name_tokens = cls._normalize_text(module.name)
         path_tokens = cls._normalize_text(module.source_hint)
         responsibility_tokens = cls._normalize_text(module.responsibility)
-        evidence_sets = (name_tokens, path_tokens, responsibility_tokens)
+        basename_tokens = cls._normalize_text(cls._basename_without_extension(module.source_hint))
+        source_parts = [part for part in module.source_hint.split('/') if part]
+        parent_tokens = cls._normalize_text(source_parts[-2]) if len(source_parts) >= 2 else Counter()
+        evidence_sets = (name_tokens, basename_tokens, parent_tokens, path_tokens, responsibility_tokens)
+        corpus_stats = cls._corpus_stats()
         score = 0
         matched_sets = 0
 
         for evidence in evidence_sets:
             evidence_score = 0
             for token, weight in query_tokens.items():
+                token_weight = cls._token_rarity_weight(token, corpus_stats)
                 if token in evidence:
-                    evidence_score += 5 * min(weight, evidence[token])
+                    evidence_score += math.ceil(5 * token_weight) * min(weight, evidence[token])
                     continue
                 if any(token in candidate or candidate in token for candidate in evidence):
-                    evidence_score += 2
+                    evidence_score += max(1, math.ceil(2 * token_weight))
             if evidence_score:
                 matched_sets += 1
                 score += evidence_score
 
         overlap = set(query_tokens) & set(name_tokens)
-        score += len(overlap) * 4
+        score += sum(math.ceil(4 * cls._token_rarity_weight(token, corpus_stats)) for token in overlap)
 
         query_bigrams = cls._bigrams(query_tokens)
         if query_bigrams:
             score += 3 * len(query_bigrams & cls._bigrams(name_tokens))
+            score += 3 * len(query_bigrams & cls._bigrams(basename_tokens))
             score += 2 * len(query_bigrams & cls._bigrams(path_tokens))
 
         if matched_sets >= 2:
             score += 4
-        if matched_sets == 3:
-            score += 2
+        if matched_sets >= 4:
+            score += 4
 
-        source_parts = [part for part in module.source_hint.split('/') if part]
-        if len(source_parts) >= 2:
-            parent = cls._normalize_text(source_parts[-2])
-            if set(query_tokens) & set(parent):
-                score += 4
+        if set(query_tokens) & set(parent_tokens):
+            score += 6
+        if set(query_tokens) & set(basename_tokens):
+            score += 10
 
         if name_tokens and any(token == module.name.lower() for token in query_tokens):
             score += 6
@@ -296,6 +313,8 @@ class PortRuntime:
             lead_token = ordered_query_tokens[0]
             if lead_token in name_tokens:
                 score += 18 if kind == 'command' else 8
+            elif lead_token in basename_tokens:
+                score += 12 if kind == 'command' else 8
             elif lead_token in path_tokens:
                 score += 8 if kind == 'command' else 4
 
@@ -305,3 +324,40 @@ class PortRuntime:
     def _bigrams(tokens: Counter[str]) -> set[str]:
         ordered = list(tokens)
         return {f'{ordered[index]}::{ordered[index + 1]}' for index in range(len(ordered) - 1)}
+
+    @staticmethod
+    def _basename_without_extension(source_hint: str) -> str:
+        basename = source_hint.rsplit('/', 1)[-1]
+        return basename.split('.', 1)[0]
+
+    @staticmethod
+    def _family_key(source_hint: str) -> str:
+        parts = [part for part in source_hint.split('/') if part]
+        if len(parts) >= 2:
+            return '/'.join(parts[:2])
+        return source_hint
+
+    @classmethod
+    @lru_cache(maxsize=1)
+    def _corpus_stats(cls) -> Counter[str]:
+        stats: Counter[str] = Counter()
+        for module in (*PORTED_COMMANDS, *PORTED_TOOLS):
+            tokens = set(cls._normalize_text(module.name))
+            tokens |= set(cls._normalize_text(module.source_hint))
+            tokens |= set(cls._normalize_text(module.responsibility))
+            for token in tokens:
+                stats[token] += 1
+        return stats
+
+    @staticmethod
+    def _token_rarity_weight(token: str, corpus_stats: Counter[str]) -> float:
+        doc_freq = corpus_stats.get(token, 0)
+        if doc_freq <= 1:
+            return 2.4
+        if doc_freq <= 3:
+            return 1.9
+        if doc_freq <= 8:
+            return 1.5
+        if doc_freq <= 20:
+            return 1.2
+        return 1.0

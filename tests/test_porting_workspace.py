@@ -116,6 +116,28 @@ class PortingWorkspaceTests(unittest.TestCase):
         tool_names = [match.name for match in matches if match.kind == 'tool']
         self.assertIn('ToolSearchTool', tool_names)
 
+    def test_route_boosts_identifier_specific_tool_matches(self) -> None:
+        from src.runtime import PortRuntime
+
+        matches = PortRuntime().route_prompt('bash security permissions', limit=5)
+        tool_names = [match.name for match in matches if match.kind == 'tool']
+        self.assertIn('bashSecurity', tool_names)
+        self.assertIn('bashPermissions', tool_names)
+        self.assertLess(tool_names.index('bashSecurity'), tool_names.index('powershellPermissions'))
+        self.assertLess(tool_names.index('bashPermissions'), tool_names.index('powershellPermissions'))
+
+    def test_route_diversifies_tool_families_in_top_results(self) -> None:
+        from src.runtime import PortRuntime
+
+        matches = PortRuntime().route_prompt('find tools for lookup', limit=5)
+        source_hints = [match.source_hint for match in matches if match.kind == 'tool']
+        family_counts: dict[str, int] = {}
+        for source_hint in source_hints:
+            family = '/'.join(source_hint.split('/')[:2])
+            family_counts[family] = family_counts.get(family, 0) + 1
+        self.assertTrue(family_counts)
+        self.assertTrue(all(count <= 2 for count in family_counts.values()))
+
     def test_bootstrap_cli_runs(self) -> None:
         result = subprocess.run(
             [sys.executable, '-m', 'src.main', 'bootstrap', 'review MCP tool', '--limit', '5'],
