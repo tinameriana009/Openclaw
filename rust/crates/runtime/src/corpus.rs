@@ -1238,7 +1238,10 @@ pub fn search_corpus_manifest(
                 ));
             }
             if let Some(span) = minimum_term_span(&normalized_body, &tokens) {
-                if span <= 48 {
+                if span <= 24 {
+                    score += 4.2;
+                    reasons.push(format!("tight-span:{span}"));
+                } else if span <= 48 {
                     score += 3.0;
                     reasons.push(format!("tight-span:{span}"));
                 } else if span <= 96 {
@@ -2743,14 +2746,45 @@ fn count_occurrences(haystack: &str, needle: &str) -> usize {
 }
 
 fn minimum_term_span(haystack: &str, tokens: &[String]) -> Option<usize> {
-    let mut positions = Vec::new();
-    for token in tokens {
-        let position = haystack.find(token)?;
-        positions.push((position, position + token.len()));
+    if tokens.is_empty() {
+        return None;
     }
-    let start = positions.iter().map(|(start, _)| *start).min()?;
-    let end = positions.iter().map(|(_, end)| *end).max()?;
-    Some(end.saturating_sub(start))
+
+    let occurrences = tokens
+        .iter()
+        .map(|token| {
+            haystack
+                .match_indices(token)
+                .map(|(start, _)| (start, start + token.len()))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    if occurrences.iter().any(Vec::is_empty) {
+        return None;
+    }
+
+    let mut best_span = usize::MAX;
+    for (token_index, token_occurrences) in occurrences.iter().enumerate() {
+        for &(anchor_start, anchor_end) in token_occurrences {
+            let mut min_start = anchor_start;
+            let mut max_end = anchor_end;
+            for (other_index, other_occurrences) in occurrences.iter().enumerate() {
+                if other_index == token_index {
+                    continue;
+                }
+                let &(candidate_start, candidate_end) = other_occurrences
+                    .iter()
+                    .min_by_key(|&&(start, end)| {
+                        anchor_start.abs_diff(start) + anchor_end.abs_diff(end)
+                    })?;
+                min_start = min_start.min(candidate_start);
+                max_end = max_end.max(candidate_end);
+            }
+            best_span = best_span.min(max_end.saturating_sub(min_start));
+        }
+    }
+
+    (best_span != usize::MAX).then_some(best_span)
 }
 
 fn normalize_for_match(value: &str) -> String {
@@ -3225,6 +3259,34 @@ mod tests {
         assert!(result.hits[0].reason.contains("content:raretokenx1@"));
         assert_eq!(result.hits.len(), 3);
         assert_ne!(result.hits[0].document_id, result.hits[1].document_id);
+
+        let _ = fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn search_prefers_best_local_term_window_over_first_occurrence_span() {
+        let cwd = temp_dir("workspace-local-window-ranking");
+        let root = cwd.join("docs");
+        fs::create_dir_all(&root).expect("mkdir");
+        fs::write(
+            root.join("clustered.md"),
+            "# Guide\nalpha preface text far away from the real answer\nthen filler words keep going for a while\nfinally alpha beta gamma appear together in one tight window\n",
+        )
+        .expect("write clustered");
+        fs::write(
+            root.join("spread.md"),
+            "# Guide\nalpha appears early in this document\nthen a long explanatory detour keeps terms separated for ranking\nbeta shows up later after more filler text\nand gamma only appears near the end\n",
+        )
+        .expect("write spread");
+
+        let manifest = attach_corpus(&cwd, &[root.clone()], CorpusAttachOptions::default())
+            .expect("attach corpus");
+        let result = search_corpus(&cwd, &manifest.corpus_id, "alpha beta gamma", 5, None)
+            .expect("search");
+
+        assert_eq!(result.hits[0].path, "clustered.md");
+        assert!(result.hits[0].reason.contains("tight-span:"));
+        assert!(result.hits.iter().any(|hit| hit.path == "spread.md"));
 
         let _ = fs::remove_dir_all(cwd);
     }
