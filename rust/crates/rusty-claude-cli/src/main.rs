@@ -24,13 +24,14 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use api::{
+    build_provider_conversation_runtime_with_features_and_observer_for_session,
     collect_minimal_web_evidence, format_provider_child_init_reason,
     render_extractive_child_answer, resolve_provider_child_model,
     resolve_runtime_provider_child_auth, resolve_startup_auth_source,
     run_runtime_configured_provider_recursive_query, AnthropicClient, ApiError, AuthSource,
-    MessageResponse, NoopProviderRuntimeObserver, OutputContentBlock, PromptCache,
-    ProviderClient, ProviderRuntimeApiClient, ProviderRuntimeObserver,
-    StreamEvent as ApiStreamEvent, ToolDefinition,
+    MessageResponse, NoopProviderRuntimeObserver, OutputContentBlock, PromptCache, ProviderClient,
+    ProviderRuntimeApiClient, ProviderRuntimeObserver, StreamEvent as ApiStreamEvent,
+    ToolDefinition,
 };
 
 use commands::{
@@ -1531,12 +1532,14 @@ fn approve_trace_for_operator(
 ) -> Result<String, Box<dyn std::error::Error>> {
     let artifact = create_web_approval_artifacts(trace_target, cwd, session_path)?;
     Ok(format!(
-        "Trace approval\n  Result           approval packet recorded\n  Trace            {}\n  Packet           {}\n  Review JSON      {}\n  Review Markdown  {}\n  Review HTML      {}\n  Review Index JSON {}\n  Review Index MD  {}\n  Review Index HTML {}\n  Pending queries  {}\n  Replay command   {}\n  Replay trace     /trace replay {}\n  Resume trace     /trace resume {}\n  Note             browser automation is still not available; rerun explicitly after approval or use /trace resume for a bounded approve-and-rerun loop",
+        "Trace approval\n  Result           approval packet recorded\n  Trace            {}\n  Packet           {}\n  Review JSON      {}\n  Review Markdown  {}\n  Review HTML      {}\n  Review Status    {}\n  Review Log       {}\n  Review Index JSON {}\n  Review Index MD  {}\n  Review Index HTML {}\n  Pending queries  {}\n  Replay command   {}\n  Replay trace     /trace replay {}\n  Resume trace     /trace resume {}\n  Note             browser automation is still not available; rerun explicitly after approval or use /trace resume for a bounded approve-and-rerun loop",
         artifact.trace_path.display(),
         artifact.packet_path.display(),
         artifact.review_json_path.display(),
         artifact.review_markdown_path.display(),
         artifact.review_html_path.display(),
+        artifact.review_status_path.display(),
+        artifact.review_log_path.display(),
         artifact.review_index_json_path.display(),
         artifact.review_index_markdown_path.display(),
         artifact.review_index_html_path.display(),
@@ -1576,6 +1579,8 @@ struct WebApprovalArtifacts {
     review_json_path: PathBuf,
     review_markdown_path: PathBuf,
     review_html_path: PathBuf,
+    review_status_path: PathBuf,
+    review_log_path: PathBuf,
     review_index_json_path: PathBuf,
     review_index_markdown_path: PathBuf,
     review_index_html_path: PathBuf,
@@ -1591,6 +1596,14 @@ fn approval_packet_review_markdown_path(packet_path: &Path) -> PathBuf {
 
 fn approval_packet_review_html_path(packet_path: &Path) -> PathBuf {
     packet_path.with_extension("review.html")
+}
+
+fn approval_packet_review_status_path(packet_path: &Path) -> PathBuf {
+    packet_path.with_extension("review-status.json")
+}
+
+fn approval_packet_review_log_path(packet_path: &Path) -> PathBuf {
+    packet_path.with_extension("review-log.md")
 }
 
 fn approval_review_index_json_path(cwd: &Path) -> PathBuf {
@@ -1744,6 +1757,10 @@ fn render_web_approval_dashboard_html(index_value: &JsonValue) -> String {
                 let review_command = html_escape(entry["reviewCommand"].as_str().unwrap_or("/trace review <approval-packet>"));
                 let replay_command = html_escape(entry["replayTraceCommand"].as_str().unwrap_or("/trace replay <approval-packet>"));
                 let resume_command = html_escape(entry["resumeTraceCommand"].as_str().unwrap_or("/trace resume <approval-packet>"));
+                let review_status = html_escape(entry["reviewStatusPath"].as_str().unwrap_or("missing"));
+                let review_log = html_escape(entry["reviewLogPath"].as_str().unwrap_or("missing"));
+                let replay_count = entry["replayCount"].as_u64().unwrap_or(0);
+                let history_entries = entry["historyEntries"].as_u64().unwrap_or(0);
                 let pending = entry["pendingQueries"].as_array().map(|queries| {
                     let items = queries.iter().filter_map(|value| value.as_str()).map(|value| format!("<li><code>{}</code></li>", html_escape(value))).collect::<Vec<_>>().join("");
                     if items.is_empty() { "<li>none</li>".to_string() } else { items }
@@ -1760,16 +1777,39 @@ fn render_web_approval_dashboard_html(index_value: &JsonValue) -> String {
         captured = summary["rerunCaptured"].as_u64().unwrap_or(0),
         missing_trace = summary["rerunMissingTrace"].as_u64().unwrap_or(0),
         pending_queries = summary["pendingQueries"].as_u64().unwrap_or(0),
+        replay_count = summary["replayCount"].as_u64().unwrap_or(0),
         entry_cards = entry_cards,
     )
 }
 
 fn resolve_trace_target_path(trace_target: &str, cwd: &Path) -> PathBuf {
-    if Path::new(trace_target).is_absolute() {
-        PathBuf::from(trace_target)
-    } else {
-        cwd.join(trace_target)
+    let candidate = Path::new(trace_target);
+    if candidate.is_absolute() {
+        return candidate.to_path_buf();
     }
+    let cwd_candidate = cwd.join(trace_target);
+    if cwd_candidate.exists()
+        || trace_target.contains(std::path::MAIN_SEPARATOR)
+        || trace_target.ends_with(".json")
+    {
+        return cwd_candidate;
+    }
+    let trace_id = trace_target.trim();
+    let approval_packet = cwd
+        .join(".claw")
+        .join("web-approvals")
+        .join(format!("{trace_id}.json"));
+    if approval_packet.exists() {
+        return approval_packet;
+    }
+    let trace_path = cwd
+        .join(".claw")
+        .join("trace")
+        .join(format!("{trace_id}.json"));
+    if trace_path.exists() {
+        return trace_path;
+    }
+    cwd_candidate
 }
 
 fn approval_packet_path_for_trace(
@@ -1837,6 +1877,8 @@ fn load_or_create_web_approval_packet(
         let review_json_path = approval_packet_review_json_path(&packet_path);
         let review_markdown_path = approval_packet_review_markdown_path(&packet_path);
         let review_html_path = approval_packet_review_html_path(&packet_path);
+        let review_status_path = approval_packet_review_status_path(&packet_path);
+        let review_log_path = approval_packet_review_log_path(&packet_path);
         let (review_index_json_path, review_index_markdown_path, review_index_html_path) =
             refresh_web_approval_review_index(cwd)?;
         return Ok(WebApprovalArtifacts {
@@ -1846,12 +1888,112 @@ fn load_or_create_web_approval_packet(
             review_json_path,
             review_markdown_path,
             review_html_path,
+            review_status_path,
+            review_log_path,
             review_index_json_path,
             review_index_markdown_path,
             review_index_html_path,
         });
     }
     create_web_approval_artifacts(target, cwd, session_path)
+}
+
+fn append_review_lifecycle_entry(
+    packet: &WebApprovalPacket,
+    packet_path: &Path,
+    original_trace_path: &Path,
+    replay_trace_path: Option<&Path>,
+    operator_state: &str,
+    next_step: &str,
+) -> Result<(PathBuf, PathBuf), Box<dyn std::error::Error>> {
+    let review_status_path = approval_packet_review_status_path(packet_path);
+    let review_log_path = approval_packet_review_log_path(packet_path);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis();
+    let mut history = if review_status_path.exists() {
+        let current: JsonValue = serde_json::from_str(&fs::read_to_string(&review_status_path)?)?;
+        current["history"].as_array().cloned().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    history.push(json!({
+        "recordedAtMs": now_ms,
+        "operatorState": operator_state,
+        "nextStep": next_step,
+        "approvalPacket": packet_path.display().to_string(),
+        "originalTrace": original_trace_path.display().to_string(),
+        "replayTrace": replay_trace_path.map(|path| path.display().to_string()),
+        "pendingQueries": packet.pending_queries,
+    }));
+    let replay_count = history
+        .iter()
+        .filter(|entry| entry["replayTrace"].as_str().is_some())
+        .count();
+    let review_status = json!({
+        "schemaVersion": 1,
+        "traceId": packet.trace_id,
+        "sessionId": packet.session_id,
+        "corpusId": packet.corpus_id,
+        "task": packet.task,
+        "approvalPacket": packet_path.display().to_string(),
+        "originalTrace": original_trace_path.display().to_string(),
+        "latestOperatorState": operator_state,
+        "latestNextStep": next_step,
+        "approvedAtMs": packet.approved_at_ms,
+        "updatedAtMs": now_ms,
+        "pendingQueries": packet.pending_queries,
+        "replayCount": replay_count,
+        "latestReplayTrace": replay_trace_path.map(|path| path.display().to_string()),
+        "history": history,
+    });
+    fs::write(
+        &review_status_path,
+        serde_json::to_string_pretty(&review_status)?,
+    )?;
+
+    let mut lines = vec![
+        "# Web approval lifecycle log".to_string(),
+        "".to_string(),
+        format!("- Trace ID: `{}`", packet.trace_id),
+        format!("- Approval packet: `{}`", packet_path.display()),
+        format!("- Original trace: `{}`", original_trace_path.display()),
+        format!("- Latest operator state: {}", operator_state),
+        format!("- Replay count: {}", replay_count),
+        "".to_string(),
+        "## History".to_string(),
+        "".to_string(),
+    ];
+    for entry in review_status["history"].as_array().into_iter().flatten() {
+        lines.push(format!(
+            "- `{}` — {}",
+            entry["recordedAtMs"].as_u64().unwrap_or(0),
+            entry["operatorState"].as_str().unwrap_or("unknown")
+        ));
+        lines.push(format!(
+            "  - next: {}",
+            entry["nextStep"].as_str().unwrap_or("inspect review state")
+        ));
+        if let Some(replay_trace) = entry["replayTrace"].as_str() {
+            lines.push(format!("  - replay trace: {}", replay_trace));
+        }
+        let pending = entry["pendingQueries"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<_>>();
+        if !pending.is_empty() {
+            lines.push(format!("  - pending queries: {}", pending.join(" | ")));
+        }
+    }
+    lines.push("".to_string());
+    lines.push(
+        "Static lifecycle log only; browser automation and live web controls do not exist yet."
+            .to_string(),
+    );
+    fs::write(&review_log_path, lines.join("\n"))?;
+    Ok((review_status_path, review_log_path))
 }
 
 fn create_web_approval_artifacts(
@@ -1935,6 +2077,8 @@ fn create_web_approval_artifacts(
     let review_json_path = approval_packet_review_json_path(&packet_path);
     let review_markdown_path = approval_packet_review_markdown_path(&packet_path);
     let review_html_path = approval_packet_review_html_path(&packet_path);
+    let review_status_path = approval_packet_review_status_path(&packet_path);
+    let review_log_path = approval_packet_review_log_path(&packet_path);
     let operator_state = "approved for explicit rerun";
     let next_step = "run /trace replay <trace-file> for a bounded rerun, or /trace resume <trace-file> to approve and rerun in one step";
     let review_json = json!({
@@ -1982,6 +2126,14 @@ fn create_web_approval_artifacts(
             next_step,
         ),
     )?;
+    let (review_status_path, review_log_path) = append_review_lifecycle_entry(
+        &packet,
+        &packet_path,
+        &trace_path,
+        None,
+        operator_state,
+        next_step,
+    )?;
     let (review_index_json_path, review_index_markdown_path, review_index_html_path) =
         refresh_web_approval_review_index(cwd)?;
     Ok(WebApprovalArtifacts {
@@ -1991,6 +2143,8 @@ fn create_web_approval_artifacts(
         review_json_path,
         review_markdown_path,
         review_html_path,
+        review_status_path,
+        review_log_path,
         review_index_json_path,
         review_index_markdown_path,
         review_index_html_path,
@@ -2018,7 +2172,27 @@ fn refresh_web_approval_review_index(
         .filter(|path| path.file_name().and_then(|v| v.to_str()) != Some("index.review"))
         .filter_map(|path| {
             let text = fs::read_to_string(path).ok()?;
-            let value: JsonValue = serde_json::from_str(&text).ok()?;
+            let mut value: JsonValue = serde_json::from_str(&text).ok()?;
+            let packet_path = value["approvalPacket"]
+                .as_str()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| path.with_extension("json"));
+            let review_status_path = approval_packet_review_status_path(&packet_path);
+            let review_log_path = approval_packet_review_log_path(&packet_path);
+            value["reviewStatusPath"] = JsonValue::String(review_status_path.display().to_string());
+            value["reviewLogPath"] = JsonValue::String(review_log_path.display().to_string());
+            if let Ok(status_text) = fs::read_to_string(&review_status_path) {
+                if let Ok(status_value) = serde_json::from_str::<JsonValue>(&status_text) {
+                    value["replayCount"] = status_value["replayCount"].clone();
+                    value["updatedAtMs"] = status_value["updatedAtMs"].clone();
+                    value["historyEntries"] = JsonValue::from(
+                        status_value["history"]
+                            .as_array()
+                            .map(|v| v.len())
+                            .unwrap_or(0),
+                    );
+                }
+            }
             Some(value)
         })
         .collect::<Vec<_>>();
@@ -2060,6 +2234,7 @@ fn refresh_web_approval_review_index(
             "rerunCaptured": rerun_captured,
             "rerunMissingTrace": rerun_missing_trace,
             "pendingQueries": pending_query_total,
+            "replayCount": review_entries.iter().map(|entry| entry["replayCount"].as_u64().unwrap_or(0)).sum::<u64>(),
         },
         "entries": review_entries,
     });
@@ -2074,6 +2249,13 @@ fn refresh_web_approval_review_index(
     lines.push(format!(
         "- Pending approved queries: {}",
         pending_query_total
+    ));
+    lines.push(format!(
+        "- Recorded replays: {}",
+        review_entries
+            .iter()
+            .map(|entry| entry["replayCount"].as_u64().unwrap_or(0))
+            .sum::<u64>()
     ));
     lines.push("".to_string());
     if review_entries.is_empty() {
@@ -2104,6 +2286,18 @@ fn refresh_web_approval_review_index(
             }
             if let Some(next_step) = entry["nextStep"].as_str() {
                 lines.push(format!("  - next: {}", next_step));
+            }
+            if let Some(review_status) = entry["reviewStatusPath"].as_str() {
+                lines.push(format!("  - review status: {}", review_status));
+            }
+            if let Some(review_log) = entry["reviewLogPath"].as_str() {
+                lines.push(format!("  - review log: {}", review_log));
+            }
+            if let Some(history_entries) = entry["historyEntries"].as_u64() {
+                lines.push(format!("  - lifecycle entries: {}", history_entries));
+            }
+            if let Some(replay_count) = entry["replayCount"].as_u64() {
+                lines.push(format!("  - replay count: {}", replay_count));
             }
             if let Some(review_command) = entry["reviewCommand"].as_str() {
                 lines.push(format!("  - review command: {}", review_command));
@@ -2190,12 +2384,14 @@ fn render_trace_review_status(
     let review_markdown_path = approval_packet_review_markdown_path(&packet_path);
     let review_html_path = approval_packet_review_html_path(&packet_path);
     Ok(format!(
-        "Trace review\n  Result           approval state loaded\n  Trace            {}\n  Packet           {}\n  Review JSON      {}\n  Review Markdown  {}\n  Review HTML      {}\n  Operator state   {}\n  Pending queries  {}\n  Replay trace     {}\n  Replay command   {}\n  Next step        {}\n  Note             {}",
+        "Trace review\n  Result           approval state loaded\n  Trace            {}\n  Packet           {}\n  Review JSON      {}\n  Review Markdown  {}\n  Review HTML      {}\n  Review Status    {}\n  Review Log       {}\n  Operator state   {}\n  Pending queries  {}\n  Replay trace     {}\n  Replay command   {}\n  Next step        {}\n  Note             {}",
         requested_path.display(),
         packet_path.display(),
         review_json_path.display(),
         review_markdown_path.display(),
         review_html_path.display(),
+        approval_packet_review_status_path(&packet_path).display(),
+        approval_packet_review_log_path(&packet_path).display(),
         review_value["operatorState"].as_str().unwrap_or("unknown"),
         pending_queries,
         replay_trace,
@@ -2240,6 +2436,10 @@ fn render_trace_approval_dashboard(cwd: &Path) -> Result<String, Box<dyn std::er
             "  Pending queries    {}",
             summary["pendingQueries"].as_u64().unwrap_or(0)
         ),
+        format!(
+            "  Recorded replays   {}",
+            summary["replayCount"].as_u64().unwrap_or(0)
+        ),
     ];
     if entries.is_empty() {
         lines.push("  Note               no approval review artifacts exist yet".to_string());
@@ -2258,6 +2458,18 @@ fn render_trace_approval_dashboard(cwd: &Path) -> Result<String, Box<dyn std::er
             }
             if let Some(packet) = entry["approvalPacket"].as_str() {
                 lines.push(format!("    packet: {}", packet));
+            }
+            if let Some(review_status) = entry["reviewStatusPath"].as_str() {
+                lines.push(format!("    review status: {}", review_status));
+            }
+            if let Some(review_log) = entry["reviewLogPath"].as_str() {
+                lines.push(format!("    review log: {}", review_log));
+            }
+            if let Some(history_entries) = entry["historyEntries"].as_u64() {
+                lines.push(format!("    lifecycle entries: {}", history_entries));
+            }
+            if let Some(replay_count) = entry["replayCount"].as_u64() {
+                lines.push(format!("    replay count: {}", replay_count));
             }
             lines.push(format!("    next: {}", next_step));
             if let Some(review_command) = entry["reviewCommand"].as_str() {
@@ -2395,6 +2607,14 @@ fn replay_trace_for_operator(
             next_step,
         ),
     )?;
+    let _ = append_review_lifecycle_entry(
+        &review_packet,
+        &packet_path,
+        &original_trace_path,
+        replay_trace_path.as_deref(),
+        operator_state,
+        next_step,
+    )?;
     let (review_index_json_path, review_index_markdown_path, review_index_html_path) =
         refresh_web_approval_review_index(cwd)?;
     let pending_queries = if review_packet.pending_queries.is_empty() {
@@ -2407,11 +2627,13 @@ fn replay_trace_for_operator(
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "<not saved>".to_string());
     Ok(format!(
-        "Trace replay\n  Result           approved trace replay executed\n  Packet           {}\n  Review JSON      {}\n  Review Markdown  {}\n  Review HTML      {}\n  Review Index JSON {}\n  Review Index MD  {}\n  Review Index HTML {}\n  Trace            {}\n  Replay trace     {}\n  Corpus           {}\n  Pending queries  {}\n  Approved at ms   {}\n  Original replay  {}\n  Note             {}\n\n{}",
+        "Trace replay\n  Result           approved trace replay executed\n  Packet           {}\n  Review JSON      {}\n  Review Markdown  {}\n  Review HTML      {}\n  Review Status    {}\n  Review Log       {}\n  Review Index JSON {}\n  Review Index MD  {}\n  Review Index HTML {}\n  Trace            {}\n  Replay trace     {}\n  Corpus           {}\n  Pending queries  {}\n  Approved at ms   {}\n  Original replay  {}\n  Note             {}\n\n{}",
         packet_path.display(),
         review_json_path.display(),
         review_markdown_path.display(),
         review_html_path.display(),
+        approval_packet_review_status_path(&packet_path).display(),
+        approval_packet_review_log_path(&packet_path).display(),
         review_index_json_path.display(),
         review_index_markdown_path.display(),
         review_index_html_path.display(),
@@ -2444,12 +2666,14 @@ fn resume_trace_for_operator(
         session_path,
     )?;
     Ok(format!(
-        "Trace resume\n  Result           approval recorded and rerun executed\n  Trace            {}\n  Packet           {}\n  Review JSON      {}\n  Review Markdown  {}\n  Review HTML      {}\n  Review Index JSON {}\n  Review Index MD  {}\n  Review Index HTML {}\n  Pending queries  {}\n  Note             browser automation is still not available; this only completes the bounded approve-and-rerun loop\n\n{}",
+        "Trace resume\n  Result           approval recorded and rerun executed\n  Trace            {}\n  Packet           {}\n  Review JSON      {}\n  Review Markdown  {}\n  Review HTML      {}\n  Review Status    {}\n  Review Log       {}\n  Review Index JSON {}\n  Review Index MD  {}\n  Review Index HTML {}\n  Pending queries  {}\n  Note             browser automation is still not available; this only completes the bounded approve-and-rerun loop\n\n{}",
         artifacts.trace_path.display(),
         artifacts.packet_path.display(),
         artifacts.review_json_path.display(),
         artifacts.review_markdown_path.display(),
         artifacts.review_html_path.display(),
+        artifacts.review_status_path.display(),
+        artifacts.review_log_path.display(),
         artifacts.review_index_json_path.display(),
         artifacts.review_index_markdown_path.display(),
         artifacts.review_index_html_path.display(),
@@ -2770,7 +2994,8 @@ struct RuntimePluginState {
 }
 
 struct BuiltRuntime {
-    runtime: Option<ConversationRuntime<ProviderRuntimeApiClient<CliRuntimeObserver>, CliToolExecutor>>,
+    runtime:
+        Option<ConversationRuntime<ProviderRuntimeApiClient<CliRuntimeObserver>, CliToolExecutor>>,
     plugin_registry: PluginRegistry,
     plugins_active: bool,
 }
@@ -2806,7 +3031,8 @@ impl BuiltRuntime {
 }
 
 impl Deref for BuiltRuntime {
-    type Target = ConversationRuntime<ProviderRuntimeApiClient<CliRuntimeObserver>, CliToolExecutor>;
+    type Target =
+        ConversationRuntime<ProviderRuntimeApiClient<CliRuntimeObserver>, CliToolExecutor>;
 
     fn deref(&self) -> &Self::Target {
         self.runtime
@@ -5184,22 +5410,20 @@ fn build_runtime_with_plugin_state(
     } else {
         Vec::new()
     };
-    let api_client = ProviderRuntimeApiClient::new_with_auth(
+    let mut runtime = build_provider_conversation_runtime_with_features_and_observer_for_session(
+        session,
         model,
         tools,
+        session_id,
         Some(resolve_cli_auth_source()?),
-    )?
-    .with_prompt_cache(session_id)
-    .with_observer(CliRuntimeObserver::new(emit_output, progress_reporter));
-    let mut runtime = ConversationRuntime::new_with_features(
-        session,
-        api_client,
         CliToolExecutor::new(allowed_tools.clone(), emit_output, tool_registry.clone()),
         permission_policy(permission_mode, &feature_config, &tool_registry)
             .map_err(std::io::Error::other)?,
         system_prompt,
         &feature_config,
-    );
+        CliRuntimeObserver::new(emit_output, progress_reporter),
+    )
+    .map_err(std::io::Error::other)?;
     if emit_output {
         runtime = runtime.with_hook_progress_reporter(Box::new(CliHookProgressReporter));
     }

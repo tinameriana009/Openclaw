@@ -45,7 +45,11 @@ pub use providers::{
 };
 pub use runtime_client::{
     build_provider_conversation_runtime, build_provider_conversation_runtime_for_session,
-    NoopProviderRuntimeObserver, ProviderRuntimeApiClient, ProviderRuntimeObserver,
+    build_provider_conversation_runtime_with_auth_for_session,
+    build_provider_conversation_runtime_with_features_and_observer_for_session,
+    build_provider_runtime_api_client, build_provider_runtime_api_client_with_auth,
+    build_provider_runtime_api_client_with_auth_and_observer, NoopProviderRuntimeObserver,
+    ProviderRuntimeApiClient, ProviderRuntimeObserver,
 };
 pub use sse::{parse_frame, SseParser};
 pub use types::{

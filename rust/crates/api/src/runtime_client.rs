@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use runtime::{
-    ApiClient, ApiRequest, AssistantEvent, ContentBlock, ConversationMessage,
-    ConversationRuntime, MessageRole, PermissionPolicy, PromptCacheEvent, RuntimeError, Session,
+    ApiClient, ApiRequest, AssistantEvent, ContentBlock, ConversationMessage, ConversationRuntime,
+    MessageRole, PermissionPolicy, PromptCacheEvent, RuntimeError, RuntimeFeatureConfig, Session,
     ToolExecutor,
 };
 
@@ -54,8 +54,9 @@ impl ProviderRuntimeApiClient<NoopProviderRuntimeObserver> {
         anthropic_auth: Option<AuthSource>,
     ) -> Result<Self, String> {
         let resolved_model = resolve_model_alias(&model).to_string();
-        let client = ProviderClient::from_model_with_anthropic_auth(&resolved_model, anthropic_auth)
-            .map_err(|error| error.to_string())?;
+        let client =
+            ProviderClient::from_model_with_anthropic_auth(&resolved_model, anthropic_auth)
+                .map_err(|error| error.to_string())?;
         Ok(Self {
             runtime: tokio::runtime::Runtime::new().map_err(|error| error.to_string())?,
             client,
@@ -97,6 +98,48 @@ where
 }
 
 #[allow(clippy::needless_pass_by_value)]
+pub fn build_provider_runtime_api_client(
+    model: String,
+    tools: Vec<ToolDefinition>,
+    prompt_cache_namespace: &str,
+) -> Result<ProviderRuntimeApiClient, String> {
+    build_provider_runtime_api_client_with_auth(model, tools, prompt_cache_namespace, None)
+}
+
+#[allow(clippy::needless_pass_by_value)]
+pub fn build_provider_runtime_api_client_with_auth(
+    model: String,
+    tools: Vec<ToolDefinition>,
+    prompt_cache_namespace: &str,
+    anthropic_auth: Option<AuthSource>,
+) -> Result<ProviderRuntimeApiClient, String> {
+    Ok(
+        ProviderRuntimeApiClient::new_with_auth(model, tools, anthropic_auth)?
+            .with_prompt_cache(prompt_cache_namespace),
+    )
+}
+
+#[allow(clippy::needless_pass_by_value)]
+pub fn build_provider_runtime_api_client_with_auth_and_observer<O>(
+    model: String,
+    tools: Vec<ToolDefinition>,
+    prompt_cache_namespace: &str,
+    anthropic_auth: Option<AuthSource>,
+    observer: O,
+) -> Result<ProviderRuntimeApiClient<O>, String>
+where
+    O: ProviderRuntimeObserver,
+{
+    Ok(build_provider_runtime_api_client_with_auth(
+        model,
+        tools,
+        prompt_cache_namespace,
+        anthropic_auth,
+    )?
+    .with_observer(observer))
+}
+
+#[allow(clippy::needless_pass_by_value)]
 pub fn build_provider_conversation_runtime<T>(
     model: String,
     tools: Vec<ToolDefinition>,
@@ -132,14 +175,79 @@ pub fn build_provider_conversation_runtime_for_session<T>(
 where
     T: ToolExecutor,
 {
-    let api_client = ProviderRuntimeApiClient::new(model, tools)?
-        .with_prompt_cache(prompt_cache_namespace);
+    build_provider_conversation_runtime_with_auth_for_session(
+        session,
+        model,
+        tools,
+        prompt_cache_namespace,
+        None,
+        tool_executor,
+        permission_policy,
+        system_prompt,
+    )
+}
+
+#[allow(clippy::needless_pass_by_value)]
+pub fn build_provider_conversation_runtime_with_auth_for_session<T>(
+    session: Session,
+    model: String,
+    tools: Vec<ToolDefinition>,
+    prompt_cache_namespace: &str,
+    anthropic_auth: Option<AuthSource>,
+    tool_executor: T,
+    permission_policy: PermissionPolicy,
+    system_prompt: Vec<String>,
+) -> Result<ConversationRuntime<ProviderRuntimeApiClient, T>, String>
+where
+    T: ToolExecutor,
+{
+    let api_client = build_provider_runtime_api_client_with_auth(
+        model,
+        tools,
+        prompt_cache_namespace,
+        anthropic_auth,
+    )?;
     Ok(ConversationRuntime::new(
         session,
         api_client,
         tool_executor,
         permission_policy,
         system_prompt,
+    ))
+}
+
+#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::too_many_arguments)]
+pub fn build_provider_conversation_runtime_with_features_and_observer_for_session<T, O>(
+    session: Session,
+    model: String,
+    tools: Vec<ToolDefinition>,
+    prompt_cache_namespace: &str,
+    anthropic_auth: Option<AuthSource>,
+    tool_executor: T,
+    permission_policy: PermissionPolicy,
+    system_prompt: Vec<String>,
+    feature_config: &RuntimeFeatureConfig,
+    observer: O,
+) -> Result<ConversationRuntime<ProviderRuntimeApiClient<O>, T>, String>
+where
+    T: ToolExecutor,
+    O: ProviderRuntimeObserver,
+{
+    let api_client = build_provider_runtime_api_client_with_auth_and_observer(
+        model,
+        tools,
+        prompt_cache_namespace,
+        anthropic_auth,
+        observer,
+    )?;
+    Ok(ConversationRuntime::new_with_features(
+        session,
+        api_client,
+        tool_executor,
+        permission_policy,
+        system_prompt,
+        feature_config,
     ))
 }
 
@@ -390,9 +498,16 @@ fn prompt_cache_record_to_runtime_event(record: PromptCacheRecord) -> Option<Pro
 
 #[cfg(test)]
 mod tests {
-    use super::{prompt_cache_record_to_runtime_event, ProviderRuntimeObserver};
-    use crate::{CacheBreakEvent, PromptCacheRecord};
-    use runtime::RuntimeError;
+    use super::{
+        build_provider_conversation_runtime_with_features_and_observer_for_session,
+        build_provider_runtime_api_client_with_auth_and_observer,
+        prompt_cache_record_to_runtime_event, ProviderRuntimeObserver,
+    };
+    use crate::{CacheBreakEvent, PromptCacheRecord, ToolDefinition};
+    use runtime::{
+        ExecutionProfile, PermissionMode, PermissionPolicy, RuntimeError, RuntimeFeatureConfig,
+        Session, ToolError, ToolExecutor,
+    };
 
     #[derive(Default)]
     struct RecordingObserver {
@@ -417,6 +532,15 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct NoopToolExecutor;
+
+    impl ToolExecutor for NoopToolExecutor {
+        fn execute(&mut self, _tool_name: &str, _input: &str) -> Result<String, ToolError> {
+            Ok("ok".to_string())
+        }
+    }
+
     #[test]
     fn prompt_cache_records_convert_to_runtime_events() {
         let event = prompt_cache_record_to_runtime_event(PromptCacheRecord {
@@ -436,6 +560,45 @@ mod tests {
     }
 
     #[test]
+    fn build_provider_runtime_api_client_supports_observer_configuration() {
+        let client = build_provider_runtime_api_client_with_auth_and_observer(
+            "claude-opus-4-6".to_string(),
+            vec![ToolDefinition {
+                name: "read_file".to_string(),
+                description: Some("Read a file".to_string()),
+                input_schema: serde_json::json!({"type": "object"}),
+            }],
+            "runtime-client-test",
+            None,
+            RecordingObserver::default(),
+        )
+        .expect("provider runtime api client should build");
+
+        assert_eq!(client.model(), "claude-opus-4-6");
+    }
+
+    #[test]
+    fn build_provider_runtime_with_features_and_observer_uses_shared_constructor() {
+        let feature_config =
+            RuntimeFeatureConfig::default().with_execution_profile(ExecutionProfile::Balanced);
+        let runtime = build_provider_conversation_runtime_with_features_and_observer_for_session(
+            Session::new(),
+            "claude-opus-4-6".to_string(),
+            Vec::new(),
+            "runtime-client-test",
+            None,
+            NoopToolExecutor,
+            PermissionPolicy::new(PermissionMode::WorkspaceWrite),
+            vec!["system prompt".to_string()],
+            &feature_config,
+            RecordingObserver::default(),
+        )
+        .expect("conversation runtime should build");
+
+        assert_eq!(runtime.session().messages.len(), 0);
+    }
+
+    #[test]
     fn observer_callbacks_can_record_runtime_activity() {
         let mut observer = RecordingObserver::default();
         observer.on_model_invoked();
@@ -446,6 +609,9 @@ mod tests {
 
         assert_eq!(observer.model_invocations, 1);
         assert_eq!(observer.text_deltas, vec!["hello"]);
-        assert_eq!(observer.tools, vec![("read_file".to_string(), "{}".to_string())]);
+        assert_eq!(
+            observer.tools,
+            vec![("read_file".to_string(), "{}".to_string())]
+        );
     }
 }
