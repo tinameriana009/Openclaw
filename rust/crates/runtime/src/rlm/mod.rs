@@ -120,16 +120,38 @@ where
 fn select_diverse_chunk_ids(
     hits: &[RetrievalHit],
     seen_chunk_ids: &[String],
+    seen_document_ids: &[String],
     limit: usize,
 ) -> Vec<String> {
     let mut selected = Vec::new();
     let mut selected_docs = std::collections::BTreeSet::new();
+    let seen_document_ids = seen_document_ids
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
 
     for hit in hits {
         if selected.len() >= limit {
             break;
         }
-        if seen_chunk_ids.contains(&hit.chunk_id) || selected_docs.contains(&hit.document_id) {
+        if seen_chunk_ids.contains(&hit.chunk_id)
+            || selected_docs.contains(&hit.document_id)
+            || seen_document_ids.contains(&hit.document_id)
+        {
+            continue;
+        }
+        selected_docs.insert(hit.document_id.clone());
+        selected.push(hit.chunk_id.clone());
+    }
+
+    for hit in hits {
+        if selected.len() >= limit {
+            break;
+        }
+        if seen_chunk_ids.contains(&hit.chunk_id) || selected.contains(&hit.chunk_id) {
+            continue;
+        }
+        if selected_docs.contains(&hit.document_id) {
             continue;
         }
         selected_docs.insert(hit.document_id.clone());
@@ -358,6 +380,7 @@ where
         let mut last_retrieval = None;
         let mut last_escalation = None;
         let mut seen_chunk_ids = Vec::<String>::new();
+        let mut seen_document_ids = Vec::<String>::new();
         let stop_reason;
 
         loop {
@@ -373,6 +396,7 @@ where
                 iteration,
                 &child_outputs,
                 &seen_chunk_ids,
+                &seen_document_ids,
                 web_policy.clone(),
                 &mut trace,
             )? {
@@ -664,7 +688,8 @@ where
                 child_count: 1,
                 selected_chunk_ids: artifacts.selected_chunk_ids.clone(),
             });
-            seen_chunk_ids.extend(artifacts.selected_chunk_ids);
+            seen_chunk_ids.extend(artifacts.selected_chunk_ids.clone());
+            seen_document_ids.extend(artifacts.selected_document_ids);
             last_escalation = Some(artifacts.escalation);
             child_outputs.push(child_output);
 
@@ -721,6 +746,7 @@ where
         iteration: u32,
         child_outputs: &[ChildSubqueryOutput],
         seen_chunk_ids: &[String],
+        seen_document_ids: &[String],
         web_policy: WebPolicy,
         trace: &mut TraceLedger,
     ) -> Result<Option<IterationArtifacts>, RecursiveRuntimeError> {
@@ -791,10 +817,18 @@ where
         );
         trace.events.push(retrieval_event);
 
-        let selected_chunk_ids = select_diverse_chunk_ids(&retrieval.hits, seen_chunk_ids, 3);
+        let selected_chunk_ids =
+            select_diverse_chunk_ids(&retrieval.hits, seen_chunk_ids, seen_document_ids, 3);
         if selected_chunk_ids.is_empty() {
             return Ok(None);
         }
+
+        let selected_document_ids = retrieval
+            .hits
+            .iter()
+            .filter(|hit| selected_chunk_ids.contains(&hit.chunk_id))
+            .map(|hit| hit.document_id.clone())
+            .collect::<Vec<_>>();
 
         let slices = self.select_slices(&selected_chunk_ids)?;
         push_trace_event(
@@ -818,6 +852,20 @@ where
                             .map(JsonValue::String)
                             .collect(),
                     ),
+                ),
+                (
+                    "documentIds".to_string(),
+                    JsonValue::Array(
+                        selected_document_ids
+                            .iter()
+                            .cloned()
+                            .map(JsonValue::String)
+                            .collect(),
+                    ),
+                ),
+                (
+                    "newDocumentBias".to_string(),
+                    JsonValue::Bool(!seen_document_ids.is_empty()),
                 ),
             ]),
         );
@@ -867,6 +915,7 @@ where
         Ok(Some(IterationArtifacts {
             retrieval,
             selected_chunk_ids,
+            selected_document_ids,
             slices,
             escalation,
         }))
@@ -1119,12 +1168,22 @@ mod tests {
 
     #[test]
     fn diverse_chunk_selection_prefers_distinct_documents_before_fill_in() {
-        let selected = select_diverse_chunk_ids(&multi_doc_hits(), &[], 3);
+        let selected = select_diverse_chunk_ids(&multi_doc_hits(), &[], &[], 3);
         assert_eq!(selected, vec!["chunk-a1", "chunk-b1", "chunk-c1"]);
 
-        let selected_with_seen =
-            select_diverse_chunk_ids(&multi_doc_hits(), &["chunk-a1".to_string()], 3);
-        assert_eq!(selected_with_seen, vec!["chunk-a2", "chunk-b1", "chunk-c1"]);
+        let selected_with_seen_chunk =
+            select_diverse_chunk_ids(&multi_doc_hits(), &["chunk-a1".to_string()], &[], 3);
+        assert_eq!(
+            selected_with_seen_chunk,
+            vec!["chunk-a2", "chunk-b1", "chunk-c1"]
+        );
+
+        let selected_with_seen_doc =
+            select_diverse_chunk_ids(&multi_doc_hits(), &[], &["doc-a".to_string()], 3);
+        assert_eq!(
+            selected_with_seen_doc,
+            vec!["chunk-b1", "chunk-c1", "chunk-a1"]
+        );
     }
 
     #[test]

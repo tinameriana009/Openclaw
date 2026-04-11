@@ -403,9 +403,10 @@ If you need honest prep helpers for the more operator-heavy demos, run one of th
 cd rust
 ./scripts/prepare-blender-demo.sh
 ./scripts/prepare-unreal-demo.sh
+./scripts/prepare-domain-demo-bundles.sh
 ```
 
-Those helpers validate and stage demo bundles, including operator findings and next-prompt templates for repeatable handoff; they do not drive Blender or Unreal for you.
+The combined domain helper stages both the Blender and Unreal bundles in one pass so operator handoff is more repeatable across app-heavy demos. All three helpers remain staged-handoff tooling only; they do not drive Blender or Unreal for you.
 
 If you need one realistic end-to-end demo for an operator review, prefer the repo-analysis kit and run:
 

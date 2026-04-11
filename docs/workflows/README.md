@@ -72,6 +72,7 @@ If you want one especially concrete operator path, start with one of these demo 
 - [`../examples/blender-scene-cleanup-demo/manual-test-checklist.md`](../examples/blender-scene-cleanup-demo/manual-test-checklist.md)
 - [`../examples/blender-scene-cleanup-demo/next-prompt-template.md`](../examples/blender-scene-cleanup-demo/next-prompt-template.md)
 - prep helper: `../../rust/scripts/prepare-blender-demo.sh`
+- combined bundle helper: `../../rust/scripts/prepare-domain-demo-bundles.sh`
 
 ### Repo analysis demo kit
 
@@ -92,6 +93,7 @@ If you want one especially concrete operator path, start with one of these demo 
 - [`../examples/unreal-runtime-telemetry-demo/next-prompt-template.md`](../examples/unreal-runtime-telemetry-demo/next-prompt-template.md)
 - [`../examples/unreal-runtime-telemetry-demo/trace-review-checklist.md`](../examples/unreal-runtime-telemetry-demo/trace-review-checklist.md)
 - prep helper: `../../rust/scripts/prepare-unreal-demo.sh`
+- combined bundle helper: `../../rust/scripts/prepare-domain-demo-bundles.sh`
 
 ## Quick validation commands
 
@@ -105,3 +107,5 @@ python3 tests/validate_repo_analysis_demo.py
 ```
 
 These checks only validate documentation/demo coherence. They do not replace Blender, Unreal, or repo-specific manual verification.
+
+If you want a single prep pass for the two app-domain demos, run `cd rust && ./scripts/prepare-domain-demo-bundles.sh`. It stages both bundles together for operator handoff, but still stops short of editor/app automation.

@@ -23,6 +23,7 @@ REQUIRED_FILES = [
     RUST_ROOT / 'scripts' / 'run-repo-analysis-demo.sh',
     RUST_ROOT / 'scripts' / 'prepare-blender-demo.sh',
     RUST_ROOT / 'scripts' / 'prepare-unreal-demo.sh',
+    RUST_ROOT / 'scripts' / 'prepare-domain-demo-bundles.sh',
 ]
 
 
@@ -82,6 +83,11 @@ def main() -> int:
         './scripts/prepare-unreal-demo.sh',
         'rust/README.md does not mention the Unreal demo prep helper.',
     )
+    require_contains(
+        readme_text,
+        './scripts/prepare-domain-demo-bundles.sh',
+        'rust/README.md does not mention the combined domain demo prep helper.',
+    )
 
     for needle in [
         'python3 ../tests/validate_operator_readiness.py',
@@ -111,6 +117,7 @@ def main() -> int:
         'run-repo-analysis-demo.sh',
         'prepare-blender-demo.sh',
         'prepare-unreal-demo.sh',
+        'prepare-domain-demo-bundles.sh',
     ]:
         require_contains(workflow_index_lower, needle, f'Workflow index is missing readiness cue: {needle}')
     require_contains(

@@ -599,6 +599,7 @@ pub struct RecursiveConversationRuntime<'a, E, A = DefaultChildOutputAggregator>
 pub(super) struct IterationArtifacts {
     pub(super) retrieval: RetrievalResult,
     pub(super) selected_chunk_ids: Vec<String>,
+    pub(super) selected_document_ids: Vec<String>,
     pub(super) slices: Vec<RecursiveContextSlice>,
     pub(super) escalation: EscalationOutcome,
 }
