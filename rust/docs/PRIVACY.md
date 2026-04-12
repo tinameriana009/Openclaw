@@ -95,3 +95,9 @@ This repo does **not** currently claim:
 - remote telemetry privacy guarantees
 
 So the right operating assumption today is simple: **saved local artifacts are for informed operators, not for blind sharing.**
+
+## Live web wrapper warning
+
+This repo's current operator-facing web surfaces are still static/on-disk review artifacts, not a first-class authenticated web application.
+
+If you are considering a live web wrapper, read [`WEB_OPERATOR_AUTH_BOUNDARY.md`](WEB_OPERATOR_AUTH_BOUNDARY.md) first. The short version: keep it private, put it behind trusted reverse-proxy auth, and do not assume browser-session auth, anonymous read access, or mutation-safe routes exist in-tree today.

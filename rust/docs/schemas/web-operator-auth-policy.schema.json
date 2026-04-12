@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/claw/web-operator-auth-policy.schema.json",
+  "title": "Web operator auth policy boundary",
+  "description": "Conservative deny-by-default boundary schema for any future live web operator backend. This is a guardrail, not a claim that a full auth system exists today.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "policyKind",
+    "schemaVersion",
+    "backendEnabled",
+    "deploymentMode",
+    "anonymousReadAllowed",
+    "mutationRoutesEnabled",
+    "sessionCookiesSupported",
+    "directInternetExposureAllowed",
+    "trustedProxy",
+    "notes"
+  ],
+  "properties": {
+    "policyKind": {
+      "const": "claw.web-operator-auth-boundary"
+    },
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "backendEnabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether a live backend is enabled. Safe default is false."
+    },
+    "deploymentMode": {
+      "type": "string",
+      "enum": [
+        "static-only",
+        "private-read-only",
+        "private-proxy-auth-read-only"
+      ],
+      "description": "Allowed deployment modes before a real auth/authz implementation exists."
+    },
+    "anonymousReadAllowed": {
+      "type": "boolean",
+      "const": false
+    },
+    "mutationRoutesEnabled": {
+      "type": "boolean",
+      "default": false
+    },
+    "sessionCookiesSupported": {
+      "type": "boolean",
+      "const": false
+    },
+    "directInternetExposureAllowed": {
+      "type": "boolean",
+      "const": false
+    },
+    "trustedProxy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required",
+        "identityHeaders",
+        "allowClientSuppliedIdentityHeaders"
+      ],
+      "properties": {
+        "required": {
+          "type": "boolean",
+          "default": true
+        },
+        "identityHeaders": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "allowClientSuppliedIdentityHeaders": {
+          "type": "boolean",
+          "const": false
+        }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "backendEnabled": {
+            "const": true
+          }
+        },
+        "required": [
+          "backendEnabled"
+        ]
+      },
+      "then": {
+        "properties": {
+          "deploymentMode": {
+            "const": "private-proxy-auth-read-only"
+          },
+          "mutationRoutesEnabled": {
+            "const": false
+          },
+          "trustedProxy": {
+            "type": "object",
+            "properties": {
+              "required": {
+                "const": true
+              }
+            },
+            "required": [
+              "required"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

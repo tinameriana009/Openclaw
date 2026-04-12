@@ -357,6 +357,7 @@ Current baseline:
 
 If you build tooling around `.claw/trace/`, `.claw/corpus/`, or `.claw/telemetry/`, read [`docs/ARTIFACTS.md`](docs/ARTIFACTS.md) first.
 If you need to share traces or manifests outside your machine, read [`docs/PRIVACY.md`](docs/PRIVACY.md) first.
+If you are thinking about wrapping the current operator surfaces in a live web service, read [`docs/WEB_OPERATOR_AUTH_BOUNDARY.md`](docs/WEB_OPERATOR_AUTH_BOUNDARY.md) first; it documents the deny-by-default auth boundary and explicitly does **not** claim a real web auth layer exists yet.
 
 ## Known operator gaps
 

@@ -91,6 +91,7 @@ cargo test --workspace --locked
 echo
 printf '== Operator readiness + demo validation ==\n'
 python3 ../tests/validate_operator_readiness.py
+python3 ../tests/validate_web_operator_auth_boundary.py
 python3 ../tests/validate_blender_demo.py
 python3 ../tests/validate_unreal_demo.py
 python3 ../tests/validate_repo_analysis_demo.py

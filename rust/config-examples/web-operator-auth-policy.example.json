@@ -1,0 +1,23 @@
+{
+  "policyKind": "claw.web-operator-auth-boundary",
+  "schemaVersion": 1,
+  "backendEnabled": false,
+  "deploymentMode": "static-only",
+  "anonymousReadAllowed": false,
+  "mutationRoutesEnabled": false,
+  "sessionCookiesSupported": false,
+  "directInternetExposureAllowed": false,
+  "trustedProxy": {
+    "required": true,
+    "identityHeaders": [
+      "x-forwarded-user",
+      "x-forwarded-email",
+      "x-auth-request-id"
+    ],
+    "allowClientSuppliedIdentityHeaders": false
+  },
+  "notes": [
+    "This repo does not currently implement first-class web auth or browser session management.",
+    "Any future live backend should remain private, proxy-authenticated, and read-only until authn/authz and audit logging exist."
+  ]
+}

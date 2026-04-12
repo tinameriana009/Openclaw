@@ -12,6 +12,9 @@ REQUIRED_FILES = [
     RUST_ROOT / 'CHANGELOG.md',
     RUST_ROOT / 'docs' / 'ARTIFACTS.md',
     RUST_ROOT / 'docs' / 'PRIVACY.md',
+    RUST_ROOT / 'docs' / 'WEB_OPERATOR_AUTH_BOUNDARY.md',
+    RUST_ROOT / 'docs' / 'schemas' / 'web-operator-auth-policy.schema.json',
+    RUST_ROOT / 'config-examples' / 'web-operator-auth-policy.example.json',
     RUST_ROOT / 'scripts' / 'release-verify.sh',
     REPO_ROOT / 'docs' / 'workflows' / 'README.md',
     REPO_ROOT / 'docs' / 'workflows' / 'blender-addon.md',
@@ -43,6 +46,8 @@ def main() -> int:
     readme_text = (RUST_ROOT / 'README.md').read_text()
     release_text = (RUST_ROOT / 'RELEASE.md').read_text()
     artifacts_text = (RUST_ROOT / 'docs' / 'ARTIFACTS.md').read_text()
+    privacy_text = (RUST_ROOT / 'docs' / 'PRIVACY.md').read_text()
+    auth_boundary_text = (RUST_ROOT / 'docs' / 'WEB_OPERATOR_AUTH_BOUNDARY.md').read_text()
     workflow_index_text = (REPO_ROOT / 'docs' / 'workflows' / 'README.md').read_text()
     workflow_index_lower = workflow_index_text.lower()
     blender_workflow_text = (REPO_ROOT / 'docs' / 'workflows' / 'blender-addon.md').read_text()
@@ -88,9 +93,25 @@ def main() -> int:
         './scripts/prepare-domain-demo-bundles.sh',
         'rust/README.md does not mention the combined domain demo prep helper.',
     )
+    require_contains(
+        readme_text,
+        'docs/WEB_OPERATOR_AUTH_BOUNDARY.md',
+        'rust/README.md does not mention the web operator auth boundary doc.',
+    )
+    require_contains(
+        privacy_text,
+        'WEB_OPERATOR_AUTH_BOUNDARY.md',
+        'docs/PRIVACY.md does not point readers at the web auth boundary guidance.',
+    )
+    require_contains(
+        auth_boundary_text,
+        'does **not** currently ship a real authenticated web operator backend',
+        'docs/WEB_OPERATOR_AUTH_BOUNDARY.md is missing the core honesty statement.',
+    )
 
     for needle in [
         'python3 ../tests/validate_operator_readiness.py',
+        'python3 ../tests/validate_web_operator_auth_boundary.py',
         'python3 ../tests/validate_blender_demo.py',
         'python3 ../tests/validate_unreal_demo.py',
         'python3 ../tests/validate_repo_analysis_demo.py',
