@@ -42,6 +42,33 @@ class RoutedMatch:
     score: int
 
 
+@dataclass(frozen=True)
+class NextStepAction:
+    title: str
+    rationale: str
+    command: str
+    bucket: str = 'next'
+
+
+@dataclass(frozen=True)
+class OperatorFlowPlan:
+    headline: str
+    actions: tuple[NextStepAction, ...]
+
+    def as_markdown(self) -> str:
+        if not self.actions:
+            return 'No concrete next-step actions available.'
+        lines = [self.headline, '']
+        current_bucket: str | None = None
+        for action in self.actions:
+            if action.bucket != current_bucket:
+                current_bucket = action.bucket
+                lines.extend([f'### {current_bucket}', ''])
+            lines.append(f'- **{action.title}** — {action.rationale}')
+            lines.append(f'  - `{action.command}`')
+        return '\n'.join(lines)
+
+
 @dataclass
 class RuntimeSession:
     prompt: str
@@ -56,6 +83,7 @@ class RuntimeSession:
     tool_execution_messages: tuple[str, ...]
     stream_events: tuple[dict[str, object], ...]
     persisted_session_path: str
+    operator_flow: OperatorFlowPlan
 
     def as_markdown(self) -> str:
         lines = [
@@ -100,6 +128,9 @@ class RuntimeSession:
             '## Turn Result',
             self.turn_result.output,
             '',
+            '## Operator Flow',
+            self.operator_flow.as_markdown(),
+            '',
             f'Persisted session path: {self.persisted_session_path}',
             '',
             self.history.as_markdown(),
@@ -138,6 +169,88 @@ class PortRuntime:
             family_counts[family_key] += 1
         return selected[:limit]
 
+    def plan_operator_flow(
+        self,
+        prompt: str,
+        matches: list[RoutedMatch],
+        *,
+        persisted_session_path: str | None = None,
+        session_id: str | None = None,
+        transcript_entries: tuple[str, ...] = (),
+        include_handoff: bool = True,
+    ) -> OperatorFlowPlan:
+        matched_commands = [match.name for match in matches if match.kind == 'command']
+        matched_tools = [match.name for match in matches if match.kind == 'tool']
+        actions: list[NextStepAction] = []
+        session_hint = session_id or 'latest'
+        prompt_tokens = set(self._normalize_text(prompt))
+
+        if matches:
+            top_matches = ', '.join(match.name for match in matches[:3])
+            actions.append(NextStepAction(
+                title='Review the surfaced command/tool path',
+                rationale=f'The router currently thinks the strongest path is: {top_matches}. Confirm that before going deeper.',
+                command=f'python -m src.main route {prompt!r} --limit 8',
+                bucket='Now',
+            ))
+        else:
+            actions.append(NextStepAction(
+                title='Refine the ask before iterating',
+                rationale='No mirrored command or tool stood out. Narrow the prompt to a subsystem, workflow, or artifact first.',
+                command='python -m src.main commands --query "<narrower topic>" --limit 8',
+                bucket='Now',
+            ))
+
+        if matched_commands:
+            actions.append(NextStepAction(
+                title='Inspect the top command surface',
+                rationale='This keeps the operator grounded in a concrete command entry instead of jumping straight into a vague follow-up.',
+                command=f'python -m src.main show-command {matched_commands[0]}',
+                bucket='Inspect',
+            ))
+        if matched_tools:
+            actions.append(NextStepAction(
+                title='Inspect the top tool surface',
+                rationale='Check whether the likely tool match actually corresponds to the workflow you want before treating it as evidence.',
+                command=f'python -m src.main show-tool {matched_tools[0]}',
+                bucket='Inspect',
+            ))
+
+        if persisted_session_path or session_id:
+            actions.append(NextStepAction(
+                title='Resume the same operator thread',
+                rationale='Stay on the same saved session so replay/review/resume remain one continuous trail.',
+                command=f'python -m src.main load-session {session_hint}',
+                bucket='Continue',
+            ))
+
+        if transcript_entries:
+            actions.append(NextStepAction(
+                title='Replay the saved operator context',
+                rationale=f'{len(transcript_entries)} prompt(s) are already in the saved transcript. Replaying them is the honest way to re-enter context.',
+                command=f'python -m src.main next-steps --session-id {session_hint}',
+                bucket='Continue',
+            ))
+
+        if prompt_tokens & {'review', 'audit', 'handoff', 'resume', 'replay', 'session', 'trace'}:
+            actions.append(NextStepAction(
+                title='Capture the next verification move explicitly',
+                rationale='This workflow is strongest when the operator names the next manual validation or evidence-gathering step instead of assuming completion.',
+                command=f'python -m src.main bootstrap {prompt!r} --limit 5',
+                bucket='Validate',
+            ))
+
+        if include_handoff:
+            actions.append(NextStepAction(
+                title='Prepare a bounded handoff',
+                rationale='If another operator takes over, pass the saved session id and routed surfaces instead of a loose summary.',
+                command=f'python -m src.main next-steps --session-id {session_hint}',
+                bucket='Handoff',
+            ))
+
+        headline = 'Recommended next operator moves for this saved run' if persisted_session_path or session_id else 'Recommended next operator moves for this prompt'
+        return OperatorFlowPlan(headline=headline, actions=tuple(actions))
+
     def bootstrap_session(self, prompt: str, limit: int = 5) -> RuntimeSession:
         context = build_port_context()
         setup_report = run_setup(trusted=True)
@@ -164,9 +277,17 @@ class PortRuntime:
             denied_tools=denials,
         )
         persisted_session_path = engine.persist_session()
+        operator_flow = self.plan_operator_flow(
+            prompt,
+            matches,
+            persisted_session_path=persisted_session_path,
+            session_id=engine.session_id,
+            transcript_entries=engine.replay_user_messages(),
+        )
         history.add('routing', f'matches={len(matches)} for prompt={prompt!r}')
         history.add('execution', f'command_execs={len(command_execs)} tool_execs={len(tool_execs)}')
         history.add('turn', f'commands={len(turn_result.matched_commands)} tools={len(turn_result.matched_tools)} denials={len(turn_result.permission_denials)} stop={turn_result.stop_reason}')
+        history.add('operator_flow', f'actions={len(operator_flow.actions)}')
         history.add('session_store', persisted_session_path)
         return RuntimeSession(
             prompt=prompt,
@@ -181,6 +302,7 @@ class PortRuntime:
             tool_execution_messages=tool_execs,
             stream_events=stream_events,
             persisted_session_path=persisted_session_path,
+            operator_flow=operator_flow,
         )
 
     def run_turn_loop(self, prompt: str, limit: int = 5, max_turns: int = 3, structured_output: bool = False) -> list[TurnResult]:

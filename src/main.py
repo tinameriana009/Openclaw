@@ -53,6 +53,12 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap_parser.add_argument('prompt')
     bootstrap_parser.add_argument('--limit', type=int, default=5)
 
+    next_steps_parser = subparsers.add_parser('next-steps', help='surface concrete operator next steps for a prompt or saved session')
+    next_steps_group = next_steps_parser.add_mutually_exclusive_group(required=True)
+    next_steps_group.add_argument('--prompt')
+    next_steps_group.add_argument('--session-id')
+    next_steps_parser.add_argument('--limit', type=int, default=5)
+
     loop_parser = subparsers.add_parser('turn-loop', help='run a small stateful turn loop for the mirrored runtime')
     loop_parser.add_argument('prompt')
     loop_parser.add_argument('--limit', type=int, default=5)
@@ -150,6 +156,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == 'bootstrap':
         print(PortRuntime().bootstrap_session(args.prompt, limit=args.limit).as_markdown())
         return 0
+    if args.command == 'next-steps':
+        runtime = PortRuntime()
+        if args.prompt:
+            matches = runtime.route_prompt(args.prompt, limit=args.limit)
+            plan = runtime.plan_operator_flow(args.prompt, matches)
+        else:
+            session = load_session(args.session_id)
+            prompt = session.messages[-1] if session.messages else 'resume saved session'
+            matches = runtime.route_prompt(prompt, limit=args.limit)
+            plan = runtime.plan_operator_flow(
+                prompt,
+                matches,
+                session_id=session.session_id,
+                transcript_entries=session.messages,
+            )
+        print(plan.as_markdown())
+        return 0
     if args.command == 'turn-loop':
         results = PortRuntime().run_turn_loop(args.prompt, limit=args.limit, max_turns=args.max_turns, structured_output=args.structured_output)
         for idx, result in enumerate(results, start=1):
@@ -166,7 +189,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == 'load-session':
         session = load_session(args.session_id)
-        print(f'{session.session_id}\n{len(session.messages)} messages\nin={session.input_tokens} out={session.output_tokens}')
+        prompt = session.messages[-1] if session.messages else 'resume saved session'
+        plan = PortRuntime().plan_operator_flow(prompt, PortRuntime().route_prompt(prompt, limit=5), session_id=session.session_id, transcript_entries=session.messages)
+        print(f'{session.session_id}\n{len(session.messages)} messages\nin={session.input_tokens} out={session.output_tokens}\n\n{plan.as_markdown()}')
         return 0
     if args.command == 'remote-mode':
         print(run_remote_mode(args.target).as_text())

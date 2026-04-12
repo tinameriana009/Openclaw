@@ -148,6 +148,7 @@ class PortingWorkspaceTests(unittest.TestCase):
         self.assertIn('Runtime Session', result.stdout)
         self.assertIn('Startup Steps', result.stdout)
         self.assertIn('Routed Matches', result.stdout)
+        self.assertIn('Operator Flow', result.stdout)
 
     def test_bootstrap_session_tracks_turn_state(self) -> None:
         from src.runtime import PortRuntime
@@ -209,6 +210,7 @@ class PortingWorkspaceTests(unittest.TestCase):
         )
         self.assertIn(session_id, result.stdout)
         self.assertIn('messages', result.stdout)
+        self.assertIn('Recommended next operator moves', result.stdout)
 
     def test_tool_permission_filtering_cli_runs(self) -> None:
         result = subprocess.run(
@@ -219,6 +221,29 @@ class PortingWorkspaceTests(unittest.TestCase):
         )
         self.assertIn('Tool entries:', result.stdout)
         self.assertNotIn('MCPTool', result.stdout)
+
+    def test_next_steps_cli_runs_for_prompt_and_session(self) -> None:
+        prompt_result = subprocess.run(
+            [sys.executable, '-m', 'src.main', 'next-steps', '--prompt', 'review MCP tool handoff', '--limit', '5'],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn('Recommended next operator moves for this prompt', prompt_result.stdout)
+        self.assertIn('show-command', prompt_result.stdout)
+
+        from src.runtime import PortRuntime
+
+        session = PortRuntime().bootstrap_session('review MCP tool', limit=5)
+        session_id = Path(session.persisted_session_path).stem
+        session_result = subprocess.run(
+            [sys.executable, '-m', 'src.main', 'next-steps', '--session-id', session_id],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn('Recommended next operator moves for this saved run', session_result.stdout)
+        self.assertIn(session_id, session_result.stdout)
 
     def test_turn_loop_cli_runs(self) -> None:
         result = subprocess.run(
