@@ -1769,7 +1769,10 @@ fn validate_todo_transitions(
     for todo in new_todos {
         let key = todo_identity_key(todo);
         if !seen.insert(key.clone()) {
-            return Err(format!("duplicate todo content is not allowed: {}", todo.content));
+            return Err(format!(
+                "duplicate todo content is not allowed: {}",
+                todo.content
+            ));
         }
     }
 
@@ -1832,7 +1835,8 @@ fn infer_todo_mutation_commands(
 }
 
 fn todo_map_by_key<'a>(todos: &'a [TodoItem]) -> BTreeMap<String, &'a TodoItem> {
-    todos.iter()
+    todos
+        .iter()
         .map(|todo| (todo_identity_key(todo), todo))
         .collect()
 }
@@ -1877,7 +1881,10 @@ fn persist_todo_state_artifact(path: &Path, state: &TodoStateArtifact) -> Result
     .map_err(|error| error.to_string())
 }
 
-fn append_todo_mutation_artifact(path: &Path, mutation: &TodoMutationArtifact) -> Result<(), String> {
+fn append_todo_mutation_artifact(
+    path: &Path,
+    mutation: &TodoMutationArtifact,
+) -> Result<(), String> {
     use std::io::Write;
 
     let mut file = std::fs::OpenOptions::new()
@@ -4031,7 +4038,10 @@ mod tests {
         assert!(second_output["verificationNudgeNeeded"].is_null());
         assert_eq!(second_output["mutation"]["revision"], 2);
         assert_eq!(second_output["state"]["revision"], 2);
-        assert!(second_output["statePath"].as_str().expect("state path").ends_with(".state.json"));
+        assert!(second_output["statePath"]
+            .as_str()
+            .expect("state path")
+            .ends_with(".state.json"));
         assert!(second_output["mutationLogPath"]
             .as_str()
             .expect("mutation log path")
@@ -4089,7 +4099,7 @@ mod tests {
             "TodoWrite",
             &json!({
                 "todos": [
-                    {"content": "Ship branch", "activeForm": "Shipping branch", "status": "completed"}
+                    {"content": "Ship branch", "activeForm": "Shipping branch", "status": "in_progress"}
                 ]
             }),
         )
@@ -4099,7 +4109,7 @@ mod tests {
             "TodoWrite",
             &json!({
                 "todos": [
-                    {"content": "Ship branch", "activeForm": "Shipping branch again", "status": "in_progress"}
+                    {"content": "Ship branch", "activeForm": "Ship branch queued again", "status": "pending"}
                 ]
             }),
         )
@@ -4110,13 +4120,14 @@ mod tests {
             "TodoWrite",
             &json!({
                 "todos": [
-                    {"content": "Ship branch", "activeForm": "Shipping branch again", "status": "in_progress"}
+                    {"content": "Ship branch", "activeForm": "Ship branch queued again", "status": "pending"}
                 ],
                 "allowBackwardTransitions": true
             }),
         )
         .expect("explicit backward transition should succeed");
-        let reopened_output: serde_json::Value = serde_json::from_str(&reopened).expect("valid json");
+        let reopened_output: serde_json::Value =
+            serde_json::from_str(&reopened).expect("valid json");
         assert_eq!(reopened_output["mutation"]["commands"][0]["kind"], "update");
 
         let nudge = execute_tool(
