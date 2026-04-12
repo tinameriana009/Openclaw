@@ -3,7 +3,7 @@ pub mod state;
 
 pub use api::{app, AppState};
 pub use state::{
-    BackendApiSchema, BackendPaths, BackendSnapshot, OperatorQueue, QueueClaimRequest, QueueItem,
-    QueueItemCreateRequest, QueueItemStatus, RuntimeBridgeSnapshot, ServiceConfig, ServiceInfo,
-    StoreError, StorePaths, WebBackendStore,
+    BackendApiSchema, BackendPaths, BackendSnapshot, ImportBundleReport, OperatorQueue,
+    QueueClaimRequest, QueueItem, QueueItemCreateRequest, QueueItemStatus, RuntimeBridgeSnapshot,
+    ServiceConfig, ServiceInfo, StoreError, StorePaths, WebBackendStore,
 };

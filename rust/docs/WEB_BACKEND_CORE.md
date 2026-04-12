@@ -9,8 +9,10 @@ This is **not** a claim that the project already has a complete live web app.
 What exists now is smaller and safer:
 - a localhost-only daemon (`claw-webd`)
 - persisted service state under `.claw/backend/`
-- a small JSON API for queue/state inspection and claim flow
+- a small JSON API for queue/state inspection plus a few bounded queue lifecycle mutations
 - a runtime-bridge file intended to mirror or extend the existing static operator artifacts over time
+
+It is still local plumbing for one workspace, not a full multi-user control plane.
 
 ## Why this exists
 
@@ -41,6 +43,10 @@ The runtime bridge file is the local snapshot surface the service exposes to web
 - `GET /v1/queue`
 - `POST /v1/queue/items`
 - `POST /v1/queue/items/:id/claim`
+- `POST /v1/queue/items/:id/unclaim`
+- `POST /v1/queue/items/:id/defer`
+- `POST /v1/queue/items/:id/complete`
+- `POST /v1/queue/items/:id/drop`
 
 Example create request:
 
@@ -61,6 +67,26 @@ Example claim request:
 }
 ```
 
+Example bounded mutation request:
+
+```json
+{
+  "note": "waiting on upstream context"
+}
+```
+
+## Mutation semantics
+
+These new mutation routes are intentionally conservative:
+
+- `claim` only works from `queued`
+- `unclaim` moves an actively claimed item back to `queued`
+- `defer` also moves an actively claimed item back to `queued`, but is intended to leave a note explaining why
+- `complete` only works after an item has been claimed/in-progress
+- `drop` is terminal for local triage purposes and clears any active claim
+
+This is enough to support local queue lifecycle cleanup without pretending the backend already supports cross-user locking, permissions, leases, audit streams, or durable workflow orchestration.
+
 ## Run locally
 
 ```bash
@@ -77,7 +103,7 @@ Optional env vars:
 
 Future work can build on this by:
 - projecting existing review/handoff/dashboard artifacts into the runtime bridge automatically
-- adding bounded status transitions beyond `claim`
+- adding bounded status transitions beyond the current local mutation slice if they are truly needed
 - wiring an actual web UI to the local JSON API
 - adding file watchers or event streams if/when justified
 
