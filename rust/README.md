@@ -422,6 +422,16 @@ cargo build --workspace --locked
 
 That wrapper captures outputs into `.demo-artifacts/repo-analysis-demo/` so the review loop is less ephemeral, and it now stages `bundle-summary.json`, `operator-handoff.json`, `review-status.json`, `continuity-status.json`, `operator-transition-brief.md`, `review-log.md`, `bundle-checksums.txt`, and `operator-dashboard.html` plus a cross-run `index.json` / `index.html` for bounded review/resume continuity.
 
+If you want to push one of those staged bundles into the new local backend core instead of leaving it purely static/on-disk, use the explicit import bridge:
+
+```bash
+cd rust
+cargo run -p web-backend-core --bin claw-webd -- import-repo-analysis-bundle \
+  ../.demo-artifacts/repo-analysis-demo/<timestamp>
+```
+
+That command imports the staged `runtime-bridge.json` / `review-status.json` / `continuity-status.json` / `operator-handoff.json` bundle into `.claw/backend/` and creates or updates a real backend queue item. It is a bounded sync step, not a claim that a live web dashboard now exists.
+
 ## Minimal operator checklist
 
 Use this sequence for a new machine:

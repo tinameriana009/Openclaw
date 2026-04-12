@@ -31,6 +31,16 @@ cargo build --workspace --locked
 That runs the documented two-step prompt flow, resumes the same session for the follow-up, and captures both responses under `.demo-artifacts/repo-analysis-demo/<timestamp>/` for later review.
 It also stages `bundle-summary.json`, `operator-handoff.json`, `review-status.json`, `queue-state.json`, `continuity-status.json`, `runtime-bridge.json`, `runtime-events.jsonl`, `operator-transition-brief.md`, `review-log.md`, `bundle-checksums.txt`, and a static `operator-dashboard.html`, then refreshes `.demo-artifacts/repo-analysis-demo/index.{json,html}` so another operator can review/resume the same run, compare it against earlier passes, and inherit the actual handoff state plus the latest captured runtime/session/trace snapshot without guessing what happened.
 
+If you want that staged bundle to feed the new local backend core instead of staying purely static, import it explicitly:
+
+```bash
+cd rust
+cargo run -p web-backend-core --bin claw-webd -- import-repo-analysis-bundle \
+  ../.demo-artifacts/repo-analysis-demo/<timestamp>
+```
+
+That sync step writes `.claw/backend/runtime-bridge.json` and creates or updates one backend queue item from the staged handoff/review state. It is a bounded operator bridge, not a live app sync loop.
+
 If you want the raw one-liner instead, use:
 
 ```bash
