@@ -1620,6 +1620,39 @@ fn approval_review_index_html_path(cwd: &Path) -> PathBuf {
     cwd.join(".claw").join("web-approvals").join("index.html")
 }
 
+fn approval_inbox_state_json_path(cwd: &Path) -> PathBuf {
+    cwd.join(".claw")
+        .join("web-approvals")
+        .join("inbox-state.json")
+}
+
+fn approval_inbox_item_id(trace_id: &str) -> String {
+    format!("web-approval::{trace_id}")
+}
+
+fn load_approval_inbox_state(cwd: &Path) -> JsonValue {
+    let path = approval_inbox_state_json_path(cwd);
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<JsonValue>(&text).ok())
+        .unwrap_or_else(|| {
+            json!({
+                "schemaVersion": 1,
+                "model": "bounded-single-operator-inbox",
+                "entries": []
+            })
+        })
+}
+
+fn approval_inbox_entry_status(bucket: &str) -> &'static str {
+    match bucket {
+        "ready-to-rerun" | "ready-to-review" | "needs-trace-recovery" | "waiting-on-context" => {
+            "active"
+        }
+        _ => "closed",
+    }
+}
+
 fn approval_packet_handoff_json_path(packet_path: &Path) -> PathBuf {
     packet_path.with_extension("handoff.json")
 }
@@ -2467,6 +2500,20 @@ fn refresh_web_approval_review_index(
 ) -> Result<(PathBuf, PathBuf, PathBuf), Box<dyn std::error::Error>> {
     let packet_dir = cwd.join(".claw").join("web-approvals");
     fs::create_dir_all(&packet_dir)?;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as u64;
+    let mut inbox_state = load_approval_inbox_state(cwd);
+    let existing_inbox_entries = inbox_state["entries"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let mut existing_inbox_by_trace = std::collections::BTreeMap::new();
+    for entry in existing_inbox_entries {
+        if let Some(trace_id) = entry["traceId"].as_str() {
+            existing_inbox_by_trace.insert(trace_id.to_string(), entry);
+        }
+    }
     let mut entries = fs::read_dir(&packet_dir)?
         .filter_map(Result::ok)
         .map(|entry| entry.path())
@@ -2526,6 +2573,51 @@ fn refresh_web_approval_review_index(
             value["queueBucket"] = JsonValue::String(bucket.to_string());
             value["queueLabel"] = JsonValue::String(label.to_string());
             value["queueReason"] = JsonValue::String(reason);
+            let trace_id = value["traceId"].as_str().unwrap_or("unknown");
+            let existing_inbox_entry = existing_inbox_by_trace.get(trace_id);
+            let first_surfaced_at_ms = existing_inbox_entry
+                .and_then(|entry| entry["firstSurfacedAtMs"].as_u64())
+                .unwrap_or(now_ms);
+            let source_updated_at_ms = value["updatedAtMs"]
+                .as_u64()
+                .or_else(|| value["approvedAtMs"].as_u64())
+                .unwrap_or(now_ms);
+            let inbox_status = approval_inbox_entry_status(bucket);
+            let inbox_entry = json!({
+                "itemId": existing_inbox_entry
+                    .and_then(|entry| entry["itemId"].as_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| approval_inbox_item_id(trace_id)),
+                "traceId": trace_id,
+                "source": "web-approval-review",
+                "status": inbox_status,
+                "model": "bounded-single-operator",
+                "firstSurfacedAtMs": first_surfaced_at_ms,
+                "lastSurfacedAtMs": now_ms,
+                "sourceUpdatedAtMs": source_updated_at_ms,
+                "operatorState": value["operatorState"].as_str().unwrap_or("unknown"),
+                "queueBucket": bucket,
+                "queueLabel": label,
+                "queuePriority": priority,
+                "queueReason": value["queueReason"].as_str().unwrap_or("inspect review json"),
+                "nextStep": value["nextStep"].as_str().unwrap_or("inspect review json"),
+                "approvalPacket": value["approvalPacket"].as_str(),
+                "reviewJsonPath": value["reviewJsonPath"].as_str(),
+                "reviewHtmlPath": value["reviewHtmlPath"].as_str(),
+                "reviewStatusPath": value["reviewStatusPath"].as_str(),
+                "sessionId": value["sessionId"].as_str(),
+                "corpusId": value["corpusId"].as_str(),
+                "pendingQueries": value["pendingQueries"].clone(),
+                "pendingQueryCount": value["pendingQueries"].as_array().map(|queries| queries.len()).unwrap_or(0),
+                "replayCount": value["replayCount"].as_u64().unwrap_or(0),
+            });
+            value["inboxItemId"] = inbox_entry["itemId"].clone();
+            value["inboxStatus"] = JsonValue::String(inbox_status.to_string());
+            value["firstInboxSurfacedAtMs"] = JsonValue::from(first_surfaced_at_ms);
+            value["lastInboxSurfacedAtMs"] = JsonValue::from(now_ms);
+            value["sourceUpdatedAtMs"] = JsonValue::from(source_updated_at_ms);
+            value["boundedInboxModel"] = JsonValue::String("single-operator".to_string());
+            value["inboxEntry"] = inbox_entry;
             Some(value)
         })
         .collect::<Vec<_>>();
@@ -2547,6 +2639,35 @@ fn refresh_web_approval_review_index(
                     .cmp(right["traceId"].as_str().unwrap_or(""))
             })
     });
+    let inbox_entries = review_entries
+        .iter()
+        .map(|entry| entry["inboxEntry"].clone())
+        .collect::<Vec<_>>();
+    inbox_state = json!({
+        "schemaVersion": 1,
+        "model": "bounded-single-operator-inbox",
+        "generatedAtMs": now_ms,
+        "summary": {
+            "entries": inbox_entries.len(),
+            "active": inbox_entries
+                .iter()
+                .filter(|entry| entry["status"].as_str() == Some("active"))
+                .count(),
+            "closed": inbox_entries
+                .iter()
+                .filter(|entry| entry["status"].as_str() == Some("closed"))
+                .count(),
+        },
+        "entries": inbox_entries,
+        "notes": [
+            "Bounded local persistence only: this file keeps stable inbox item identity and surfaced timestamps for a single local operator.",
+            "It does not claim live multi-operator ownership, remote syncing, leases, or browser-side actions."
+        ]
+    });
+    fs::write(
+        approval_inbox_state_json_path(cwd),
+        serde_json::to_string_pretty(&inbox_state)?,
+    )?;
     let awaiting_rerun = review_entries
         .iter()
         .filter(|entry| {
@@ -2578,7 +2699,9 @@ fn refresh_web_approval_review_index(
     let index_html_path = approval_review_index_html_path(cwd);
     let index_json = json!({
         "schemaVersion": 1,
-        "generatedAtMs": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis(),
+        "generatedAtMs": now_ms,
+        "inboxStatePath": approval_inbox_state_json_path(cwd).display().to_string(),
+        "boundedInboxModel": "single-operator",
         "summary": {
             "entries": review_entries.len(),
             "awaitingRerun": awaiting_rerun,
@@ -2596,6 +2719,11 @@ fn refresh_web_approval_review_index(
 
     let mut lines = vec!["# Web approval review index".to_string(), "".to_string()];
     lines.push("## Summary".to_string());
+    lines.push("- Inbox model: bounded single-operator persistence on disk".to_string());
+    lines.push(format!(
+        "- Inbox state JSON: {}",
+        approval_inbox_state_json_path(cwd).display()
+    ));
     lines.push(format!("- Entries: {}", review_entries.len()));
     lines.push(format!("- Awaiting rerun: {}", awaiting_rerun));
     lines.push(format!("- Rerun captured: {}", rerun_captured));

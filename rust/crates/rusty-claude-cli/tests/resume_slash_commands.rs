@@ -1438,10 +1438,125 @@ fn resumed_trace_inbox_prioritizes_next_actionable_entry() {
     .expect("index json should parse");
     assert_eq!(index_json["summary"]["readyToRerun"], 1);
     assert_eq!(index_json["summary"]["readyToReview"], 1);
+    assert_eq!(index_json["boundedInboxModel"], "single-operator");
     let entries = index_json["entries"]
         .as_array()
         .expect("entries should exist");
     assert_eq!(entries[0]["traceId"], "trace-approved");
     assert_eq!(entries[0]["queueBucket"], "ready-to-rerun");
+    assert_eq!(entries[0]["inboxItemId"], "web-approval::trace-approved");
+    assert_eq!(entries[0]["inboxStatus"], "active");
     assert_eq!(entries[1]["queueBucket"], "ready-to-review");
+
+    let inbox_state: JsonValue = serde_json::from_str(
+        &fs::read_to_string(
+            project_dir
+                .join(".claw")
+                .join("web-approvals")
+                .join("inbox-state.json"),
+        )
+        .expect("inbox state should exist"),
+    )
+    .expect("inbox state should parse");
+    assert_eq!(inbox_state["model"], "bounded-single-operator-inbox");
+    assert_eq!(inbox_state["summary"]["active"], 2);
+    let inbox_entries = inbox_state["entries"]
+        .as_array()
+        .expect("inbox entries should exist");
+    assert_eq!(inbox_entries[0]["itemId"], "web-approval::trace-approved");
+    assert_eq!(inbox_entries[0]["status"], "active");
+}
+
+#[test]
+fn resumed_trace_inbox_state_preserves_first_seen_timestamp() {
+    let temp_dir = unique_temp_dir("resume-trace-inbox-state");
+    let project_dir = temp_dir.join("project");
+    fs::create_dir_all(project_dir.join(".claw").join("sessions"))
+        .expect("sessions dir should exist");
+    fs::create_dir_all(project_dir.join(".claw").join("web-approvals"))
+        .expect("approvals dir should exist");
+
+    let session_path = project_dir
+        .join(".claw")
+        .join("sessions")
+        .join("session.jsonl");
+    Session::new()
+        .with_persistence_path(&session_path)
+        .save_to_path(&session_path)
+        .expect("session should persist");
+
+    fs::write(
+        project_dir
+            .join(".claw")
+            .join("web-approvals")
+            .join("trace-approved.review.json"),
+        r#"{
+          "schemaVersion":1,
+          "traceId":"trace-approved",
+          "corpusId":"demo-corpus",
+          "task":"rerun the approved release-status search",
+          "approvalPacket":"/tmp/trace-approved.json",
+          "operatorState":"approved for explicit rerun",
+          "nextStep":"run /trace replay <trace-file>",
+          "replayTrace":null,
+          "reviewCommand":"/trace review /tmp/trace-approved.json",
+          "replayTraceCommand":"/trace replay /tmp/trace-approved.json",
+          "resumeTraceCommand":"/trace resume /tmp/trace-approved.json",
+          "pendingQueries":["search the web for release status"]
+        }"#,
+    )
+    .expect("approved review json should write");
+
+    fs::write(
+        project_dir
+            .join(".claw")
+            .join("web-approvals")
+            .join("inbox-state.json"),
+        r#"{
+          "schemaVersion":1,
+          "model":"bounded-single-operator-inbox",
+          "entries":[
+            {
+              "itemId":"web-approval::trace-approved",
+              "traceId":"trace-approved",
+              "firstSurfacedAtMs":42,
+              "lastSurfacedAtMs":99,
+              "status":"active"
+            }
+          ]
+        }"#,
+    )
+    .expect("seed inbox state should write");
+
+    let output = run_claw(
+        &project_dir,
+        &[
+            "--resume",
+            session_path.to_str().expect("utf8 path"),
+            "/trace inbox",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let inbox_state: JsonValue = serde_json::from_str(
+        &fs::read_to_string(
+            project_dir
+                .join(".claw")
+                .join("web-approvals")
+                .join("inbox-state.json"),
+        )
+        .expect("inbox state should exist"),
+    )
+    .expect("inbox state should parse");
+    let inbox_entry = &inbox_state["entries"]
+        .as_array()
+        .expect("entries should exist")[0];
+    assert_eq!(inbox_entry["itemId"], "web-approval::trace-approved");
+    assert_eq!(inbox_entry["firstSurfacedAtMs"], 42);
+    assert!(inbox_entry["lastSurfacedAtMs"].as_u64().unwrap_or(0) >= 42);
+    assert_eq!(inbox_entry["model"], "bounded-single-operator");
 }
