@@ -29,7 +29,7 @@ cargo build --workspace --locked
 ```
 
 That runs the documented two-step prompt flow, resumes the same session for the follow-up, and captures both responses under `.demo-artifacts/repo-analysis-demo/<timestamp>/` for later review.
-It also stages `bundle-summary.json`, `operator-handoff.json`, `review-status.json`, `queue-state.json`, `review-log.md`, `bundle-checksums.txt`, and a static `operator-dashboard.html`, then refreshes `.demo-artifacts/repo-analysis-demo/index.{json,html}` so another operator can review/resume the same run, compare it against earlier passes, and inherit the actual handoff state without guessing what happened.
+It also stages `bundle-summary.json`, `operator-handoff.json`, `review-status.json`, `queue-state.json`, `continuity-status.json`, `runtime-bridge.json`, `operator-transition-brief.md`, `review-log.md`, `bundle-checksums.txt`, and a static `operator-dashboard.html`, then refreshes `.demo-artifacts/repo-analysis-demo/index.{json,html}` so another operator can review/resume the same run, compare it against earlier passes, and inherit the actual handoff state plus the latest captured runtime/session/trace snapshot without guessing what happened.
 
 If you want the raw one-liner instead, use:
 
@@ -55,7 +55,7 @@ If you want a more realistic operator path instead of a generic one-liner, use t
 - [`../examples/repo-analysis-demo/trace-review-checklist.md`](../examples/repo-analysis-demo/trace-review-checklist.md)
 - [`../examples/repo-analysis-demo/review-queue-state-model.md`](../examples/repo-analysis-demo/review-queue-state-model.md)
 - staged run dashboard: `.demo-artifacts/repo-analysis-demo/<timestamp>/operator-dashboard.html`
-- staged handoff metadata: `.demo-artifacts/repo-analysis-demo/<timestamp>/{bundle-summary.json,operator-handoff.json,review-status.json,queue-state.json,review-log.md,bundle-checksums.txt}`
+- staged handoff metadata: `.demo-artifacts/repo-analysis-demo/<timestamp>/{bundle-summary.json,operator-handoff.json,review-status.json,queue-state.json,continuity-status.json,runtime-bridge.json,operator-transition-brief.md,review-log.md,bundle-checksums.txt}`
 - cross-run static review index: `.demo-artifacts/repo-analysis-demo/{index.json,index.html}`
 
 ## Recommended flow
@@ -163,7 +163,7 @@ After the model answers:
 3. capture exact evidence, missed files, and weak claims in [`../examples/repo-analysis-demo/operator-session-template.md`](../examples/repo-analysis-demo/operator-session-template.md)
 4. inspect the trace if the model made a broad claim from thin evidence
 5. re-prompt with narrower file targets when needed using [`../examples/repo-analysis-demo/next-prompt-template.md`](../examples/repo-analysis-demo/next-prompt-template.md)
-6. if another operator is taking over, hand them the staged `operator-dashboard.html`, `operator-handoff.json`, `review-status.json`, `queue-state.json`, and `review-log.md` instead of a loose summary message
+6. if another operator is taking over, hand them the staged `operator-dashboard.html`, `operator-handoff.json`, `review-status.json`, `queue-state.json`, `continuity-status.json`, `runtime-bridge.json`, `operator-transition-brief.md`, and `review-log.md` instead of a loose summary message
 7. if you need to compare runs or see which bundles were actually reviewed, open `.demo-artifacts/repo-analysis-demo/index.html`
 
 You can also run a lightweight coherence check for the demo assets themselves:

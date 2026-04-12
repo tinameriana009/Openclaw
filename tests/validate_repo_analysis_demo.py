@@ -13,7 +13,6 @@ REQUIRED_FILES = [
     DEMO_ROOT / 'operator-session-template.md',
     DEMO_ROOT / 'next-prompt-template.md',
     DEMO_ROOT / 'trace-review-checklist.md',
-    DEMO_ROOT / 'review-queue-state-model.md',
     REPO_ROOT / 'docs' / 'workflows' / 'README.md',
     REPO_ROOT / 'docs' / 'workflows' / 'repo-analysis.md',
     REPO_ROOT / 'rust' / 'scripts' / 'run-repo-analysis-demo.sh',
@@ -45,7 +44,8 @@ def main() -> int:
         'bundle-summary.json',
         'operator-handoff.json',
         'review-status.json',
-        'queue-state.json',
+        'continuity-status.json',
+        'operator-transition-brief.md',
         'review-log.md',
         'index.html',
         'index.json',
@@ -65,14 +65,14 @@ def main() -> int:
         'operator-session-template.md',
         'next-prompt-template.md',
         'trace-review-checklist.md',
-        'review-queue-state-model.md',
         'run-repo-analysis-demo.sh',
         '.demo-artifacts/repo-analysis-demo/',
         'operator-dashboard.html',
         'bundle-summary.json',
         'operator-handoff.json',
         'review-status.json',
-        'queue-state.json',
+        'continuity-status.json',
+        'operator-transition-brief.md',
         'review-log.md',
         'index.html',
         'index.json',
@@ -91,7 +91,8 @@ def main() -> int:
         'bundle-summary.json',
         'operator-handoff.json',
         'review-status.json',
-        'queue-state.json',
+        'continuity-status.json',
+        'operator-transition-brief.md',
         'review-log.md',
         'index.html',
         'index.json',
@@ -106,7 +107,8 @@ def main() -> int:
         'bundle-summary.json',
         'operator-handoff.json',
         'review-status.json',
-        'queue-state.json',
+        'continuity-status.json',
+        'operator-transition-brief.md',
         'review-log.md',
         'operator-dashboard.html',
         'index.json',
@@ -115,12 +117,43 @@ def main() -> int:
         '/trace replay <trace-file|approval-packet>',
         '/trace resume <trace-file|approval-packet>',
         '/trace handoff [target]',
-        'claimed',
-        'deferred',
-        'handoff-ready',
+        'priorReviewedRun',
+        'handoffState',
     ]:
         if needle not in script_text:
             print(f'run-repo-analysis-demo.sh is missing required lifecycle artifact or continuity command: {needle}')
+            return 1
+
+    session_template_text = (DEMO_ROOT / 'operator-session-template.md').read_text()
+    for needle in [
+        'continuity-status.json reviewed? yes / no',
+        'operator-transition-brief.md inherited? yes / no',
+        'Which prior reviewed run are you comparing against?',
+        'What the next operator can trust without re-reading everything:',
+    ]:
+        if needle not in session_template_text:
+            print(f'Operator session template is missing continuity handoff prompt: {needle}')
+            return 1
+
+    next_prompt_text = (DEMO_ROOT / 'next-prompt-template.md').read_text()
+    for needle in [
+        'Continuity state reviewed',
+        'Prior reviewed run compared against',
+        'What the next operator should *not* assume yet',
+        'What changed from the prior pass',
+    ]:
+        if needle not in next_prompt_text:
+            print(f'Next prompt template is missing continuity prompt: {needle}')
+            return 1
+
+    trace_checklist_text = (DEMO_ROOT / 'trace-review-checklist.md').read_text()
+    for needle in [
+        'genuinely new evidence',
+        'prior reviewed run',
+        'what changed this time',
+    ]:
+        if needle not in trace_checklist_text:
+            print(f'Trace review checklist is missing continuity check: {needle}')
             return 1
 
     print('Repo analysis demo validation passed.')

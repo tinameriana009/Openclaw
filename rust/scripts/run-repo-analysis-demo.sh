@@ -24,8 +24,7 @@ RUNTIME_BRIDGE_JSON="$RUN_DIR/runtime-bridge.json"
 REVIEW_STATUS_JSON="$RUN_DIR/review-status.json"
 REVIEW_LOG_MD="$RUN_DIR/review-log.md"
 TRANSITION_MD="$RUN_DIR/operator-transition-brief.md"
-QUEUE_STATE_JSON="$RUN_DIR/queue-state.json"
-# queue-state.json is the operator-facing queue ledger name in the docs/tests.
+CONTINUITY_JSON="$RUN_DIR/continuity-status.json"
 # Bounded lifecycle states: queued, claimed, in-review, deferred, handoff-ready, completed, dropped.
 INDEX_JSON="$ARTIFACT_ROOT/index.json"
 INDEX_HTML="$ARTIFACT_ROOT/index.html"
@@ -81,7 +80,7 @@ resume_trace_command=/trace resume <trace-file|approval-packet>
 trace_handoff_command=/trace handoff [target]
 review_index_json=$INDEX_JSON
 review_index_html=$INDEX_HTML
-queue_state=$QUEUE_STATE_JSON
+queue_state=$CONTINUITY_JSON
 transition_brief=$TRANSITION_MD
 EOF
 
@@ -199,7 +198,7 @@ Review steps for this run:
    $INDEX_HTML
    $INDEX_JSON
 7. Update the queue state before handing off:
-   $QUEUE_STATE_JSON
+   $CONTINUITY_JSON
    $TRANSITION_MD
 8. Re-run the demo validator if you changed docs/assets:
    python3 tests/validate_repo_analysis_demo.py
@@ -217,7 +216,7 @@ next-prompt-template.md
 operator-findings-template.md
 review-log.md
 review-status.json
-queue-state.json
+continuity-status.json
 operator-transition-brief.md
 next-steps.txt
 bundle-summary.json
@@ -243,7 +242,7 @@ handoff_path = Path(${HANDOFF_JSON@Q})
 dashboard_path = Path(${DASHBOARD_HTML@Q})
 runtime_bridge_path = Path(${RUNTIME_BRIDGE_JSON@Q})
 review_status_path = Path(${REVIEW_STATUS_JSON@Q})
-continuity_path = Path(${QUEUE_STATE_JSON@Q})
+continuity_path = Path(${CONTINUITY_JSON@Q})
 transition_path = Path(${TRANSITION_MD@Q})
 index_json_path = Path(${INDEX_JSON@Q})
 index_html_path = Path(${INDEX_HTML@Q})
@@ -339,7 +338,7 @@ def load_runtime_bridge() -> dict[str, object]:
         'webOperatorBridge': {
             'bundleDashboard': 'operator-dashboard.html',
             'reviewStatus': 'review-status.json',
-            'queueState': 'queue-state.json',
+            'continuityStatus': 'continuity-status.json',
             'transitionBrief': 'operator-transition-brief.md',
             'honestyNote': 'Static snapshot only: this bundle reflects the runtime/session/trace state seen when the helper finished. It is not a live sync channel.',
         },
@@ -365,7 +364,7 @@ summary = {
         'operator-findings-template.md',
         'review-log.md',
         'review-status.json',
-        'queue-state.json',
+        'continuity-status.json',
         'operator-transition-brief.md',
         'next-prompt-template.md',
         'next-steps.txt',
@@ -381,7 +380,7 @@ summary = {
     },
     'continuityArtifacts': {
         'transitionBrief': 'operator-transition-brief.md',
-        'queueState': 'queue-state.json',
+        'continuityStatus': 'continuity-status.json',
         'reviewStatus': 'review-status.json',
         'reviewLog': 'review-log.md',
         'runtimeBridge': 'runtime-bridge.json',
@@ -422,7 +421,7 @@ review_status = {
     'traceResumeCommand': '/trace resume <trace-file|approval-packet>',
     'traceHandoffCommand': '/trace handoff [target]',
     'reviewLog': 'review-log.md',
-    'queueState': 'queue-state.json',
+    'continuityStatus': 'continuity-status.json',
     'transitionBrief': 'operator-transition-brief.md',
     'notes': 'Update this file by hand when review starts/completes so the shared index reflects the bounded operator state honestly.',
 }
@@ -469,7 +468,7 @@ transition_lines = [
     '',
     '## What the next operator should do first',
     '- Open operator-dashboard.html for the local run summary.',
-    '- Read review-status.json and queue-state.json before trusting older notes.',
+    '- Read review-status.json and continuity-status.json before trusting older notes.',
     '- Compare 01-brief-response.txt and 02-followup-response.txt against expected-findings.md.',
     '- Update review-log.md with exact files spot-checked and any claims that still need re-checking.',
     '',
@@ -520,7 +519,7 @@ dashboard_html = f'''<!DOCTYPE html>
       <li><strong>Profile:</strong> {esc(${PROFILE@Q})}</li>
       <li><strong>Run dir:</strong> <code>{esc(str(run_dir))}</code></li>
       <li><strong>Review status:</strong> <code>pending-review</code> (edit <code>review-status.json</code> as review progresses)</li>
-      <li><strong>Queue state:</strong> <code>queue-state.json</code> tracks current/next operator and handoff state</li>
+      <li><strong>Continuity state:</strong> <code>continuity-status.json</code> tracks current/next operator and handoff state</li>
       <li><strong>Initial response:</strong> <code>01-brief-response.txt</code></li>
       <li><strong>Follow-up response:</strong> <code>02-followup-response.txt</code></li>
       <li><strong>Transition brief:</strong> <code>operator-transition-brief.md</code></li>
@@ -539,7 +538,7 @@ dashboard_html = f'''<!DOCTYPE html>
       <li>Compare both responses against <code>docs/examples/repo-analysis-demo/expected-findings.md</code>.</li>
       <li>Use <code>docs/examples/repo-analysis-demo/manual-validation-checklist.md</code> for file spot-checks.</li>
       <li>Capture evidence and weak claims in <code>operator-session-template.md</code>, <code>operator-findings-template.md</code>, and <code>review-log.md</code>.</li>
-      <li>Update <code>review-status.json</code> and <code>queue-state.json</code> so the shared multi-run index reflects reality.</li>
+      <li>Update <code>review-status.json</code> and <code>continuity-status.json</code> so the shared multi-run index reflects reality.</li>
       <li>Fill <code>operator-transition-brief.md</code> before handing the run to another operator.</li>
       <li>Inspect trace evidence if the model made a jump that the files do not justify.</li>
       <li>Continue the same session with <code>next-prompt-template.md</code> instead of starting over.</li>
@@ -576,7 +575,7 @@ for candidate in sorted(
     bundle_summary_path = candidate / 'bundle-summary.json'
     handoff_candidate_path = candidate / 'operator-handoff.json'
     review_candidate_path = candidate / 'review-status.json'
-    continuity_candidate_path = candidate / 'queue-state.json'
+    continuity_candidate_path = candidate / 'continuity-status.json'
     if not bundle_summary_path.exists() or not handoff_candidate_path.exists():
         continue
     bundle_summary = json.loads(bundle_summary_path.read_text())
@@ -600,7 +599,7 @@ for candidate in sorted(
         'bundleSummary': str(bundle_summary_path),
         'operatorHandoff': str(handoff_candidate_path),
         'reviewStatus': str(review_candidate_path) if review_candidate_path.exists() else None,
-        'queueState': str(continuity_candidate_path) if continuity_candidate_path.exists() else None,
+        'continuityStatus': str(continuity_candidate_path) if continuity_candidate_path.exists() else None,
         'runtimeBridge': str(runtime_bridge_candidate_path) if runtime_bridge_candidate_path.exists() else None,
         'latestSessionId': (runtime_bridge_candidate.get('latestSession') or {}).get('sessionId'),
         'recentTraceCount': len(runtime_bridge_candidate.get('recentTraces') or []),
@@ -622,7 +621,7 @@ index_payload = {
     'reviewModel': 'bounded-static-review-index',
     'notes': [
         'This index aggregates staged run bundles for cross-run review and resume continuity.',
-        'Operators should update each run\'s review-status.json, queue-state.json, and review-log.md by hand; this is not a live web service.',
+        'Operators should update each run\'s review-status.json, continuity-status.json, and review-log.md by hand; this is not a live web service.',
     ],
     'runs': runs,
 }
@@ -667,7 +666,7 @@ index_html = f'''<!DOCTYPE html>
     <h2>How to use this index</h2>
     <ol>
       <li>Open the newest run bundle first.</li>
-      <li>Check <code>review-status.json</code> and <code>queue-state.json</code> before trusting a prior pass.</li>
+      <li>Check <code>review-status.json</code> and <code>continuity-status.json</code> before trusting a prior pass.</li>
       <li>Use <code>review-log.md</code> and <code>operator-transition-brief.md</code> to record what changed between runs.</li>
       <li>Resume the same session or use <code>/trace replay</code> / <code>/trace resume</code> only as bounded CLI continuity tools.</li>
     </ol>
@@ -719,7 +718,7 @@ handoff = {
     'operatorFindingsTemplate': 'operator-findings-template.md',
     'reviewLog': 'review-log.md',
     'reviewStatus': 'review-status.json',
-    'queueState': 'queue-state.json',
+    'continuityStatus': 'continuity-status.json',
     'runtimeBridge': 'runtime-bridge.json',
     'transitionBrief': 'operator-transition-brief.md',
     'nextPromptTemplate': 'next-prompt-template.md',
@@ -730,7 +729,7 @@ handoff = {
     },
     'priorRun': compact_run_pointer(prior_run),
     'priorReviewedRun': compact_run_pointer(prior_reviewed_run),
-    'operatorNextStep': 'Review the two responses against expected-findings.md, inspect any surprising trace claims, update queue-state.json plus operator-transition-brief.md, and continue the same session with a narrower evidence-backed prompt.',
+    'operatorNextStep': 'Review the two responses against expected-findings.md, inspect any surprising trace claims, update continuity-status.json plus operator-transition-brief.md, and continue the same session with a narrower evidence-backed prompt.',
     'automationStatus': 'staged-review-and-resume-only',
     'manualValidationRequired': True,
 }
@@ -746,7 +745,7 @@ PY
 
 echo
 echo "Staged continuity artifacts:"
-echo "  $QUEUE_STATE_JSON"
+echo "  $CONTINUITY_JSON"
 echo "  $TRANSITION_MD"
 echo
 cat "$TRACE_HINT"
