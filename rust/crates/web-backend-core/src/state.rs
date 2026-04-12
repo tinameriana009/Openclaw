@@ -402,8 +402,12 @@ impl WebBackendStore {
             handoff_target: None,
             claimed_by: None,
             operator_note: None,
-            note: request.note.and_then(|value| non_empty_trimmed(Some(value))),
-            source_path: request.source_path.and_then(|value| non_empty_trimmed(Some(value))),
+            note: request
+                .note
+                .and_then(|value| non_empty_trimmed(Some(value))),
+            source_path: request
+                .source_path
+                .and_then(|value| non_empty_trimmed(Some(value))),
         };
         queue.items.push(item.clone());
         queue.bump_revision();
@@ -422,21 +426,188 @@ impl WebBackendStore {
             ));
         }
         let mut queue = self.load_queue()?;
+        if let Some(expected_revision) = request.expected_revision {
+            ensure_expected_revision(queue.revision, expected_revision)?;
+        }
         let item = queue
             .items
             .iter_mut()
             .find(|item| item.id == item_id)
             .ok_or_else(|| StoreError::NotFound(format!("queue item not found: {item_id}")))?;
+        match item.status {
+            QueueItemStatus::Queued => {}
+            QueueItemStatus::Claimed | QueueItemStatus::InReview | QueueItemStatus::HandoffReady => {
+                return Err(StoreError::Validation(format!(
+                    "queue item {item_id} is already actively claimed"
+                )));
+            }
+            QueueItemStatus::Completed => {
+                return Err(StoreError::Validation(format!(
+                    "completed queue item {item_id} cannot be claimed again"
+                )));
+            }
+            QueueItemStatus::Dropped => {
+                return Err(StoreError::Validation(format!(
+                    "dropped queue item {item_id} cannot be claimed again"
+                )));
+            }
+        }
         let now = now_utc_string();
         item.status = QueueItemStatus::Claimed;
         item.claimed_by = Some(request.claimed_by.trim().to_string());
         item.claimed_at_utc = Some(now.clone());
+        item.deferred_until_utc = None;
         item.handoff_target = request.handoff_target.and_then(|value| non_empty_trimmed(Some(value)));
         item.operator_note = request.operator_note.and_then(|value| non_empty_trimmed(Some(value)));
-        item.updated_at_utc = now;
+        item.updated_at_utc = now.clone();
         let updated = item.clone();
         queue.bump_revision();
         self.write_queue(&queue)?;
+        self.record_queue_event(QueueMutationEvent {
+            event_id: format!("event-{}", unix_timestamp()),
+            occurred_at_utc: now,
+            item_id: updated.id.clone(),
+            kind: QueueMutationKind::StatusTransition,
+            actor: updated.claimed_by.clone().unwrap_or_else(|| "local-operator".to_string()),
+            from_status: Some(QueueItemStatus::Queued),
+            to_status: QueueItemStatus::Claimed,
+            detail: "item claimed".to_string(),
+        })?;
+        Ok(updated)
+    }
+
+    pub fn unclaim_queue_item(
+        &self,
+        item_id: &str,
+        request: QueueMutationRequest,
+    ) -> Result<QueueItem, StoreError> {
+        self.mutate_claimed_queue_item(item_id, request, QueueItemStatus::Queued, "item unclaimed")
+    }
+
+    pub fn defer_queue_item(
+        &self,
+        item_id: &str,
+        request: QueueMutationRequest,
+    ) -> Result<QueueItem, StoreError> {
+        self.mutate_claimed_queue_item(item_id, request, QueueItemStatus::Queued, "item deferred")
+    }
+
+    pub fn complete_queue_item(
+        &self,
+        item_id: &str,
+        request: QueueMutationRequest,
+    ) -> Result<QueueItem, StoreError> {
+        self.mutate_claimed_queue_item(item_id, request, QueueItemStatus::Completed, "item completed")
+    }
+
+    pub fn drop_queue_item(
+        &self,
+        item_id: &str,
+        request: QueueMutationRequest,
+    ) -> Result<QueueItem, StoreError> {
+        let mut queue = self.load_queue()?;
+        if let Some(expected_revision) = request.expected_revision {
+            ensure_expected_revision(queue.revision, expected_revision)?;
+        }
+        let item = queue
+            .items
+            .iter_mut()
+            .find(|item| item.id == item_id)
+            .ok_or_else(|| StoreError::NotFound(format!("queue item not found: {item_id}")))?;
+        let from_status = item.status.clone();
+        if matches!(from_status, QueueItemStatus::Completed) {
+            return Err(StoreError::Validation(format!(
+                "completed queue item {item_id} cannot be dropped"
+            )));
+        }
+        if matches!(from_status, QueueItemStatus::Dropped) {
+            return Err(StoreError::Validation(format!(
+                "queue item {item_id} is already dropped"
+            )));
+        }
+        let now = now_utc_string();
+        item.status = QueueItemStatus::Dropped;
+        item.claimed_by = None;
+        item.claimed_at_utc = None;
+        item.deferred_until_utc = None;
+        item.handoff_target = request.handoff_target.and_then(|value| non_empty_trimmed(Some(value)));
+        if let Some(operator_note) = request.operator_note.and_then(|value| non_empty_trimmed(Some(value))) {
+            item.operator_note = Some(operator_note);
+        }
+        if let Some(note) = request.note.and_then(|value| non_empty_trimmed(Some(value))) {
+            item.note = Some(note);
+        }
+        item.updated_at_utc = now.clone();
+        let updated = item.clone();
+        queue.bump_revision();
+        self.write_queue(&queue)?;
+        self.record_queue_event(QueueMutationEvent {
+            event_id: format!("event-{}", unix_timestamp()),
+            occurred_at_utc: now,
+            item_id: updated.id.clone(),
+            kind: QueueMutationKind::StatusTransition,
+            actor: "local-operator".to_string(),
+            from_status: Some(from_status),
+            to_status: QueueItemStatus::Dropped,
+            detail: "item dropped".to_string(),
+        })?;
+        Ok(updated)
+    }
+
+    fn mutate_claimed_queue_item(
+        &self,
+        item_id: &str,
+        request: QueueMutationRequest,
+        next_status: QueueItemStatus,
+        detail: &str,
+    ) -> Result<QueueItem, StoreError> {
+        let mut queue = self.load_queue()?;
+        if let Some(expected_revision) = request.expected_revision {
+            ensure_expected_revision(queue.revision, expected_revision)?;
+        }
+        let item = queue
+            .items
+            .iter_mut()
+            .find(|item| item.id == item_id)
+            .ok_or_else(|| StoreError::NotFound(format!("queue item not found: {item_id}")))?;
+        let from_status = item.status.clone();
+        if !matches!(from_status, QueueItemStatus::Claimed | QueueItemStatus::InReview | QueueItemStatus::HandoffReady) {
+            return Err(StoreError::Validation(format!(
+                "queue item {item_id} must be actively claimed before moving to {:?}",
+                next_status
+            )));
+        }
+        let actor = item.claimed_by.clone().unwrap_or_else(|| "local-operator".to_string());
+        let now = now_utc_string();
+        item.status = next_status.clone();
+        if matches!(next_status, QueueItemStatus::Queued) {
+            item.claimed_by = None;
+            item.claimed_at_utc = None;
+            item.deferred_until_utc = request.deferred_until_utc.and_then(|value| non_empty_trimmed(Some(value)));
+        } else {
+            item.deferred_until_utc = None;
+        }
+        item.handoff_target = request.handoff_target.and_then(|value| non_empty_trimmed(Some(value)));
+        if let Some(operator_note) = request.operator_note.and_then(|value| non_empty_trimmed(Some(value))) {
+            item.operator_note = Some(operator_note);
+        }
+        if let Some(note) = request.note.and_then(|value| non_empty_trimmed(Some(value))) {
+            item.note = Some(note);
+        }
+        item.updated_at_utc = now.clone();
+        let updated = item.clone();
+        queue.bump_revision();
+        self.write_queue(&queue)?;
+        self.record_queue_event(QueueMutationEvent {
+            event_id: format!("event-{}", unix_timestamp()),
+            occurred_at_utc: now,
+            item_id: updated.id.clone(),
+            kind: QueueMutationKind::StatusTransition,
+            actor,
+            from_status: Some(from_status),
+            to_status: next_status,
+            detail: detail.to_string(),
+        })?;
         Ok(updated)
     }
 
@@ -594,7 +765,10 @@ impl WebBackendStore {
     }
 
     fn write_queue_audit(&self, audit: &QueueAuditTrail) -> Result<(), StoreError> {
-        fs::write(&self.paths.queue_audit_file, serde_json::to_string_pretty(audit)?)?;
+        fs::write(
+            &self.paths.queue_audit_file,
+            serde_json::to_string_pretty(audit)?,
+        )?;
         Ok(())
     }
 
@@ -758,7 +932,10 @@ mod tests {
         assert_eq!(claimed.status, QueueItemStatus::Claimed);
         assert_eq!(claimed.claimed_by.as_deref(), Some("operator-a"));
         assert!(claimed.claimed_at_utc.is_some());
-        assert_eq!(claimed.handoff_target.as_deref(), Some("local-operator-inbox"));
+        assert_eq!(
+            claimed.handoff_target.as_deref(),
+            Some("local-operator-inbox")
+        );
         assert_eq!(claimed.operator_note.as_deref(), Some("bounded first pass"));
         let queue = store.load_queue().expect("queue should reload");
         assert_eq!(queue.revision, 2);
@@ -885,8 +1062,14 @@ mod tests {
             Some("session-123")
         );
         assert_eq!(snapshot.queue.items.len(), 1);
-        assert_eq!(snapshot.queue.items[0].handoff_target.as_deref(), Some("local-operator-inbox"));
-        assert_eq!(snapshot.queue.items[0].operator_note.as_deref(), Some("imported from staged bundle"));
+        assert_eq!(
+            snapshot.queue.items[0].handoff_target.as_deref(),
+            Some("local-operator-inbox")
+        );
+        assert_eq!(
+            snapshot.queue.items[0].operator_note.as_deref(),
+            Some("imported from staged bundle")
+        );
         assert_eq!(
             snapshot.queue.items[0].source_path.as_deref(),
             Some(".demo-artifacts/repo-analysis-demo/20260412T030700Z/operator-handoff.json")
