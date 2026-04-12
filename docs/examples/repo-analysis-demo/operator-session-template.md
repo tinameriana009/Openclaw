@@ -9,16 +9,17 @@ Use this while reviewing a repo-analysis run so evidence, doubts, and follow-up 
 - Corpus roots attached:
 - Profile used: balanced / deep / research
 - Session/run artifact path:
-- Queue state when you picked it up: queued / claimed / in-review / deferred / handoff-ready / completed / dropped
-- continuity-status.json reviewed? yes / no
-- operator-transition-brief.md inherited? yes / no
+- `review-status.json` reviewed? yes / no
+- `continuity-status.json` reviewed? yes / no
+- `operator-transition-brief.md` inherited? yes / no
 
 ## Prompt flow used
 - Initial brief prompt:
 - Follow-up prompt(s):
 - Did you resume the same session? yes / no
 - If this is a later pass, which prior run bundle or dashboard did you inherit?
-- Which prior reviewed run are you comparing against?
+- Which `priorReviewedRun` entry are you comparing against?
+- What does the current `handoffState` say?
 
 ## Grounding review
 - Files the answer cited confidently:

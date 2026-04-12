@@ -126,9 +126,9 @@ def main() -> int:
 
     session_template_text = (DEMO_ROOT / 'operator-session-template.md').read_text()
     for needle in [
-        'continuity-status.json reviewed? yes / no',
-        'operator-transition-brief.md inherited? yes / no',
-        'Which prior reviewed run are you comparing against?',
+        '`continuity-status.json` reviewed? yes / no',
+        '`operator-transition-brief.md` inherited? yes / no',
+        'Which `priorReviewedRun` entry are you comparing against?',
         'What the next operator can trust without re-reading everything:',
     ]:
         if needle not in session_template_text:
@@ -138,8 +138,9 @@ def main() -> int:
     next_prompt_text = (DEMO_ROOT / 'next-prompt-template.md').read_text()
     for needle in [
         'Continuity state reviewed',
-        'Prior reviewed run compared against',
+        'bundle-summary.priorReviewedRun.runId',
         'What the next operator should *not* assume yet',
+        'continuity-status.handoffState',
         'What changed from the prior pass',
     ]:
         if needle not in next_prompt_text:

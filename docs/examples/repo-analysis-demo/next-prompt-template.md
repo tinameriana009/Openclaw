@@ -10,10 +10,11 @@ Use the same attached local corpus and stay explicit about uncertainty.
 Context from the previous run:
 - Profile used: [balanced/deep/research]
 - Prior artifacts reviewed: [.demo-artifacts/repo-analysis-demo/<timestamp>/...]
-- Dashboard or handoff bundle reviewed: [operator-dashboard.html / bundle-summary.json / operator-handoff.json / queue-state.json]
+- Dashboard or handoff bundle reviewed: [operator-dashboard.html / bundle-summary.json / operator-handoff.json]
 - Continuity state reviewed: [review-status.json / continuity-status.json / operator-transition-brief.md]
 - Files already spot-checked manually: [src/main.py, src/runtime.py, ...]
-- Prior reviewed run compared against: [<timestamp> or none]
+- Prior reviewed run compared against: [bundle-summary.priorReviewedRun.runId or none]
+- Current handoff state: [continuity-status.handoffState]
 
 What I verified manually:
 - Confirmed facts: [list exact file-backed facts]
