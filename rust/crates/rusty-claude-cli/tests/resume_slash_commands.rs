@@ -607,7 +607,9 @@ fn resumed_trace_replay_updates_review_artifacts_with_rerun_trace() {
         .expect("review html path should be printed");
     let review_html = fs::read_to_string(&review_html_path).expect("review html should exist");
     assert!(review_html.contains("Web approval review"));
+    assert!(review_html.contains("Task and inbox context"));
     assert!(review_html.contains("Replay trace"));
+    assert!(review_html.contains("How to operate this snapshot"));
     assert!(review_html.contains("Operator commands"));
 
     let review_status_path = stdout
@@ -786,8 +788,11 @@ fn resumed_trace_resume_approves_reruns_and_refreshes_review_index() {
     let index_html = fs::read_to_string(&index_html_path).expect("index html should exist");
     assert!(index_html.contains("<h1>Web approval dashboard</h1>"));
     assert!(index_html.contains("Static review surface generated on disk"));
+    assert!(index_html.contains("Operator inbox"));
+    assert!(index_html.contains("How to use this static queue"));
     assert!(index_html.contains("Operator commands"));
     assert!(index_html.contains("Replay count"));
+    assert!(index_html.contains("Review HTML"));
 }
 
 #[test]

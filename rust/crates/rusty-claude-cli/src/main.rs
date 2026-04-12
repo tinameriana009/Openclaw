@@ -1706,18 +1706,38 @@ fn render_web_operator_review_html(
     next_step: &str,
 ) -> String {
     let pending_queries = if packet.pending_queries.is_empty() {
-        "<li>none</li>".to_string()
+        r#"<li class="empty">No queued follow-up queries.</li>"#.to_string()
     } else {
         packet
             .pending_queries
             .iter()
-            .map(|query| format!("<li><code>{}</code></li>", html_escape(query)))
+            .map(|query| format!(r#"<li><code>{}</code></li>"#, html_escape(query)))
             .collect::<Vec<_>>()
             .join("")
+    };
+    let pending_query_chips = if packet.pending_queries.is_empty() {
+        r#"<span class="chip muted">No pending queries</span>"#.to_string()
+    } else {
+        packet
+            .pending_queries
+            .iter()
+            .map(|query| {
+                format!(
+                    r#"<span class="chip"><code>{}</code></span>"#,
+                    html_escape(query)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     };
     let replay_trace = replay_trace_path
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "not yet rerun".to_string());
+    let replay_state = if replay_trace_path.is_some() {
+        "Replay trace captured"
+    } else {
+        "Waiting for bounded rerun"
+    };
     let operator_note = packet.operator_note.as_deref().unwrap_or(
         "browser automation is still not available; rerun remains explicitly operator-driven",
     );
@@ -1725,17 +1745,117 @@ fn render_web_operator_review_html(
     let replay_trace_command = trace_replay_command(packet_path);
     let resume_trace_command = trace_resume_command(packet_path);
     format!(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\" />\n  <title>Web approval review · {trace_id}</title>\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n  <style>body{{font-family:Inter,system-ui,sans-serif;margin:2rem auto;max-width:960px;padding:0 1rem;line-height:1.5;background:#0b1020;color:#e5e7eb}}code,pre{{font-family:ui-monospace,SFMono-Regular,monospace;background:#111827;color:#e5e7eb}}pre{{padding:1rem;overflow:auto;border-radius:12px}}.card{{background:#111827;border:1px solid #243041;border-radius:16px;padding:1rem 1.25rem;margin:1rem 0}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0.75rem}}.label{{font-size:.82rem;color:#93c5fd;text-transform:uppercase;letter-spacing:.04em}}.value{{margin-top:.2rem;word-break:break-word}}.pill{{display:inline-block;padding:.25rem .6rem;border-radius:999px;background:#1d4ed8;color:#eff6ff;font-size:.9rem}}.note{{color:#cbd5e1}}a{{color:#93c5fd}}</style>\n</head>\n<body>\n  <h1>Web approval review</h1>\n  <p class=\"note\">Static operator web surface only. Browser automation and click-to-rerun controls do not exist yet.</p>\n  <div class=\"card\">\n    <div class=\"grid\">\n      <div><div class=\"label\">Trace ID</div><div class=\"value\"><code>{trace_id}</code></div></div>\n      <div><div class=\"label\">Session ID</div><div class=\"value\"><code>{session_id}</code></div></div>\n      <div><div class=\"label\">Corpus</div><div class=\"value\"><code>{corpus_id}</code></div></div>\n      <div><div class=\"label\">Approved at ms</div><div class=\"value\"><code>{approved_at_ms}</code></div></div>\n      <div><div class=\"label\">Operator state</div><div class=\"value\"><span class=\"pill\">{operator_state}</span></div></div>\n      <div><div class=\"label\">Next step</div><div class=\"value\">{next_step}</div></div>\n    </div>\n  </div>\n  <div class=\"card\">\n    <h2>Artifacts</h2>\n    <ul>\n      <li>Approval packet: <code>{packet_path}</code></li>\n      <li>Original trace: <code>{original_trace}</code></li>\n      <li>Replay trace: <code>{replay_trace}</code></li>\n    </ul>\n  </div>\n  <div class=\"card\">\n    <h2>Task</h2>\n    <p>{task}</p>\n  </div>\n  <div class=\"card\">\n    <h2>Pending approved queries</h2>\n    <ul>{pending_queries}</ul>\n  </div>\n  <div class=\"card\">\n    <h2>Operator commands</h2>\n    <pre><code>{review_command}\n{replay_trace_command}\n{resume_trace_command}\n{replay_command}</code></pre>\n  </div>\n  <div class=\"card\">\n    <h2>Operator note</h2>\n    <p>{operator_note}</p>\n  </div>\n</body>\n</html>\n",
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Web approval review · {trace_id}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{{color-scheme:dark;background:#07111f;color:#e5eefb;font-family:Inter,system-ui,sans-serif}}
+    *{{box-sizing:border-box}}
+    body{{margin:0;background:radial-gradient(circle at top,#10213d 0,#07111f 55%,#040915 100%);color:#e5eefb}}
+    a{{color:#8ec5ff}}
+    code,pre{{font-family:ui-monospace,SFMono-Regular,monospace}}
+    .shell{{max-width:1120px;margin:0 auto;padding:32px 18px 48px}}
+    .hero{{padding:24px;border:1px solid #223452;border-radius:24px;background:linear-gradient(180deg,rgba(18,33,59,.94),rgba(10,18,33,.98));box-shadow:0 18px 48px rgba(0,0,0,.28)}}
+    .eyebrow{{display:inline-block;padding:6px 10px;border-radius:999px;background:#173056;color:#b9d7ff;font-size:.8rem;letter-spacing:.04em;text-transform:uppercase}}
+    h1{{margin:14px 0 8px;font-size:clamp(2rem,4vw,3rem)}}
+    h2{{margin:0 0 12px;font-size:1.08rem}}
+    p{{margin:.45rem 0;color:#c7d4e7}}
+    .subtle{{color:#92a6c5}}
+    .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:18px}}
+    .split{{display:grid;grid-template-columns:1.2fr .8fr;gap:16px;margin-top:16px}}
+    @media (max-width:880px){{.split{{grid-template-columns:1fr}}}}
+    .card{{background:rgba(10,18,33,.9);border:1px solid #223452;border-radius:20px;padding:18px;box-shadow:0 12px 28px rgba(0,0,0,.18)}}
+    .metric{{padding:14px;border-radius:16px;background:#0d1a30;border:1px solid #1a2a46}}
+    .label{{font-size:.78rem;color:#8ec5ff;text-transform:uppercase;letter-spacing:.06em}}
+    .value{{margin-top:8px;word-break:break-word;font-size:1rem}}
+    .pill{{display:inline-flex;align-items:center;gap:8px;padding:.38rem .72rem;border-radius:999px;background:#16376c;color:#eef6ff;font-size:.92rem;border:1px solid #28549d}}
+    .chip{{display:inline-flex;align-items:center;padding:.38rem .6rem;border-radius:999px;background:#0f223f;border:1px solid #1d3c68;color:#dbeafe;margin:0 8px 8px 0}}
+    .chip.muted{{color:#92a6c5}}
+    .stack{{display:flex;flex-wrap:wrap;margin-top:10px}}
+    .file-list,.steps{{margin:0;padding-left:1.1rem}}
+    .file-list li,.steps li{{margin:.5rem 0;color:#c7d4e7}}
+    pre{{margin:0;padding:14px 16px;overflow:auto;border-radius:16px;background:#050b16;border:1px solid #1e2b44;color:#dbeafe}}
+    .note{{margin-top:12px;padding:12px 14px;border-left:3px solid #4ea1ff;background:rgba(78,161,255,.1);border-radius:12px;color:#dbeafe}}
+    .empty{{color:#92a6c5}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <span class="eyebrow">Static operator review</span>
+      <h1>Web approval review</h1>
+      <p>Static operator web surface only. This page is an honest on-disk snapshot for operators. It feels browser-shaped, but it is still a static file with no live syncing, no click-to-rerun, and no browser automation.</p>
+      <div class="grid">
+        <div class="metric"><div class="label">Trace ID</div><div class="value"><code>{trace_id}</code></div></div>
+        <div class="metric"><div class="label">Session ID</div><div class="value"><code>{session_id}</code></div></div>
+        <div class="metric"><div class="label">Corpus</div><div class="value"><code>{corpus_id}</code></div></div>
+        <div class="metric"><div class="label">Approved at ms</div><div class="value"><code>{approved_at_ms}</code></div></div>
+        <div class="metric"><div class="label">Operator state</div><div class="value"><span class="pill">{operator_state}</span></div></div>
+        <div class="metric"><div class="label">Replay state</div><div class="value"><span class="pill">{replay_state}</span></div></div>
+      </div>
+    </section>
+
+    <section class="split">
+      <article class="card">
+        <h2>Task and inbox context</h2>
+        <p>{task}</p>
+        <div class="note"><strong>Next step:</strong> {next_step}</div>
+        <p class="subtle">Pending approved queries</p>
+        <div class="stack">{pending_query_chips}</div>
+        <ul class="file-list">{pending_queries}</ul>
+      </article>
+      <article class="card">
+        <h2>How to operate this snapshot</h2>
+        <ol class="steps">
+          <li>Review the trace and packet paths below.</li>
+          <li>Run one of the operator commands locally.</li>
+          <li>Refresh or reopen the generated file after the command writes new artifacts.</li>
+        </ol>
+        <p class="subtle">This is intentionally bounded: the operator stays in charge of reruns and approvals.</p>
+      </article>
+    </section>
+
+    <section class="split">
+      <article class="card">
+        <h2>Artifacts</h2>
+        <ul class="file-list">
+          <li>Approval packet: <code>{packet_path}</code></li>
+          <li>Original trace: <code>{original_trace}</code></li>
+          <li>Replay trace: <code>{replay_trace}</code></li>
+        </ul>
+      </article>
+      <article class="card">
+        <h2>Operator note</h2>
+        <p>{operator_note}</p>
+      </article>
+    </section>
+
+    <section class="card">
+      <h2>Operator commands</h2>
+      <pre><code>{review_command}
+{replay_trace_command}
+{resume_trace_command}
+{replay_command}</code></pre>
+    </section>
+  </main>
+</body>
+</html>
+"#,
         trace_id = html_escape(&packet.trace_id),
         session_id = html_escape(&packet.session_id),
         corpus_id = html_escape(&packet.corpus_id),
         approved_at_ms = packet.approved_at_ms,
         operator_state = html_escape(operator_state),
+        replay_state = html_escape(replay_state),
         next_step = html_escape(next_step),
         packet_path = html_escape(&packet_path.display().to_string()),
         original_trace = html_escape(&original_trace_path.display().to_string()),
         replay_trace = html_escape(&replay_trace),
         task = html_escape(&packet.task),
+        pending_query_chips = pending_query_chips,
         pending_queries = pending_queries,
         review_command = html_escape(&review_command),
         replay_trace_command = html_escape(&replay_trace_command),
@@ -1751,43 +1871,180 @@ fn render_web_approval_dashboard_html(index_value: &JsonValue) -> String {
         .as_array()
         .cloned()
         .unwrap_or_default();
+    let generated_at_ms = index_value["generatedAtMs"].as_u64().unwrap_or(0);
+    let inbox_card = if let Some(next) = entries.first() {
+        format!(
+            r#"<section class="card inbox"><div class="section-topline">Operator inbox</div><h2><code>{trace_id}</code></h2><p><span class="pill bucket-{bucket}">{label}</span></p><p>{task}</p><div class="note"><strong>Why now:</strong> {reason}</div><div class="mini-grid"><div><div class="label">Next step</div><div class="value">{next_step}</div></div><div><div class="label">Session</div><div class="value"><code>{session_id}</code></div></div><div><div class="label">Review HTML</div><div class="value"><code>{review_html_path}</code></div></div></div></section>"#,
+            trace_id = html_escape(next["traceId"].as_str().unwrap_or("unknown")),
+            bucket = html_escape(next["queueBucket"].as_str().unwrap_or("archived")),
+            label = html_escape(next["queueLabel"].as_str().unwrap_or("Unclassified")),
+            task = html_escape(next["task"].as_str().unwrap_or("<missing task>")),
+            reason = html_escape(
+                next["queueReason"]
+                    .as_str()
+                    .unwrap_or("inspect review json")
+            ),
+            next_step = html_escape(next["nextStep"].as_str().unwrap_or("inspect review json")),
+            session_id = html_escape(next["sessionId"].as_str().unwrap_or("unknown")),
+            review_html_path = html_escape(next["reviewHtmlPath"].as_str().unwrap_or("missing")),
+        )
+    } else {
+        r#"<section class="card inbox"><div class="section-topline">Operator inbox</div><h2>Nothing queued</h2><p class="muted">No review artifacts have been generated yet, so the inbox is empty.</p></section>"#.to_string()
+    };
     let entry_cards = if entries.is_empty() {
-        "<p>No review artifacts yet.</p>".to_string()
+        r#"<p class="muted">No review artifacts yet.</p>"#.to_string()
     } else {
         entries
             .iter()
             .map(|entry| {
                 let trace_id = html_escape(entry["traceId"].as_str().unwrap_or("unknown"));
                 let state = html_escape(entry["operatorState"].as_str().unwrap_or("unknown"));
+                let label = html_escape(entry["queueLabel"].as_str().unwrap_or("Unclassified"));
+                let bucket = html_escape(entry["queueBucket"].as_str().unwrap_or("archived"));
                 let task = html_escape(entry["task"].as_str().unwrap_or("<missing task>"));
                 let corpus = html_escape(entry["corpusId"].as_str().unwrap_or("unknown"));
+                let session_id = html_escape(entry["sessionId"].as_str().unwrap_or("unknown"));
                 let packet = html_escape(entry["approvalPacket"].as_str().unwrap_or("missing"));
                 let next_step = html_escape(entry["nextStep"].as_str().unwrap_or("inspect review json"));
+                let reason = html_escape(entry["queueReason"].as_str().unwrap_or("inspect review json"));
                 let replay_trace = html_escape(entry["replayTrace"].as_str().unwrap_or("not yet rerun"));
                 let review_command = html_escape(entry["reviewCommand"].as_str().unwrap_or("/trace review <approval-packet>"));
                 let replay_command = html_escape(entry["replayTraceCommand"].as_str().unwrap_or("/trace replay <approval-packet>"));
                 let resume_command = html_escape(entry["resumeTraceCommand"].as_str().unwrap_or("/trace resume <approval-packet>"));
                 let review_status = html_escape(entry["reviewStatusPath"].as_str().unwrap_or("missing"));
                 let review_log = html_escape(entry["reviewLogPath"].as_str().unwrap_or("missing"));
+                let review_html_path = html_escape(entry["reviewHtmlPath"].as_str().unwrap_or("missing"));
+                let review_json_path = html_escape(entry["reviewJsonPath"].as_str().unwrap_or("missing"));
                 let replay_count = entry["replayCount"].as_u64().unwrap_or(0);
                 let history_entries = entry["historyEntries"].as_u64().unwrap_or(0);
                 let pending = entry["pendingQueries"].as_array().map(|queries| {
-                    let items = queries.iter().filter_map(|value| value.as_str()).map(|value| format!("<li><code>{}</code></li>", html_escape(value))).collect::<Vec<_>>().join("");
-                    if items.is_empty() { "<li>none</li>".to_string() } else { items }
-                }).unwrap_or_else(|| "<li>none</li>".to_string());
-                format!("<section class=\"card\"><h2><code>{trace_id}</code></h2><p><span class=\"pill\">{state}</span></p><p>{task}</p><div class=\"grid\"><div><div class=\"label\">Corpus</div><div class=\"value\"><code>{corpus}</code></div></div><div><div class=\"label\">Packet</div><div class=\"value\"><code>{packet}</code></div></div><div><div class=\"label\">Replay trace</div><div class=\"value\"><code>{replay_trace}</code></div></div><div><div class=\"label\">Replay count</div><div class=\"value\">{replay_count}</div></div><div><div class=\"label\">Lifecycle entries</div><div class=\"value\">{history_entries}</div></div><div><div class=\"label\">Review status</div><div class=\"value\"><code>{review_status}</code></div></div><div><div class=\"label\">Review log</div><div class=\"value\"><code>{review_log}</code></div></div><div><div class=\"label\">Next step</div><div class=\"value\">{next_step}</div></div></div><h3>Pending queries</h3><ul>{pending}</ul><h3>Operator commands</h3><pre><code>{review_command}\n{replay_command}\n{resume_command}</code></pre></section>")
+                    let items = queries.iter().filter_map(|value| value.as_str()).map(|value| format!(r#"<span class="chip"><code>{}</code></span>"#, html_escape(value))).collect::<Vec<_>>().join("");
+                    if items.is_empty() { r#"<span class="chip muted">No pending queries</span>"#.to_string() } else { items }
+                }).unwrap_or_else(|| r#"<span class="chip muted">No pending queries</span>"#.to_string());
+                format!(
+                    r#"<section class="card queue-item"><div class="queue-header"><div><div class="section-topline">Queue item</div><h2><code>{trace_id}</code></h2></div><div class="badges"><span class="pill bucket-{bucket}">{label}</span><span class="pill state">{state}</span></div></div><p>{task}</p><div class="note"><strong>Why now:</strong> {reason}</div><div class="grid"><div><div class="label">Corpus</div><div class="value"><code>{corpus}</code></div></div><div><div class="label">Session</div><div class="value"><code>{session_id}</code></div></div><div><div class="label">Packet</div><div class="value"><code>{packet}</code></div></div><div><div class="label">Replay trace</div><div class="value"><code>{replay_trace}</code></div></div><div><div class="label">Replay count</div><div class="value">{replay_count}</div></div><div><div class="label">Lifecycle entries</div><div class="value">{history_entries}</div></div><div><div class="label">Review HTML</div><div class="value"><code>{review_html_path}</code></div></div><div><div class="label">Review JSON</div><div class="value"><code>{review_json_path}</code></div></div><div><div class="label">Review status</div><div class="value"><code>{review_status}</code></div></div><div><div class="label">Review log</div><div class="value"><code>{review_log}</code></div></div><div><div class="label">Next step</div><div class="value">{next_step}</div></div></div><h3>Pending queries</h3><div class="chips">{pending}</div><h3>Operator commands</h3><pre><code>{review_command}
+{replay_command}
+{resume_command}</code></pre></section>"#,
+                    trace_id = trace_id,
+                    bucket = bucket,
+                    label = label,
+                    state = state,
+                    task = task,
+                    reason = reason,
+                    corpus = corpus,
+                    session_id = session_id,
+                    packet = packet,
+                    replay_trace = replay_trace,
+                    replay_count = replay_count,
+                    history_entries = history_entries,
+                    review_html_path = review_html_path,
+                    review_json_path = review_json_path,
+                    review_status = review_status,
+                    review_log = review_log,
+                    next_step = next_step,
+                    pending = pending,
+                    review_command = review_command,
+                    replay_command = replay_command,
+                    resume_command = resume_command,
+                )
             })
             .collect::<Vec<_>>()
             .join("\n")
     };
     format!(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\" />\n  <title>Web approval dashboard</title>\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n  <style>body{{font-family:Inter,system-ui,sans-serif;margin:2rem auto;max-width:1100px;padding:0 1rem;line-height:1.5;background:#0b1020;color:#e5e7eb}}.card{{background:#111827;border:1px solid #243041;border-radius:16px;padding:1rem 1.25rem;margin:1rem 0}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0.75rem}}.label{{font-size:.82rem;color:#93c5fd;text-transform:uppercase;letter-spacing:.04em}}.value{{margin-top:.2rem;word-break:break-word}}code{{font-family:ui-monospace,SFMono-Regular,monospace;background:#111827;color:#e5e7eb}}.pill{{display:inline-block;padding:.25rem .6rem;border-radius:999px;background:#1d4ed8;color:#eff6ff;font-size:.9rem}}.note{{color:#cbd5e1}}</style>\n</head>\n<body>\n  <h1>Web approval dashboard</h1>\n  <p class=\"note\">Static review surface generated on disk. No browser-side action buttons or automation are implemented.</p>\n  <section class=\"card\">\n    <div class=\"grid\">\n      <div><div class=\"label\">Entries</div><div class=\"value\">{entries_count}</div></div>\n      <div><div class=\"label\">Awaiting rerun</div><div class=\"value\">{awaiting}</div></div>\n      <div><div class=\"label\">Rerun captured</div><div class=\"value\">{captured}</div></div>\n      <div><div class=\"label\">Rerun missing trace</div><div class=\"value\">{missing_trace}</div></div>\n      <div><div class=\"label\">Pending approved queries</div><div class=\"value\">{pending_queries}</div></div>\n      <div><div class=\"label\">Replay count</div><div class=\"value\">{replay_count}</div></div>\n    </div>\n  </section>\n  {entry_cards}\n</body>\n</html>\n",
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Web approval dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{{color-scheme:dark;background:#07111f;color:#e5eefb;font-family:Inter,system-ui,sans-serif}}
+    *{{box-sizing:border-box}}
+    body{{margin:0;background:radial-gradient(circle at top,#10213d 0,#07111f 55%,#040915 100%);color:#e5eefb}}
+    code,pre{{font-family:ui-monospace,SFMono-Regular,monospace}}
+    .shell{{max-width:1240px;margin:0 auto;padding:32px 18px 48px}}
+    .hero{{padding:24px;border:1px solid #223452;border-radius:24px;background:linear-gradient(180deg,rgba(18,33,59,.94),rgba(10,18,33,.98));box-shadow:0 18px 48px rgba(0,0,0,.28)}}
+    .eyebrow{{display:inline-block;padding:6px 10px;border-radius:999px;background:#173056;color:#b9d7ff;font-size:.8rem;letter-spacing:.04em;text-transform:uppercase}}
+    h1{{margin:14px 0 8px;font-size:clamp(2rem,4vw,3rem)}}
+    h2{{margin:.2rem 0 .6rem;font-size:1.12rem}}
+    h3{{margin:1rem 0 .5rem;font-size:.96rem;color:#bcd3f4}}
+    p{{margin:.45rem 0;color:#c7d4e7}}
+    .muted{{color:#92a6c5}}
+    .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}}
+    .mini-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}}
+    .stack{{display:grid;grid-template-columns:1.1fr .9fr;gap:16px;margin-top:18px}}
+    @media (max-width:960px){{.stack{{grid-template-columns:1fr}}}}
+    .card{{background:rgba(10,18,33,.9);border:1px solid #223452;border-radius:20px;padding:18px;box-shadow:0 12px 28px rgba(0,0,0,.18)}}
+    .summary-card{{margin-top:16px}}
+    .metric{{padding:14px;border-radius:16px;background:#0d1a30;border:1px solid #1a2a46}}
+    .section-topline,.label{{font-size:.78rem;color:#8ec5ff;text-transform:uppercase;letter-spacing:.06em}}
+    .value{{margin-top:8px;word-break:break-word}}
+    .queue-header{{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}}
+    .badges{{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}}
+    .pill{{display:inline-flex;align-items:center;gap:8px;padding:.38rem .72rem;border-radius:999px;background:#16376c;color:#eef6ff;font-size:.9rem;border:1px solid #28549d}}
+    .pill.state{{background:#112746;border-color:#254268}}
+    .bucket-ready-to-rerun{{background:#113b2d;border-color:#1d6b50}}
+    .bucket-ready-to-review{{background:#3a2c10;border-color:#8d6a1d}}
+    .bucket-needs-trace-recovery{{background:#4a1f1f;border-color:#8a3232}}
+    .bucket-waiting-on-context{{background:#1b2f53;border-color:#345f9e}}
+    .bucket-archived{{background:#1d2635;border-color:#39465a}}
+    .chips{{display:flex;flex-wrap:wrap;gap:8px}}
+    .chip{{display:inline-flex;align-items:center;padding:.38rem .6rem;border-radius:999px;background:#0f223f;border:1px solid #1d3c68;color:#dbeafe}}
+    .chip.muted{{color:#92a6c5}}
+    pre{{margin:0;padding:14px 16px;overflow:auto;border-radius:16px;background:#050b16;border:1px solid #1e2b44;color:#dbeafe}}
+    .note{{margin-top:12px;padding:12px 14px;border-left:3px solid #4ea1ff;background:rgba(78,161,255,.1);border-radius:12px;color:#dbeafe}}
+    .queue-list{{margin-top:18px;display:grid;gap:16px}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <span class="eyebrow">Static operator dashboard</span>
+      <h1>Web approval dashboard</h1>
+      <p>Static review surface generated on disk. It is meant to feel like an operator cockpit, but it is still just local files: no live updates, no browser-side action buttons, and no hidden automation.</p>
+      <p class="muted">Generated at ms: <code>{generated_at_ms}</code></p>
+      <section class="card summary-card">
+        <div class="grid">
+          <div class="metric"><div class="label">Entries</div><div class="value">{entries_count}</div></div>
+          <div class="metric"><div class="label">Awaiting rerun</div><div class="value">{awaiting}</div></div>
+          <div class="metric"><div class="label">Rerun captured</div><div class="value">{captured}</div></div>
+          <div class="metric"><div class="label">Rerun missing trace</div><div class="value">{missing_trace}</div></div>
+          <div class="metric"><div class="label">Pending approved queries</div><div class="value">{pending_queries}</div></div>
+          <div class="metric"><div class="label">Replay count</div><div class="value">{replay_count}</div></div>
+          <div class="metric"><div class="label">Ready to rerun</div><div class="value">{ready_to_rerun}</div></div>
+          <div class="metric"><div class="label">Ready to review</div><div class="value">{ready_to_review}</div></div>
+          <div class="metric"><div class="label">Needs trace recovery</div><div class="value">{needs_trace_recovery}</div></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="stack">
+      {inbox_card}
+      <section class="card">
+        <div class="section-topline">Workflow</div>
+        <h2>How to use this static queue</h2>
+        <p>1. Open the top inbox item. 2. Run the surfaced operator command. 3. Reopen the generated files after the command writes fresh snapshots.</p>
+        <p class="muted">That friction is intentional: it keeps reruns explicit, inspectable, and operator-owned.</p>
+      </section>
+    </section>
+
+    <section class="queue-list">{entry_cards}</section>
+  </main>
+</body>
+</html>
+"#,
+        generated_at_ms = generated_at_ms,
         entries_count = summary["entries"].as_u64().unwrap_or(entries.len() as u64),
         awaiting = summary["awaitingRerun"].as_u64().unwrap_or(0),
         captured = summary["rerunCaptured"].as_u64().unwrap_or(0),
         missing_trace = summary["rerunMissingTrace"].as_u64().unwrap_or(0),
         pending_queries = summary["pendingQueries"].as_u64().unwrap_or(0),
         replay_count = summary["replayCount"].as_u64().unwrap_or(0),
+        ready_to_rerun = summary["readyToRerun"].as_u64().unwrap_or(0),
+        ready_to_review = summary["readyToReview"].as_u64().unwrap_or(0),
+        needs_trace_recovery = summary["needsTraceRecovery"].as_u64().unwrap_or(0),
+        inbox_card = inbox_card,
         entry_cards = entry_cards,
     )
 }
@@ -2233,8 +2490,11 @@ fn refresh_web_approval_review_index(
                 .unwrap_or_else(|| path.with_extension("json"));
             let review_status_path = approval_packet_review_status_path(&packet_path);
             let review_log_path = approval_packet_review_log_path(&packet_path);
+            let review_html_path = approval_packet_review_html_path(&packet_path);
             value["reviewStatusPath"] = JsonValue::String(review_status_path.display().to_string());
             value["reviewLogPath"] = JsonValue::String(review_log_path.display().to_string());
+            value["reviewHtmlPath"] = JsonValue::String(review_html_path.display().to_string());
+            value["reviewJsonPath"] = JsonValue::String(path.display().to_string());
             if let Ok(packet_text) = fs::read_to_string(&packet_path) {
                 if let Ok(packet) = serde_json::from_str::<WebApprovalPacket>(&packet_text) {
                     value["sessionId"] = JsonValue::String(packet.session_id.clone());
@@ -2734,6 +2994,9 @@ fn render_trace_inbox(cwd: &Path) -> Result<String, Box<dyn std::error::Error>> 
         }
         if let Some(next_step) = next["nextStep"].as_str() {
             lines.push(format!("    next: {}", next_step));
+        }
+        if let Some(review_html_path) = next["reviewHtmlPath"].as_str() {
+            lines.push(format!("    review html: {}", review_html_path));
         }
         if let Some(review_command) = next["reviewCommand"].as_str() {
             lines.push(format!("    review: {}", review_command));
