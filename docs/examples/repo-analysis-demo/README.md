@@ -37,7 +37,7 @@ That helper:
 - saves both responses under `.demo-artifacts/repo-analysis-demo/<timestamp>/`
 - stages `operator-session-template.md`, `next-prompt-template.md`, and a findings template alongside the run outputs
 - emits `bundle-summary.json`, `operator-handoff.json`, `review-status.json`, `queue-state.json`, `review-log.md`, `bundle-checksums.txt`, and a static `operator-dashboard.html` so the next operator has a durable review/resume bundle
-- points each new bundle at the most recent prior run and prior fully reviewed run when those exist, so cross-run comparison starts with a real baseline
+- stages bounded queue metadata in `queue-state.json` for claim / ack / defer / handoff / complete-style review flow without pretending there is a live operator backend
 - refreshes a cross-run `index.json` / `index.html` under `.demo-artifacts/repo-analysis-demo/` so older bundles remain easy to review and compare without pretending a live web app exists
 - prints the next validation/trace-review steps instead of pretending the run is self-certifying
 
@@ -73,8 +73,7 @@ If you want a richer reasoning trail, repeat with `PROFILE=deep` or `PROFILE=res
 3. Use [`manual-validation-checklist.md`](manual-validation-checklist.md) while reading the referenced files.
 4. Capture exact evidence, weak spots, and handoff notes in [`operator-session-template.md`](operator-session-template.md).
 5. Open `operator-dashboard.html` or inspect `bundle-summary.json` / `operator-handoff.json` / `review-status.json` / `queue-state.json` if you are handing the run to another operator or picking it back up later.
-6. Fill `operator-transition-brief.md` before handoff so the next operator knows what changed, what was actually verified, and what still needs review.
-7. Check `.demo-artifacts/repo-analysis-demo/index.html` when you need cross-run review context or want to compare the newest bundle against earlier passes.
+6. 7. Check `.demo-artifacts/repo-analysis-demo/index.html` when you need cross-run review context or want to compare the newest bundle against earlier passes.
 8. If the model made a surprising jump, inspect the trace using [`trace-review-checklist.md`](trace-review-checklist.md).
 9. Turn the review into the next grounded question with [`next-prompt-template.md`](next-prompt-template.md).
 
@@ -93,10 +92,10 @@ That check only verifies the demo assets and doc wiring. It does **not** score m
 The staged run bundle is meant to survive operator handoff honestly:
 
 - `operator-dashboard.html` is a static on-disk dashboard for the run, not a live web UI.
-- `bundle-summary.json` lists the run profile, bundle files, exact continuity commands, prior-run pointers, and the shared cross-run index paths.
+- `bundle-summary.json` lists the run profile, bundle files, exact continuity commands, and the shared cross-run index paths.
 - `operator-handoff.json` captures the minimum payload another operator needs to continue review.
 - `review-status.json` records the honest bounded review state for the run.
-- `operator-transition-brief.md` is the explicit baton-pass note for the next operator.
+- `queue-state.json` records bounded queue/lifecycle metadata like `queued`, `claimed`, `in-review`, `deferred`, `handoff-ready`, and `completed`, plus claim / ack / defer style actions.
 - `review-log.md` is the human-written ledger for what changed, what was verified, and what to do next.
 - `bundle-checksums.txt` lets the next operator confirm the staged bundle was not silently changed.
 - `.demo-artifacts/repo-analysis-demo/index.{json,html}` aggregates all staged runs into a static cross-run review surface.

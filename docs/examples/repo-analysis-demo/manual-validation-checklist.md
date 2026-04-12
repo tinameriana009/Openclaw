@@ -35,3 +35,4 @@ Open these files while reviewing the answer:
 
 - [ ] Did the answer avoid claiming runtime behavior that is not visible in the local corpus?
 - [ ] Did it avoid pretending the harness executed or verified the repo automatically?
+- [ ] If you are handing the run off, did you update `queue-state.json` so claim / ack / defer / handoff state is honest?

@@ -25,7 +25,8 @@ REVIEW_STATUS_JSON="$RUN_DIR/review-status.json"
 REVIEW_LOG_MD="$RUN_DIR/review-log.md"
 TRANSITION_MD="$RUN_DIR/operator-transition-brief.md"
 QUEUE_STATE_JSON="$RUN_DIR/queue-state.json"
-# queue-state.json remains the operator-facing queue ledger name in the docs/tests; queue-state.json is the current script artifact.
+# queue-state.json is the operator-facing queue ledger name in the docs/tests.
+# Bounded lifecycle states: queued, claimed, in-review, deferred, handoff-ready, completed, dropped.
 INDEX_JSON="$ARTIFACT_ROOT/index.json"
 INDEX_HTML="$ARTIFACT_ROOT/index.html"
 
@@ -524,6 +525,9 @@ dashboard_html = f'''<!DOCTYPE html>
       <li><strong>Follow-up response:</strong> <code>02-followup-response.txt</code></li>
       <li><strong>Transition brief:</strong> <code>operator-transition-brief.md</code></li>
       <li><strong>Cross-run index:</strong> <code>{esc(str(index_html_path))}</code></li>
+      <li><strong>Runtime bridge:</strong> <code>runtime-bridge.json</code></li>
+      <li><strong>Latest session snapshot:</strong> <code>{esc(str((runtime_bridge.get('latestSession') or {}).get('sessionId') or 'none-captured'))}</code></li>
+      <li><strong>Recent trace snapshots:</strong> <code>{esc(str(len(runtime_bridge.get('recentTraces') or [])))}</code></li>
       <li><strong>Prior run in index:</strong> <code>{esc(prior_run_label)}</code></li>
       <li><strong>Prior fully reviewed run:</strong> <code>{esc(prior_reviewed_label)}</code></li>
     </ul>
@@ -716,6 +720,7 @@ handoff = {
     'reviewLog': 'review-log.md',
     'reviewStatus': 'review-status.json',
     'queueState': 'queue-state.json',
+    'runtimeBridge': 'runtime-bridge.json',
     'transitionBrief': 'operator-transition-brief.md',
     'nextPromptTemplate': 'next-prompt-template.md',
     'operatorDashboard': 'operator-dashboard.html',
