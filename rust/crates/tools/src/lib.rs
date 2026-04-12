@@ -444,7 +444,8 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                             "required": ["content", "activeForm", "status"],
                             "additionalProperties": false
                         }
-                    }
+                    },
+                    "allowBackwardTransitions": { "type": "boolean" }
                 },
                 "required": ["todos"],
                 "additionalProperties": false
@@ -896,6 +897,8 @@ struct WebSearchInput {
 #[derive(Debug, Deserialize)]
 struct TodoWriteInput {
     todos: Vec<TodoItem>,
+    #[serde(rename = "allowBackwardTransitions", default)]
+    allow_backward_transitions: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
@@ -912,6 +915,42 @@ enum TodoStatus {
     Pending,
     InProgress,
     Completed,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum TodoMutationCommandKind {
+    Create,
+    Update,
+    Delete,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+struct TodoMutationCommand {
+    kind: TodoMutationCommandKind,
+    key: String,
+    before: Option<TodoItem>,
+    after: Option<TodoItem>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+struct TodoMutationArtifact {
+    version: u32,
+    #[serde(rename = "mutationId")]
+    mutation_id: String,
+    #[serde(rename = "timestampMs")]
+    timestamp_ms: u64,
+    revision: u64,
+    commands: Vec<TodoMutationCommand>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+struct TodoStateArtifact {
+    version: u32,
+    revision: u64,
+    #[serde(rename = "updatedAtMs")]
+    updated_at_ms: u64,
+    todos: Vec<TodoItem>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1068,6 +1107,14 @@ struct TodoWriteOutput {
     new_todos: Vec<TodoItem>,
     #[serde(rename = "verificationNudgeNeeded")]
     verification_nudge_needed: Option<bool>,
+    #[serde(rename = "mutation")]
+    mutation: TodoMutationArtifact,
+    #[serde(rename = "state")]
+    state: TodoStateArtifact,
+    #[serde(rename = "statePath")]
+    state_path: String,
+    #[serde(rename = "mutationLogPath")]
+    mutation_log_path: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1625,6 +1672,8 @@ fn execute_todo_write(input: TodoWriteInput) -> Result<TodoWriteOutput, String> 
         Vec::new()
     };
 
+    validate_todo_transitions(&old_todos, &input.todos, input.allow_backward_transitions)?;
+
     let all_done = input
         .todos
         .iter()
@@ -1644,6 +1693,26 @@ fn execute_todo_write(input: TodoWriteInput) -> Result<TodoWriteOutput, String> 
     )
     .map_err(|error| error.to_string())?;
 
+    let timestamp_ms = current_time_millis();
+    let revision = load_todo_state_revision(&store_path)? + 1;
+    let mutation = TodoMutationArtifact {
+        version: 1,
+        mutation_id: format!("todo-mutation-{timestamp_ms}"),
+        timestamp_ms,
+        revision,
+        commands: infer_todo_mutation_commands(&old_todos, &input.todos),
+    };
+    let state = TodoStateArtifact {
+        version: 1,
+        revision,
+        updated_at_ms: timestamp_ms,
+        todos: input.todos.clone(),
+    };
+    let state_path = todo_state_artifact_path(&store_path);
+    let mutation_log_path = todo_mutation_log_path(&store_path);
+    persist_todo_state_artifact(&state_path, &state)?;
+    append_todo_mutation_artifact(&mutation_log_path, &mutation)?;
+
     let verification_nudge_needed = (all_done
         && input.todos.len() >= 3
         && !input
@@ -1656,6 +1725,10 @@ fn execute_todo_write(input: TodoWriteInput) -> Result<TodoWriteOutput, String> 
         old_todos,
         new_todos: input.todos,
         verification_nudge_needed,
+        mutation,
+        state,
+        state_path: state_path.display().to_string(),
+        mutation_log_path: mutation_log_path.display().to_string(),
     })
 }
 
@@ -1685,6 +1758,148 @@ fn validate_todos(todos: &[TodoItem]) -> Result<(), String> {
         return Err(String::from("todo activeForm must not be empty"));
     }
     Ok(())
+}
+
+fn validate_todo_transitions(
+    old_todos: &[TodoItem],
+    new_todos: &[TodoItem],
+    allow_backward_transitions: bool,
+) -> Result<(), String> {
+    let mut seen = BTreeSet::new();
+    for todo in new_todos {
+        let key = todo_identity_key(todo);
+        if !seen.insert(key.clone()) {
+            return Err(format!("duplicate todo content is not allowed: {}", todo.content));
+        }
+    }
+
+    if allow_backward_transitions {
+        return Ok(());
+    }
+
+    let old_by_key = todo_map_by_key(old_todos);
+    for todo in new_todos {
+        let key = todo_identity_key(todo);
+        let Some(previous) = old_by_key.get(&key) else {
+            continue;
+        };
+        if todo_status_rank(&todo.status) < todo_status_rank(&previous.status) {
+            return Err(format!(
+                "backward todo transition requires allowBackwardTransitions=true: '{}' moved from {:?} to {:?}",
+                todo.content, previous.status, todo.status
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn infer_todo_mutation_commands(
+    old_todos: &[TodoItem],
+    new_todos: &[TodoItem],
+) -> Vec<TodoMutationCommand> {
+    let old_by_key = todo_map_by_key(old_todos);
+    let new_by_key = todo_map_by_key(new_todos);
+    let mut keys = BTreeSet::new();
+    keys.extend(old_by_key.keys().cloned());
+    keys.extend(new_by_key.keys().cloned());
+
+    let mut commands = Vec::new();
+    for key in keys {
+        match (old_by_key.get(&key), new_by_key.get(&key)) {
+            (None, Some(after)) => commands.push(TodoMutationCommand {
+                kind: TodoMutationCommandKind::Create,
+                key,
+                before: None,
+                after: Some((*after).clone()),
+            }),
+            (Some(before), None) => commands.push(TodoMutationCommand {
+                kind: TodoMutationCommandKind::Delete,
+                key,
+                before: Some((*before).clone()),
+                after: None,
+            }),
+            (Some(before), Some(after)) if before != after => commands.push(TodoMutationCommand {
+                kind: TodoMutationCommandKind::Update,
+                key,
+                before: Some((*before).clone()),
+                after: Some((*after).clone()),
+            }),
+            _ => {}
+        }
+    }
+    commands
+}
+
+fn todo_map_by_key<'a>(todos: &'a [TodoItem]) -> BTreeMap<String, &'a TodoItem> {
+    todos.iter()
+        .map(|todo| (todo_identity_key(todo), todo))
+        .collect()
+}
+
+fn todo_identity_key(todo: &TodoItem) -> String {
+    todo.content.trim().to_ascii_lowercase()
+}
+
+fn todo_status_rank(status: &TodoStatus) -> u8 {
+    match status {
+        TodoStatus::Pending => 0,
+        TodoStatus::InProgress => 1,
+        TodoStatus::Completed => 2,
+    }
+}
+
+fn todo_state_artifact_path(store_path: &Path) -> PathBuf {
+    store_path.with_extension("state.json")
+}
+
+fn todo_mutation_log_path(store_path: &Path) -> PathBuf {
+    store_path.with_extension("mutations.jsonl")
+}
+
+fn load_todo_state_revision(store_path: &Path) -> Result<u64, String> {
+    let state_path = todo_state_artifact_path(store_path);
+    if !state_path.exists() {
+        return Ok(0);
+    }
+    let state = serde_json::from_str::<TodoStateArtifact>(
+        &std::fs::read_to_string(&state_path).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(state.revision)
+}
+
+fn persist_todo_state_artifact(path: &Path, state: &TodoStateArtifact) -> Result<(), String> {
+    std::fs::write(
+        path,
+        serde_json::to_string_pretty(state).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn append_todo_mutation_artifact(path: &Path, mutation: &TodoMutationArtifact) -> Result<(), String> {
+    use std::io::Write;
+
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| error.to_string())?;
+    writeln!(
+        file,
+        "{}",
+        serde_json::to_string(mutation).map_err(|error| error.to_string())?
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn current_time_millis() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
 }
 
 fn todo_store_path() -> Result<std::path::PathBuf, String> {
@@ -3800,7 +4015,9 @@ mod tests {
         )
         .expect("TodoWrite should succeed");
         std::env::remove_var("CLAWD_TODO_STORE");
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("state.json"));
+        let _ = std::fs::remove_file(path.with_extension("mutations.jsonl"));
 
         let second_output: serde_json::Value = serde_json::from_str(&second).expect("valid json");
         assert_eq!(
@@ -3812,6 +4029,13 @@ mod tests {
             3
         );
         assert!(second_output["verificationNudgeNeeded"].is_null());
+        assert_eq!(second_output["mutation"]["revision"], 2);
+        assert_eq!(second_output["state"]["revision"], 2);
+        assert!(second_output["statePath"].as_str().expect("state path").ends_with(".state.json"));
+        assert!(second_output["mutationLogPath"]
+            .as_str()
+            .expect("mutation log path")
+            .ends_with(".mutations.jsonl"));
     }
 
     #[test]
@@ -3849,6 +4073,52 @@ mod tests {
         .expect_err("blank content should fail");
         assert!(blank_content.contains("todo content must not be empty"));
 
+        let duplicate_content = execute_tool(
+            "TodoWrite",
+            &json!({
+                "todos": [
+                    {"content": "Same", "activeForm": "Doing same", "status": "pending"},
+                    {"content": " same ", "activeForm": "Doing same later", "status": "in_progress"}
+                ]
+            }),
+        )
+        .expect_err("duplicate content should fail");
+        assert!(duplicate_content.contains("duplicate todo content"));
+
+        let _seed = execute_tool(
+            "TodoWrite",
+            &json!({
+                "todos": [
+                    {"content": "Ship branch", "activeForm": "Shipping branch", "status": "completed"}
+                ]
+            }),
+        )
+        .expect("seed todo should succeed");
+
+        let backward = execute_tool(
+            "TodoWrite",
+            &json!({
+                "todos": [
+                    {"content": "Ship branch", "activeForm": "Shipping branch again", "status": "in_progress"}
+                ]
+            }),
+        )
+        .expect_err("backward transition should fail");
+        assert!(backward.contains("allowBackwardTransitions=true"));
+
+        let reopened = execute_tool(
+            "TodoWrite",
+            &json!({
+                "todos": [
+                    {"content": "Ship branch", "activeForm": "Shipping branch again", "status": "in_progress"}
+                ],
+                "allowBackwardTransitions": true
+            }),
+        )
+        .expect("explicit backward transition should succeed");
+        let reopened_output: serde_json::Value = serde_json::from_str(&reopened).expect("valid json");
+        assert_eq!(reopened_output["mutation"]["commands"][0]["kind"], "update");
+
         let nudge = execute_tool(
             "TodoWrite",
             &json!({
@@ -3856,12 +4126,15 @@ mod tests {
                     {"content": "Write tests", "activeForm": "Writing tests", "status": "completed"},
                     {"content": "Fix errors", "activeForm": "Fixing errors", "status": "completed"},
                     {"content": "Ship branch", "activeForm": "Shipping branch", "status": "completed"}
-                ]
+                ],
+                "allowBackwardTransitions": true
             }),
         )
         .expect("completed todos should succeed");
         std::env::remove_var("CLAWD_TODO_STORE");
-        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("state.json"));
+        let _ = fs::remove_file(path.with_extension("mutations.jsonl"));
 
         let output: serde_json::Value = serde_json::from_str(&nudge).expect("valid json");
         assert_eq!(output["verificationNudgeNeeded"], true);
