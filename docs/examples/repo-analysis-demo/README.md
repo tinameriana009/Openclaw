@@ -36,7 +36,7 @@ That helper:
 - resumes the same session for the file-path follow-up
 - saves both responses under `.demo-artifacts/repo-analysis-demo/<timestamp>/`
 - stages `operator-session-template.md`, `next-prompt-template.md`, and a findings template alongside the run outputs
-- emits `bundle-summary.json`, `operator-handoff.json`, `review-status.json`, `continuity-status.json`, `operator-transition-brief.md`, `review-log.md`, `bundle-checksums.txt`, and a static `operator-dashboard.html` so the next operator has a durable review/resume bundle
+- emits `bundle-summary.json`, `operator-handoff.json`, `review-status.json`, `continuity-status.json`, `operator-transition-brief.md`, `review-log.md`, `runtime-bridge.json`, `runtime-events.jsonl`, `bundle-checksums.txt`, and a static `operator-dashboard.html` so the next operator has a durable review/resume bundle
 - points each new bundle at the most recent prior run and prior fully reviewed run when those exist, so cross-run comparison starts with a real baseline
 - refreshes a cross-run `index.json` / `index.html` under `.demo-artifacts/repo-analysis-demo/` so older bundles remain easy to review and compare without pretending a live web app exists
 - prints the next validation/trace-review steps instead of pretending the run is self-certifying
@@ -91,6 +91,8 @@ The staged run bundle is meant to survive operator handoff honestly:
 - `operator-dashboard.html` is a static on-disk dashboard for the run, not a live web UI.
 - `bundle-summary.json` lists the run profile, bundle files, exact continuity commands, prior-run pointers, and the shared cross-run index paths.
 - `operator-handoff.json` captures the minimum payload another operator needs to continue review.
+- `runtime-bridge.json` captures the latest bounded runtime/session/trace snapshot plus pointers to the event export.
+- `runtime-events.jsonl` is a bounded snapshot-derived event feed a future backend could ingest; it is generated from the latest saved session and recent saved traces, not from a live runtime stream.
 - `review-status.json` records the honest bounded review state for the run.
 - `continuity-status.json` records who owns the run, whether handoff is in progress, and which prior run should anchor comparison.
 - `operator-transition-brief.md` is the explicit baton-pass note for the next operator.

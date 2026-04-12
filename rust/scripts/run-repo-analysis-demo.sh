@@ -21,6 +21,7 @@ CHECKSUMS="$RUN_DIR/bundle-checksums.txt"
 HANDOFF_JSON="$RUN_DIR/operator-handoff.json"
 DASHBOARD_HTML="$RUN_DIR/operator-dashboard.html"
 RUNTIME_BRIDGE_JSON="$RUN_DIR/runtime-bridge.json"
+RUNTIME_EVENTS_JSONL="$RUN_DIR/runtime-events.jsonl"
 REVIEW_STATUS_JSON="$RUN_DIR/review-status.json"
 REVIEW_LOG_MD="$RUN_DIR/review-log.md"
 TRANSITION_MD="$RUN_DIR/operator-transition-brief.md"
@@ -223,6 +224,7 @@ bundle-summary.json
 operator-handoff.json
 operator-dashboard.html
 runtime-bridge.json
+runtime-events.jsonl
 bundle-checksums.txt
 EOF
 
@@ -241,6 +243,7 @@ summary_path = Path(${SUMMARY_JSON@Q})
 handoff_path = Path(${HANDOFF_JSON@Q})
 dashboard_path = Path(${DASHBOARD_HTML@Q})
 runtime_bridge_path = Path(${RUNTIME_BRIDGE_JSON@Q})
+runtime_events_path = Path(${RUNTIME_EVENTS_JSONL@Q})
 review_status_path = Path(${REVIEW_STATUS_JSON@Q})
 continuity_path = Path(${CONTINUITY_JSON@Q})
 transition_path = Path(${TRANSITION_MD@Q})
@@ -300,41 +303,128 @@ def relative_to_rust(path: Path) -> str:
         return str(path)
 
 
-def load_runtime_bridge() -> dict[str, object]:
+def session_event_preview(path: Path, *, max_messages: int = 8) -> tuple[int, list[dict[str, object]]]:
+    message_count = 0
+    preview: list[dict[str, object]] = []
+    try:
+        lines = path.read_text().splitlines()
+    except UnicodeDecodeError:
+        return 0, preview
+    for line in lines:
+        if not line.strip():
+            continue
+        message_count += 1
+        if len(preview) >= max_messages:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            preview.append({'kind': 'session-message', 'parseError': True, 'rawPreview': line[:160]})
+            continue
+        preview.append({
+            'kind': 'session-message',
+            'role': payload.get('role') or payload.get('type') or 'unknown',
+            'messageId': payload.get('uuid') or payload.get('messageId'),
+            'timestamp': payload.get('timestamp') or payload.get('createdAt') or payload.get('updatedAt'),
+        })
+    return message_count, preview
+
+
+def trace_event_preview(path: Path, *, max_events: int = 12) -> tuple[int, list[dict[str, object]]]:
+    preview: list[dict[str, object]] = []
+    try:
+        payload = json.loads(path.read_text())
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return 0, preview
+    events = payload.get('events')
+    if not isinstance(events, list):
+        return 0, preview
+    for event in events[:max_events]:
+        if not isinstance(event, dict):
+            continue
+        data = event.get('data')
+        data_keys = sorted(data.keys())[:8] if isinstance(data, dict) else []
+        preview.append({
+            'kind': 'trace-event',
+            'sequence': event.get('sequence'),
+            'eventType': event.get('eventType'),
+            'timestampMs': event.get('timestampMs'),
+            'dataKeys': data_keys,
+        })
+    return len(events), preview
+
+
+def build_runtime_bridge_artifacts() -> tuple[dict[str, object], list[dict[str, object]]]:
     sessions_dir = rust_root / '.claw' / 'sessions'
     trace_dir = rust_root / '.claw' / 'trace'
     session_entries = sorted([p for p in sessions_dir.glob('*.jsonl') if p.is_file()], key=lambda p: p.stat().st_mtime, reverse=True) if sessions_dir.exists() else []
     trace_entries = sorted([p for p in trace_dir.glob('*.json') if p.is_file()], key=lambda p: p.stat().st_mtime, reverse=True) if trace_dir.exists() else []
 
+    runtime_events: list[dict[str, object]] = []
     latest_session = None
     if session_entries:
         latest = session_entries[0]
+        message_count, preview = session_event_preview(latest)
         latest_session = {
             'sessionId': latest.stem,
             'path': relative_to_rust(latest),
             'modifiedAtUtc': iso_utc(latest.stat().st_mtime),
             'sizeBytes': latest.stat().st_size,
-            'messageCountEstimate': sum(1 for line in latest.read_text().splitlines() if line.strip()),
+            'messageCountEstimate': message_count,
             'resumeCommand': './target/debug/claw --resume latest',
         }
+        runtime_events.extend({
+            'bridgeSchemaVersion': 1,
+            'capturedAtUtc': ${TIMESTAMP@Q},
+            'bridgeMode': 'bounded-snapshot-export',
+            'sourceKind': 'session',
+            'stream': f'session:{latest.stem}',
+            'cursor': f'{latest.stem}:{index + 1}',
+            'sessionId': latest.stem,
+            'sourcePath': relative_to_rust(latest),
+            'sourceModifiedAtUtc': iso_utc(latest.stat().st_mtime),
+            'event': item,
+        } for index, item in enumerate(preview))
 
-    recent_traces = [
-        {
+    recent_traces = []
+    for path in trace_entries[:5]:
+        event_count, preview = trace_event_preview(path)
+        trace_entry = {
             'traceId': path.stem,
             'path': relative_to_rust(path),
             'modifiedAtUtc': iso_utc(path.stat().st_mtime),
             'sizeBytes': path.stat().st_size,
+            'eventCount': event_count,
             'summaryCommand': f'./target/debug/claw --resume latest /trace summary {relative_to_rust(path)}',
         }
-        for path in trace_entries[:5]
-    ]
+        recent_traces.append(trace_entry)
+        runtime_events.extend({
+            'bridgeSchemaVersion': 1,
+            'capturedAtUtc': ${TIMESTAMP@Q},
+            'bridgeMode': 'bounded-snapshot-export',
+            'sourceKind': 'trace',
+            'stream': f'trace:{path.stem}',
+            'cursor': f'{path.stem}:{item.get("sequence") if item.get("sequence") is not None else index + 1}',
+            'traceId': path.stem,
+            'sourcePath': relative_to_rust(path),
+            'sourceModifiedAtUtc': iso_utc(path.stat().st_mtime),
+            'event': item,
+        } for index, item in enumerate(preview))
 
-    return {
-        'schemaVersion': 1,
+    runtime_bridge = {
+        'schemaVersion': 2,
         'generatedAtUtc': ${TIMESTAMP@Q},
         'runtimeRoot': str(rust_root / '.claw'),
+        'bridgeMode': 'bounded-snapshot-export',
         'latestSession': latest_session,
         'recentTraces': recent_traces,
+        'eventExport': {
+            'path': 'runtime-events.jsonl',
+            'format': 'jsonl',
+            'eventCount': len(runtime_events),
+            'eventTypes': ['session-message', 'trace-event'],
+            'honestyNote': 'Derived from the latest saved session and recent saved trace artifacts at bundle-generation time. This is not a live push channel or websocket feed.',
+        },
         'webOperatorBridge': {
             'bundleDashboard': 'operator-dashboard.html',
             'reviewStatus': 'review-status.json',
@@ -343,9 +433,11 @@ def load_runtime_bridge() -> dict[str, object]:
             'honestyNote': 'Static snapshot only: this bundle reflects the runtime/session/trace state seen when the helper finished. It is not a live sync channel.',
         },
     }
+    return runtime_bridge, runtime_events
 
-runtime_bridge = load_runtime_bridge()
+runtime_bridge, runtime_events = build_runtime_bridge_artifacts()
 runtime_bridge_path.write_text(json.dumps(runtime_bridge, indent=2) + '\n')
+runtime_events_path.write_text(''.join(json.dumps(event) + '\n' for event in runtime_events))
 
 summary = {
     'workflow': 'repo-analysis-demo',
@@ -370,6 +462,7 @@ summary = {
         'next-steps.txt',
         'operator-dashboard.html',
         'runtime-bridge.json',
+        'runtime-events.jsonl',
     ],
     'continuityCommands': {
         'resumeSession': './target/debug/claw --resume latest',
@@ -384,11 +477,14 @@ summary = {
         'reviewStatus': 'review-status.json',
         'reviewLog': 'review-log.md',
         'runtimeBridge': 'runtime-bridge.json',
+        'runtimeEvents': 'runtime-events.jsonl',
     },
     'runtimeBridge': {
         'path': 'runtime-bridge.json',
+        'eventExportPath': 'runtime-events.jsonl',
         'latestSessionId': (runtime_bridge.get('latestSession') or {}).get('sessionId'),
         'recentTraceIds': [trace.get('traceId') for trace in runtime_bridge.get('recentTraces', [])],
+        'eventCount': (runtime_bridge.get('eventExport') or {}).get('eventCount'),
     },
     'priorRun': compact_run_pointer(prior_run),
     'priorReviewedRun': compact_run_pointer(prior_reviewed_run),
@@ -525,8 +621,10 @@ dashboard_html = f'''<!DOCTYPE html>
       <li><strong>Transition brief:</strong> <code>operator-transition-brief.md</code></li>
       <li><strong>Cross-run index:</strong> <code>{esc(str(index_html_path))}</code></li>
       <li><strong>Runtime bridge:</strong> <code>runtime-bridge.json</code></li>
+      <li><strong>Runtime events export:</strong> <code>runtime-events.jsonl</code> (snapshot-derived, bounded, non-live)</li>
       <li><strong>Latest session snapshot:</strong> <code>{esc(str((runtime_bridge.get('latestSession') or {}).get('sessionId') or 'none-captured'))}</code></li>
       <li><strong>Recent trace snapshots:</strong> <code>{esc(str(len(runtime_bridge.get('recentTraces') or [])))}</code></li>
+      <li><strong>Exported bridge events:</strong> <code>{esc(str((runtime_bridge.get('eventExport') or {}).get('eventCount') or 0))}</code></li>
       <li><strong>Prior run in index:</strong> <code>{esc(prior_run_label)}</code></li>
       <li><strong>Prior fully reviewed run:</strong> <code>{esc(prior_reviewed_label)}</code></li>
     </ul>
@@ -584,6 +682,7 @@ for candidate in sorted(
     continuity_candidate = json.loads(continuity_candidate_path.read_text()) if continuity_candidate_path.exists() else {}
     runtime_bridge_candidate_path = candidate / 'runtime-bridge.json'
     runtime_bridge_candidate = json.loads(runtime_bridge_candidate_path.read_text()) if runtime_bridge_candidate_path.exists() else {}
+    runtime_events_candidate_path = candidate / 'runtime-events.jsonl'
     runs.append({
         'runId': candidate.name,
         'generatedAtUtc': bundle_summary.get('generatedAtUtc', candidate.name),
@@ -601,8 +700,10 @@ for candidate in sorted(
         'reviewStatus': str(review_candidate_path) if review_candidate_path.exists() else None,
         'continuityStatus': str(continuity_candidate_path) if continuity_candidate_path.exists() else None,
         'runtimeBridge': str(runtime_bridge_candidate_path) if runtime_bridge_candidate_path.exists() else None,
+        'runtimeEvents': str(runtime_events_candidate_path) if runtime_events_candidate_path.exists() else None,
         'latestSessionId': (runtime_bridge_candidate.get('latestSession') or {}).get('sessionId'),
         'recentTraceCount': len(runtime_bridge_candidate.get('recentTraces') or []),
+        'runtimeEventCount': (runtime_bridge_candidate.get('eventExport') or {}).get('eventCount', 0),
         'transitionBrief': str(candidate / 'operator-transition-brief.md') if (candidate / 'operator-transition-brief.md').exists() else None,
         'reviewLog': str(candidate / 'review-log.md') if (candidate / 'review-log.md').exists() else None,
         'dashboard': str(candidate / 'operator-dashboard.html') if (candidate / 'operator-dashboard.html').exists() else None,
@@ -720,6 +821,7 @@ handoff = {
     'reviewStatus': 'review-status.json',
     'continuityStatus': 'continuity-status.json',
     'runtimeBridge': 'runtime-bridge.json',
+    'runtimeEvents': 'runtime-events.jsonl',
     'transitionBrief': 'operator-transition-brief.md',
     'nextPromptTemplate': 'next-prompt-template.md',
     'operatorDashboard': 'operator-dashboard.html',
