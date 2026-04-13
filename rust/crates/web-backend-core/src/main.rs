@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use web_backend_core::{app, StorePaths, WebBackendStore};
+use web_backend_core::{app, export_static_status_page, StorePaths, WebBackendStore};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -22,6 +22,13 @@ enum Command {
     Serve,
     /// Import a staged repo-analysis bundle into backend queue/runtime state.
     ImportRepoAnalysisBundle { bundle_dir: PathBuf },
+    /// Fetch the backend API and write a static HTML status page.
+    ExportStaticStatusPage {
+        #[arg(long, default_value = "http://127.0.0.1:8787")]
+        api_base_url: String,
+        #[arg(long, default_value = ".claw/backend/static-status.html")]
+        output: PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -40,6 +47,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Serve => serve(store, bind_address).await?,
         Command::ImportRepoAnalysisBundle { bundle_dir } => {
             let report = store.import_repo_analysis_bundle(bundle_dir)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Command::ExportStaticStatusPage {
+            api_base_url,
+            output,
+        } => {
+            let report = export_static_status_page(&api_base_url, &output).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
     }

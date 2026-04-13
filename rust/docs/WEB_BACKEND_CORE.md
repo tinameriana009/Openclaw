@@ -99,6 +99,19 @@ Optional env vars:
 - `CLAW_WORKSPACE_ROOT=/path/to/workspace`
 - `CLAW_WEBD_BIND=127.0.0.1:8787`
 
+To prove the daemon is consumable without inventing a full live frontend, you can generate a static HTML status page from the JSON API:
+
+```bash
+cd rust
+cargo run -p web-backend-core --bin claw-webd -- serve
+# in another shell
+cargo run -p web-backend-core --bin claw-webd -- export-static-status-page \
+  --api-base-url http://127.0.0.1:8787 \
+  --output ../.claw/backend/static-status.html
+```
+
+That consumer command fetches `/v1/state` and writes a bounded local page summarizing service info, runtime-bridge state, recent traces, and queue items.
+
 ## Intended next steps
 
 Future work can build on this by:

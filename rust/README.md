@@ -432,6 +432,16 @@ cargo run -p web-backend-core --bin claw-webd -- import-repo-analysis-bundle \
 
 That command imports the staged `runtime-bridge.json` / `review-status.json` / `continuity-status.json` / `operator-handoff.json` bundle into `.claw/backend/` and creates or updates a real backend queue item. It is a bounded sync step, not a claim that a live web dashboard now exists.
 
+To prove the backend can already be consumed by a separate surface, keep `claw-webd` running and export a static status page from its JSON API:
+
+```bash
+cargo run -p web-backend-core --bin claw-webd -- export-static-status-page \
+  --api-base-url http://127.0.0.1:8787 \
+  --output ../.claw/backend/static-status.html
+```
+
+That fetches `/v1/state` from the daemon and writes a local HTML page with service, runtime-bridge, and queue summaries. It is intentionally a thin consumer layer, not a claim that there is already a full interactive web app.
+
 ## Minimal operator checklist
 
 Use this sequence for a new machine:
