@@ -8,7 +8,8 @@ use tokio::sync::Mutex;
 
 use crate::state::{
     BackendApiSchema, MutationGuard, OperatorInboxSnapshot, QueueClaimRequest, QueueItem,
-    QueueItemCreateRequest, QueueTransitionRequest, SyncInboxReport, WebBackendStore,
+    QueueItemCreateRequest, QueueNoteRequest, QueueTransitionRequest, SyncInboxReport,
+    WebBackendStore,
 };
 
 #[derive(Clone)]
@@ -37,6 +38,10 @@ pub fn app(store: WebBackendStore) -> Router {
         .route("/v1/queue", get(queue))
         .route("/v1/queue/items", post(create_queue_item))
         .route("/v1/queue/items/:id/claim", post(claim_queue_item))
+        .route("/v1/queue/items/:id/unclaim", post(unclaim_queue_item))
+        .route("/v1/queue/items/:id/complete", post(complete_queue_item))
+        .route("/v1/queue/items/:id/drop", post(drop_queue_item))
+        .route("/v1/queue/items/:id/reopen", post(reopen_queue_item))
         .route("/v1/queue/items/:id/transition", post(transition_queue_item))
         .route("/v1/operator/inbox", get(operator_inbox))
         .route("/v1/operator/inbox/sync", post(sync_operator_inbox))
@@ -114,6 +119,60 @@ async fn claim_queue_item(
     let store = state.store.lock().await;
     let item = store
         .claim_queue_item(&item_id, request)
+        .map_err(map_store_error)?;
+    Ok(Json(item))
+}
+
+async fn unclaim_queue_item(
+    Path(item_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<QueueNoteRequest>,
+) -> Result<Json<QueueItem>, (StatusCode, String)> {
+    require_mutation_permission(&state.mutation_guard, &headers)?;
+    let store = state.store.lock().await;
+    let item = store
+        .unclaim_queue_item(&item_id, request)
+        .map_err(map_store_error)?;
+    Ok(Json(item))
+}
+
+async fn complete_queue_item(
+    Path(item_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<QueueNoteRequest>,
+) -> Result<Json<QueueItem>, (StatusCode, String)> {
+    require_mutation_permission(&state.mutation_guard, &headers)?;
+    let store = state.store.lock().await;
+    let item = store
+        .complete_queue_item(&item_id, request)
+        .map_err(map_store_error)?;
+    Ok(Json(item))
+}
+
+async fn drop_queue_item(
+    Path(item_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<QueueNoteRequest>,
+) -> Result<Json<QueueItem>, (StatusCode, String)> {
+    require_mutation_permission(&state.mutation_guard, &headers)?;
+    let store = state.store.lock().await;
+    let item = store.drop_queue_item(&item_id, request).map_err(map_store_error)?;
+    Ok(Json(item))
+}
+
+async fn reopen_queue_item(
+    Path(item_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<QueueNoteRequest>,
+) -> Result<Json<QueueItem>, (StatusCode, String)> {
+    require_mutation_permission(&state.mutation_guard, &headers)?;
+    let store = state.store.lock().await;
+    let item = store
+        .reopen_queue_item(&item_id, request)
         .map_err(map_store_error)?;
     Ok(Json(item))
 }
@@ -324,6 +383,78 @@ mod tests {
 
         let response = app.oneshot(request).await.expect("queue create response");
         assert_eq!(response.status(), StatusCode::CREATED);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_routes_cover_local_queue_mutations() {
+        let root = temp_workspace("lifecycle-routes");
+        write_local_mutation_policy(&root);
+        let app = app(WebBackendStore::new(
+            StorePaths::from_workspace_root(&root),
+            "127.0.0.1:8787",
+        ));
+
+        let create = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/queue/items")
+            .header("content-type", "application/json")
+            .header("x-claw-local-operator", "ack")
+            .body(Body::from(
+                serde_json::json!({"title": "Inspect review bundle", "kind": "review"}).to_string(),
+            ))
+            .unwrap();
+        let response = app.clone().oneshot(create).await.expect("queue create response");
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let created: crate::state::QueueItem = serde_json::from_slice(&body).unwrap();
+
+        for (route, payload, expected_status) in [
+            (
+                format!("/v1/queue/items/{}/claim", created.id),
+                serde_json::json!({"claimed_by": "operator-a"}),
+                "claimed",
+            ),
+            (
+                format!("/v1/queue/items/{}/unclaim", created.id),
+                serde_json::json!({"note": "released"}),
+                "queued",
+            ),
+            (
+                format!("/v1/queue/items/{}/complete", created.id),
+                serde_json::json!({"note": "done"}),
+                "completed",
+            ),
+            (
+                format!("/v1/queue/items/{}/reopen", created.id),
+                serde_json::json!({"note": "follow-up"}),
+                "queued",
+            ),
+            (
+                format!("/v1/queue/items/{}/drop", created.id),
+                serde_json::json!({"note": "not actionable"}),
+                "dropped",
+            ),
+        ] {
+            let request = Request::builder()
+                .method(Method::POST)
+                .uri(&route)
+                .header("content-type", "application/json")
+                .header("x-claw-local-operator", "ack")
+                .body(Body::from(payload.to_string()))
+                .unwrap();
+            let response = app.clone().oneshot(request).await.expect("mutation response");
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let item: crate::state::QueueItem = serde_json::from_slice(&body).unwrap();
+            assert_eq!(
+                serde_json::to_value(&item)
+                    .unwrap()
+                    .get("status")
+                    .and_then(serde_json::Value::as_str),
+                Some(expected_status)
+            );
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 

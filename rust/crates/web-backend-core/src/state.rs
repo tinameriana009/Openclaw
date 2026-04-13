@@ -363,6 +363,10 @@ impl WebBackendStore {
                     "/v1/queue".into(),
                     "/v1/queue/items".into(),
                     "/v1/queue/items/:id/claim".into(),
+                    "/v1/queue/items/:id/unclaim".into(),
+                    "/v1/queue/items/:id/complete".into(),
+                    "/v1/queue/items/:id/drop".into(),
+                    "/v1/queue/items/:id/reopen".into(),
                     "/v1/queue/items/:id/transition".into(),
                     "/v1/operator/inbox".into(),
                     "/v1/operator/inbox/sync".into(),
@@ -1431,6 +1435,7 @@ mod tests {
                 &item.id,
                 QueueClaimRequest {
                     claimed_by: "operator-a".into(),
+                    expected_revision: None,
                 },
             )
             .unwrap();
@@ -1508,10 +1513,11 @@ mod tests {
                 &item.id,
                 QueueClaimRequest {
                     claimed_by: "operator-b".into(),
+                    expected_revision: None,
                 },
             )
             .unwrap_err();
-        assert!(matches!(error, StoreError::Validation(_)));
+        assert!(matches!(error, StoreError::Conflict(_)));
         let _ = fs::remove_dir_all(root);
     }
 
