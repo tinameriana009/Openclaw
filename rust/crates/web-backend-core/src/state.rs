@@ -31,6 +31,7 @@ pub struct BackendPaths {
     pub queue_file: String,
     pub runtime_bridge_file: String,
     pub operator_inbox_file: String,
+    pub repo_analysis_index_file: String,
     pub auth_policy_file: String,
 }
 
@@ -93,6 +94,8 @@ pub struct QueueClaimRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct QueueNoteRequest {
     pub note: Option<String>,
+    #[serde(default)]
+    pub expected_revision: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -116,6 +119,7 @@ pub struct BackendSnapshot {
     pub runtime_bridge: RuntimeBridgeSnapshot,
     pub queue: OperatorQueue,
     pub operator_inbox: OperatorInboxSnapshot,
+    pub repo_analysis_index: RepoAnalysisIndexSnapshot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -199,6 +203,55 @@ pub struct SyncInboxReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SyncRepoAnalysisIndexReport {
+    pub synced_at_utc: String,
+    pub index_source_file: String,
+    pub imported_runs: u64,
+    pub queue_revision: u64,
+    pub repo_analysis_index_file: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RepoAnalysisIndexSnapshot {
+    pub source_file: Option<String>,
+    pub generated_at_utc: Option<String>,
+    pub synced_at_utc: Option<String>,
+    pub status: String,
+    pub run_count: u64,
+    pub runs: Vec<RepoAnalysisRunEntry>,
+    pub honesty_note: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RepoAnalysisRunEntry {
+    pub run_id: String,
+    pub status: String,
+    pub profile: Option<String>,
+    pub run_dir: Option<String>,
+    pub queue_item_id: Option<String>,
+    pub queue_status: Option<QueueItemStatus>,
+    pub latest_session_id: Option<String>,
+    pub operator_next_step: Option<String>,
+    pub review_status_path: Option<String>,
+    pub continuity_status_path: Option<String>,
+    pub operator_handoff_path: Option<String>,
+    pub dashboard_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RefreshLocalArtifactsReport {
+    pub refreshed_at_utc: String,
+    pub latest_repo_analysis_bundle: Option<String>,
+    pub runtime_bridge_imported: bool,
+    pub runtime_bridge_reason: String,
+    pub operator_inbox_synced: bool,
+    pub operator_inbox_reason: String,
+    pub queue_revision: u64,
+    pub runtime_bridge_file: String,
+    pub operator_inbox_file: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OperatorInboxSnapshot {
     pub source_file: Option<String>,
     pub review_index_file: Option<String>,
@@ -235,6 +288,21 @@ pub struct OperatorInboxEntry {
     pub last_surfaced_at_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QueueItemReviewState {
+    pub queue_item: QueueItem,
+    pub backend_source: String,
+    pub source_path: Option<String>,
+    pub review_status_path: Option<String>,
+    pub continuity_status_path: Option<String>,
+    pub operator_handoff_path: Option<String>,
+    pub inbox_entry: Option<OperatorInboxEntry>,
+    pub review_status: Option<serde_json::Value>,
+    pub continuity_status: Option<serde_json::Value>,
+    pub operator_handoff: Option<serde_json::Value>,
+    pub honesty_note: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorePaths {
     pub workspace_root: PathBuf,
@@ -242,6 +310,7 @@ pub struct StorePaths {
     pub queue_file: PathBuf,
     pub runtime_bridge_file: PathBuf,
     pub operator_inbox_file: PathBuf,
+    pub repo_analysis_index_file: PathBuf,
     pub auth_policy_file: PathBuf,
 }
 
@@ -256,6 +325,7 @@ impl StorePaths {
             queue_file: storage_root.join("operator-queue.json"),
             runtime_bridge_file: storage_root.join("runtime-bridge.json"),
             operator_inbox_file: storage_root.join("operator-inbox.json"),
+            repo_analysis_index_file: storage_root.join("repo-analysis-index.json"),
             auth_policy_file: storage_root.join("web-operator-auth-policy.json"),
         }
     }
@@ -275,7 +345,9 @@ impl Display for StoreError {
         match self {
             Self::Io(error) => write!(f, "{error}"),
             Self::Json(error) => write!(f, "{error}"),
-            Self::Validation(message) | Self::NotFound(message) | Self::Conflict(message) => write!(f, "{message}"),
+            Self::Validation(message) | Self::NotFound(message) | Self::Conflict(message) => {
+                write!(f, "{message}")
+            }
         }
     }
 }
@@ -343,6 +415,19 @@ impl WebBackendStore {
                 }))?,
             )?;
         }
+        if !self.paths.repo_analysis_index_file.exists() {
+            fs::write(
+                &self.paths.repo_analysis_index_file,
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "schemaVersion": 1,
+                    "generatedAtUtc": now_utc_string(),
+                    "syncedAtUtc": null,
+                    "sourceFile": null,
+                    "honestyNote": "Backend-cached repo-analysis index snapshot only. It is synced from staged static review bundles on demand; there is no live watcher or assignment service.",
+                    "runs": [],
+                }))?,
+            )?;
+        }
         Ok(())
     }
 
@@ -362,6 +447,8 @@ impl WebBackendStore {
                     "/v1/state".into(),
                     "/v1/queue".into(),
                     "/v1/queue/items".into(),
+                    "/v1/queue/items/:id".into(),
+                    "/v1/queue/items/:id/review-state".into(),
                     "/v1/queue/items/:id/claim".into(),
                     "/v1/queue/items/:id/unclaim".into(),
                     "/v1/queue/items/:id/complete".into(),
@@ -370,6 +457,8 @@ impl WebBackendStore {
                     "/v1/queue/items/:id/transition".into(),
                     "/v1/operator/inbox".into(),
                     "/v1/operator/inbox/sync".into(),
+                    "/v1/operator/repo-analysis".into(),
+                    "/v1/operator/repo-analysis/sync".into(),
                 ],
             },
             config: ServiceConfig {
@@ -381,12 +470,14 @@ impl WebBackendStore {
                 queue_file: relative_or_absolute(&self.paths.workspace_root, &self.paths.queue_file),
                 runtime_bridge_file: relative_or_absolute(&self.paths.workspace_root, &self.paths.runtime_bridge_file),
                 operator_inbox_file: relative_or_absolute(&self.paths.workspace_root, &self.paths.operator_inbox_file),
+                repo_analysis_index_file: relative_or_absolute(&self.paths.workspace_root, &self.paths.repo_analysis_index_file),
                 auth_policy_file: relative_or_absolute(&self.paths.workspace_root, &self.paths.auth_policy_file),
             },
             auth_boundary: self.auth_boundary_snapshot()?,
             runtime_bridge: self.load_runtime_bridge()?,
             queue: self.load_queue()?,
             operator_inbox: self.load_operator_inbox()?,
+            repo_analysis_index: self.load_repo_analysis_index()?,
         })
     }
 
@@ -423,16 +514,25 @@ impl WebBackendStore {
                 reason: "local operator mutations are disabled by policy".into(),
                 required_ack_header: Some(local.required_ack_header.clone()),
                 policy_loaded: true,
-                policy_source: relative_or_absolute(&self.paths.workspace_root, &self.paths.auth_policy_file),
+                policy_source: relative_or_absolute(
+                    &self.paths.workspace_root,
+                    &self.paths.auth_policy_file,
+                ),
             });
         }
         if local.require_loopback_bind && !bind_address_is_loopback(&self.bind_address) {
             return Ok(MutationGuard {
                 allowed: false,
-                reason: format!("local operator mutations require a loopback bind, got {}", self.bind_address),
+                reason: format!(
+                    "local operator mutations require a loopback bind, got {}",
+                    self.bind_address
+                ),
                 required_ack_header: Some(local.required_ack_header.clone()),
                 policy_loaded: true,
-                policy_source: relative_or_absolute(&self.paths.workspace_root, &self.paths.auth_policy_file),
+                policy_source: relative_or_absolute(
+                    &self.paths.workspace_root,
+                    &self.paths.auth_policy_file,
+                ),
             });
         }
         Ok(MutationGuard {
@@ -448,36 +548,64 @@ impl WebBackendStore {
         if !self.paths.auth_policy_file.exists() {
             return Ok(None);
         }
-        Ok(Some(serde_json::from_str(&fs::read_to_string(&self.paths.auth_policy_file)?)?))
+        Ok(Some(serde_json::from_str(&fs::read_to_string(
+            &self.paths.auth_policy_file,
+        )?)?))
     }
 
     fn validate_auth_policy(&self, policy: &WebOperatorAuthPolicy) -> Result<(), StoreError> {
         if policy.policy_kind != "claw.web-operator-auth-boundary" {
-            return Err(StoreError::Validation(format!("unexpected auth policy kind: {}", policy.policy_kind)));
+            return Err(StoreError::Validation(format!(
+                "unexpected auth policy kind: {}",
+                policy.policy_kind
+            )));
         }
         if policy.schema_version != 1 {
-            return Err(StoreError::Validation(format!("unsupported auth policy schema version: {}", policy.schema_version)));
+            return Err(StoreError::Validation(format!(
+                "unsupported auth policy schema version: {}",
+                policy.schema_version
+            )));
         }
         if policy.anonymous_read_allowed {
-            return Err(StoreError::Validation("anonymousReadAllowed must remain false".into()));
+            return Err(StoreError::Validation(
+                "anonymousReadAllowed must remain false".into(),
+            ));
         }
         if policy.session_cookies_supported {
-            return Err(StoreError::Validation("sessionCookiesSupported must remain false".into()));
+            return Err(StoreError::Validation(
+                "sessionCookiesSupported must remain false".into(),
+            ));
         }
         if policy.direct_internet_exposure_allowed {
-            return Err(StoreError::Validation("directInternetExposureAllowed must remain false".into()));
+            return Err(StoreError::Validation(
+                "directInternetExposureAllowed must remain false".into(),
+            ));
         }
         if policy.trusted_proxy.allow_client_supplied_identity_headers {
-            return Err(StoreError::Validation("trustedProxy.allowClientSuppliedIdentityHeaders must remain false".into()));
+            return Err(StoreError::Validation(
+                "trustedProxy.allowClientSuppliedIdentityHeaders must remain false".into(),
+            ));
         }
         if policy.backend_enabled {
-            return Err(StoreError::Validation("backendEnabled=true is not supported by this local backend slice".into()));
+            return Err(StoreError::Validation(
+                "backendEnabled=true is not supported by this local backend slice".into(),
+            ));
         }
         if policy.mutation_routes_enabled {
-            return Err(StoreError::Validation("mutationRoutesEnabled must remain false until a real authenticated backend exists".into()));
+            return Err(StoreError::Validation(
+                "mutationRoutesEnabled must remain false until a real authenticated backend exists"
+                    .into(),
+            ));
         }
-        if policy.local_operator_mutations.required_ack_header.trim().is_empty() {
-            return Err(StoreError::Validation("localOperatorMutations.requiredAckHeader must not be empty".into()));
+        if policy
+            .local_operator_mutations
+            .required_ack_header
+            .trim()
+            .is_empty()
+        {
+            return Err(StoreError::Validation(
+                "localOperatorMutations.requiredAckHeader must not be empty".into(),
+            ));
         }
         Ok(())
     }
@@ -487,6 +615,99 @@ impl WebBackendStore {
         Ok(serde_json::from_str(&fs::read_to_string(
             &self.paths.queue_file,
         )?)?)
+    }
+
+    pub fn load_queue_item(&self, item_id: &str) -> Result<QueueItem, StoreError> {
+        let queue = self.load_queue()?;
+        queue
+            .items
+            .into_iter()
+            .find(|item| item.id == item_id)
+            .ok_or_else(|| StoreError::NotFound(format!("queue item not found: {item_id}")))
+    }
+
+    pub fn load_queue_item_review_state(
+        &self,
+        item_id: &str,
+    ) -> Result<QueueItemReviewState, StoreError> {
+        let queue_item = self.load_queue_item(item_id)?;
+        let operator_inbox = self.load_operator_inbox()?;
+        let inbox_entry = operator_inbox.entries.into_iter().find(|entry| {
+            entry.queue_item_id.as_deref() == Some(item_id)
+                || queue_item
+                    .source_path
+                    .as_deref()
+                    .is_some_and(|source_path| {
+                        entry.review_json_path.as_deref() == Some(source_path)
+                            || entry.approval_packet.as_deref() == Some(source_path)
+                    })
+        });
+
+        let source_path = queue_item.source_path.clone();
+        let mut backend_source = "queue-only".to_string();
+        let mut review_status_path = inbox_entry
+            .as_ref()
+            .and_then(|entry| entry.review_status_path.clone());
+        let mut continuity_status_path = None;
+        let mut operator_handoff_path = None;
+        let mut review_status = review_status_path
+            .as_deref()
+            .map(|path| self.read_workspace_json(path))
+            .transpose()?;
+        let mut continuity_status = None;
+        let mut operator_handoff = None;
+
+        if let Some(source_path) = source_path.as_deref() {
+            if source_path.ends_with("operator-handoff.json") {
+                backend_source = "repo-analysis-import".to_string();
+                operator_handoff_path = Some(source_path.to_string());
+                let bundle_dir =
+                    self.paths
+                        .workspace_root
+                        .join(Path::new(source_path).parent().ok_or_else(|| {
+                            StoreError::Validation(format!(
+                                "invalid handoff source path: {source_path}"
+                            ))
+                        })?);
+                let review_path = bundle_dir.join("review-status.json");
+                if review_path.exists() {
+                    review_status_path = Some(relative_or_absolute(
+                        &self.paths.workspace_root,
+                        &review_path,
+                    ));
+                    review_status = Some(read_json_file(&review_path)?);
+                }
+                let continuity_path = bundle_dir.join("continuity-status.json");
+                if continuity_path.exists() {
+                    continuity_status_path = Some(relative_or_absolute(
+                        &self.paths.workspace_root,
+                        &continuity_path,
+                    ));
+                    continuity_status = Some(read_json_file(&continuity_path)?);
+                }
+                operator_handoff = Some(self.read_workspace_json(source_path)?);
+            } else if queue_item.kind == "web-approval-review" || inbox_entry.is_some() {
+                backend_source = "web-approval-sync".to_string();
+            }
+        }
+
+        if backend_source == "queue-only" && inbox_entry.is_some() {
+            backend_source = "web-approval-sync".to_string();
+        }
+
+        Ok(QueueItemReviewState {
+            queue_item,
+            backend_source,
+            source_path,
+            review_status_path,
+            continuity_status_path,
+            operator_handoff_path,
+            inbox_entry,
+            review_status,
+            continuity_status,
+            operator_handoff,
+            honesty_note: "Backend-backed review/handoff snapshot only. This reads persisted queue state plus explicit synced artifacts when available; it is not a live browser workflow.".into(),
+        })
     }
 
     pub fn load_operator_inbox(&self) -> Result<OperatorInboxSnapshot, StoreError> {
@@ -714,7 +935,10 @@ impl WebBackendStore {
         item.status = request.to_status;
         if let Some(claimed_by) = request.claimed_by.and_then(trimmed) {
             item.claimed_by = Some(claimed_by);
-        } else if matches!(item.status, QueueItemStatus::Queued | QueueItemStatus::Dropped) {
+        } else if matches!(
+            item.status,
+            QueueItemStatus::Queued | QueueItemStatus::Completed | QueueItemStatus::Dropped
+        ) {
             item.claimed_by = None;
         }
         if let Some(note) = request.note.and_then(trimmed) {
@@ -733,6 +957,7 @@ impl WebBackendStore {
         request: QueueNoteRequest,
     ) -> Result<QueueItem, StoreError> {
         let mut queue = self.load_queue()?;
+        enforce_expected_revision(queue.revision, request.expected_revision)?;
         let item = queue
             .items
             .iter_mut()
@@ -761,18 +986,23 @@ impl WebBackendStore {
         request: QueueNoteRequest,
     ) -> Result<QueueItem, StoreError> {
         let mut queue = self.load_queue()?;
+        enforce_expected_revision(queue.revision, request.expected_revision)?;
         let item = queue
             .items
             .iter_mut()
             .find(|item| item.id == item_id)
             .ok_or_else(|| StoreError::NotFound(format!("queue item not found: {item_id}")))?;
-        if matches!(item.status, QueueItemStatus::Dropped | QueueItemStatus::Completed) {
+        if matches!(
+            item.status,
+            QueueItemStatus::Dropped | QueueItemStatus::Completed
+        ) {
             return Err(StoreError::Conflict(format!(
                 "queue item {item_id} cannot be completed from {:?}",
                 item.status
             )));
         }
         item.status = QueueItemStatus::Completed;
+        item.claimed_by = None;
         if let Some(note) = request.note.and_then(trimmed) {
             item.note = Some(note);
         }
@@ -789,12 +1019,16 @@ impl WebBackendStore {
         request: QueueNoteRequest,
     ) -> Result<QueueItem, StoreError> {
         let mut queue = self.load_queue()?;
+        enforce_expected_revision(queue.revision, request.expected_revision)?;
         let item = queue
             .items
             .iter_mut()
             .find(|item| item.id == item_id)
             .ok_or_else(|| StoreError::NotFound(format!("queue item not found: {item_id}")))?;
-        if matches!(item.status, QueueItemStatus::Dropped | QueueItemStatus::Completed) {
+        if matches!(
+            item.status,
+            QueueItemStatus::Dropped | QueueItemStatus::Completed
+        ) {
             return Err(StoreError::Conflict(format!(
                 "queue item {item_id} cannot be dropped from {:?}",
                 item.status
@@ -818,6 +1052,7 @@ impl WebBackendStore {
         request: QueueNoteRequest,
     ) -> Result<QueueItem, StoreError> {
         let mut queue = self.load_queue()?;
+        enforce_expected_revision(queue.revision, request.expected_revision)?;
         let item = queue
             .items
             .iter_mut()
@@ -976,6 +1211,92 @@ impl WebBackendStore {
         })
     }
 
+    pub fn refresh_local_artifacts(&self) -> Result<RefreshLocalArtifactsReport, StoreError> {
+        self.ensure_storage()?;
+        let refreshed_at_utc = now_utc_string();
+        let latest_bundle = latest_repo_analysis_bundle_dir(&self.paths.workspace_root)?;
+        let (runtime_bridge_imported, runtime_bridge_reason, latest_repo_analysis_bundle) =
+            if let Some(bundle_dir) = latest_bundle {
+                let bundle_display = relative_or_absolute(&self.paths.workspace_root, &bundle_dir);
+                if should_refresh_bundle(&bundle_dir, &self.paths.runtime_bridge_file)? {
+                    self.import_repo_analysis_bundle(&bundle_dir)?;
+                    (
+                        true,
+                        "imported latest staged repo-analysis bundle because source artifacts were newer than the cached backend bridge".to_string(),
+                        Some(bundle_display),
+                    )
+                } else {
+                    (
+                        false,
+                        "latest staged repo-analysis bundle is already reflected in the cached backend bridge".to_string(),
+                        Some(bundle_display),
+                    )
+                }
+            } else {
+                (
+                    false,
+                    "no staged repo-analysis bundle was found under .demo-artifacts/repo-analysis-demo/".to_string(),
+                    None,
+                )
+            };
+
+        let inbox_source_path = self
+            .paths
+            .workspace_root
+            .join(".claw")
+            .join("web-approvals")
+            .join("inbox-state.json");
+        let review_index_path = self
+            .paths
+            .workspace_root
+            .join(".claw")
+            .join("web-approvals")
+            .join("index.review.json");
+        let (operator_inbox_synced, operator_inbox_reason) = if inbox_source_path.exists() {
+            if should_refresh_inbox(
+                &inbox_source_path,
+                review_index_path
+                    .exists()
+                    .then_some(review_index_path.as_path()),
+                &self.paths.operator_inbox_file,
+            )? {
+                self.sync_web_approval_inbox()?;
+                (
+                    true,
+                    "synced static web-approval inbox artifacts because source files were newer than the cached backend inbox".to_string(),
+                )
+            } else {
+                (
+                    false,
+                    "static web-approval inbox artifacts are already reflected in the cached backend inbox".to_string(),
+                )
+            }
+        } else {
+            (
+                false,
+                "no static web-approval inbox artifact was found at .claw/web-approvals/inbox-state.json".to_string(),
+            )
+        };
+
+        Ok(RefreshLocalArtifactsReport {
+            refreshed_at_utc,
+            latest_repo_analysis_bundle,
+            runtime_bridge_imported,
+            runtime_bridge_reason,
+            operator_inbox_synced,
+            operator_inbox_reason,
+            queue_revision: self.load_queue()?.revision,
+            runtime_bridge_file: relative_or_absolute(
+                &self.paths.workspace_root,
+                &self.paths.runtime_bridge_file,
+            ),
+            operator_inbox_file: relative_or_absolute(
+                &self.paths.workspace_root,
+                &self.paths.operator_inbox_file,
+            ),
+        })
+    }
+
     pub fn sync_web_approval_inbox(&self) -> Result<SyncInboxReport, StoreError> {
         self.ensure_storage()?;
         let inbox_source_path = self
@@ -1127,6 +1448,250 @@ impl WebBackendStore {
         })
     }
 
+    pub fn load_repo_analysis_index(&self) -> Result<RepoAnalysisIndexSnapshot, StoreError> {
+        self.ensure_storage()?;
+        let value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&self.paths.repo_analysis_index_file)?)?;
+        let runs = value
+            .get("runs")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|run| RepoAnalysisRunEntry {
+                run_id: run
+                    .get("runId")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string(),
+                status: run
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string(),
+                profile: run
+                    .get("profile")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+                run_dir: run
+                    .get("runDir")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+                queue_item_id: run
+                    .get("queueItemId")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+                queue_status: run
+                    .get("queueStatus")
+                    .cloned()
+                    .and_then(|status| serde_json::from_value(status).ok()),
+                latest_session_id: run
+                    .get("latestSessionId")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+                operator_next_step: run
+                    .get("operatorNextStep")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+                review_status_path: run
+                    .get("reviewStatusPath")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+                continuity_status_path: run
+                    .get("continuityStatusPath")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+                operator_handoff_path: run
+                    .get("operatorHandoffPath")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+                dashboard_path: run
+                    .get("dashboardPath")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+            })
+            .collect::<Vec<_>>();
+        Ok(RepoAnalysisIndexSnapshot {
+            source_file: value
+                .get("sourceFile")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned),
+            generated_at_utc: value
+                .get("generatedAtUtc")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned),
+            synced_at_utc: value
+                .get("syncedAtUtc")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned),
+            status: if runs.is_empty() {
+                "empty".into()
+            } else {
+                "loaded".into()
+            },
+            run_count: runs.len() as u64,
+            runs,
+            honesty_note: value
+                .get("honestyNote")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("Backend-cached repo-analysis index snapshot only.")
+                .to_string(),
+        })
+    }
+
+    pub fn sync_repo_analysis_index(&self) -> Result<SyncRepoAnalysisIndexReport, StoreError> {
+        self.ensure_storage()?;
+        let index_source_path = self
+            .paths
+            .workspace_root
+            .join(".demo-artifacts")
+            .join("repo-analysis-demo")
+            .join("index.json");
+        if !index_source_path.exists() {
+            return Err(StoreError::NotFound(format!(
+                "repo-analysis index artifact not found: {}",
+                index_source_path.display()
+            )));
+        }
+        let index_value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&index_source_path)?)?;
+        let synced_at_utc = now_utc_string();
+        let mut queue = self.load_queue()?;
+        let mut synced_runs = Vec::new();
+        for run in index_value
+            .get("runs")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+        {
+            let run_id = run
+                .get("runId")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown-run");
+            let run_dir = run
+                .get("runDir")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned);
+            let handoff_path = run
+                .get("operatorHandoff")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .or_else(|| {
+                    run_dir
+                        .as_ref()
+                        .map(|run_dir| format!("{run_dir}/operator-handoff.json"))
+                });
+            let review_status_path = run
+                .get("reviewStatus")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .or_else(|| {
+                    run_dir
+                        .as_ref()
+                        .map(|run_dir| format!("{run_dir}/review-status.json"))
+                });
+            let continuity_status_path = run
+                .get("continuityStatus")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .or_else(|| {
+                    run_dir
+                        .as_ref()
+                        .map(|run_dir| format!("{run_dir}/continuity-status.json"))
+                });
+            let dashboard_path = run
+                .get("dashboard")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned);
+            let queue_status = derive_queue_status_from_repo_analysis_run(&run);
+            let claimed_by = derive_claimed_by_from_repo_analysis_run(&run);
+            let title = format!("Review repo-analysis bundle {}", run_id);
+            let note = Some(format!(
+                "Synced from staged repo-analysis index; status={}, handoffState={}",
+                run.get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown"),
+                run.get("handoffState")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown")
+            ));
+            let queue_item_id = if let Some(source_path) = handoff_path.as_deref() {
+                if let Some(existing) = queue
+                    .items
+                    .iter_mut()
+                    .find(|item| item.source_path.as_deref() == Some(source_path))
+                {
+                    existing.title = title.clone();
+                    existing.kind = "repo-analysis-demo".to_string();
+                    existing.status = queue_status.clone();
+                    existing.claimed_by = claimed_by.clone();
+                    existing.note = note.clone();
+                    existing.id.clone()
+                } else {
+                    let item = QueueItem {
+                        id: format!("item-{}", unix_timestamp()),
+                        title: title.clone(),
+                        kind: "repo-analysis-demo".to_string(),
+                        status: queue_status.clone(),
+                        created_at_utc: synced_at_utc.clone(),
+                        claimed_by: claimed_by.clone(),
+                        note: note.clone(),
+                        source_path: Some(source_path.to_string()),
+                    };
+                    let id = item.id.clone();
+                    queue.items.push(item);
+                    id
+                }
+            } else {
+                format!("unsynced-{}", unix_timestamp())
+            };
+            let synced_run = serde_json::json!({
+                "runId": run_id,
+                "status": run.get("status").and_then(serde_json::Value::as_str).unwrap_or("unknown"),
+                "profile": run.get("profile").and_then(serde_json::Value::as_str),
+                "runDir": run_dir,
+                "queueItemId": queue_item_id,
+                "queueStatus": serde_json::to_value(queue_status)?,
+                "latestSessionId": run.get("latestSessionId").and_then(serde_json::Value::as_str),
+                "operatorNextStep": run.get("operatorNextStep").and_then(serde_json::Value::as_str),
+                "reviewStatusPath": review_status_path,
+                "continuityStatusPath": continuity_status_path,
+                "operatorHandoffPath": handoff_path,
+                "dashboardPath": dashboard_path,
+            });
+            synced_runs.push(synced_run);
+        }
+        queue.revision += 1;
+        queue.updated_at_utc = synced_at_utc.clone();
+        self.write_queue(&queue)?;
+        let persisted_index = serde_json::json!({
+            "schemaVersion": 1,
+            "generatedAtUtc": index_value.get("generatedAtUtc").and_then(serde_json::Value::as_str).unwrap_or(&synced_at_utc),
+            "syncedAtUtc": synced_at_utc,
+            "sourceFile": relative_or_absolute(&self.paths.workspace_root, &index_source_path),
+            "honestyNote": "Backend-cached repo-analysis index snapshot only. It is synced from staged static review bundles on demand; there is no live watcher or assignment service.",
+            "runs": synced_runs,
+        });
+        fs::write(
+            &self.paths.repo_analysis_index_file,
+            serde_json::to_string_pretty(&persisted_index)?,
+        )?;
+        Ok(SyncRepoAnalysisIndexReport {
+            synced_at_utc,
+            index_source_file: relative_or_absolute(&self.paths.workspace_root, &index_source_path),
+            imported_runs: persisted_index
+                .get("runs")
+                .and_then(serde_json::Value::as_array)
+                .map(|runs| runs.len())
+                .unwrap_or(0) as u64,
+            queue_revision: queue.revision,
+            repo_analysis_index_file: relative_or_absolute(
+                &self.paths.workspace_root,
+                &self.paths.repo_analysis_index_file,
+            ),
+        })
+    }
+
     fn update_queue_item<F>(&self, item_id: &str, mut mutate: F) -> Result<QueueItem, StoreError>
     where
         F: FnMut(&mut QueueItem) -> Result<(), StoreError>,
@@ -1201,6 +1766,79 @@ impl WebBackendStore {
             },
         })
     }
+
+    fn read_workspace_json(&self, relative_path: &str) -> Result<serde_json::Value, StoreError> {
+        read_json_file(&self.paths.workspace_root.join(relative_path))
+    }
+}
+
+fn read_json_file(path: &Path) -> Result<serde_json::Value, StoreError> {
+    Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
+}
+
+fn latest_repo_analysis_bundle_dir(workspace_root: &Path) -> Result<Option<PathBuf>, StoreError> {
+    let root = workspace_root
+        .join(".demo-artifacts")
+        .join("repo-analysis-demo");
+    if !root.exists() {
+        return Ok(None);
+    }
+    let mut candidates = Vec::new();
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            candidates.push(entry.path());
+        }
+    }
+    candidates.sort();
+    Ok(candidates.pop())
+}
+
+fn should_refresh_bundle(
+    bundle_dir: &Path,
+    runtime_bridge_file: &Path,
+) -> Result<bool, StoreError> {
+    let required = [
+        bundle_dir.join("runtime-bridge.json"),
+        bundle_dir.join("operator-handoff.json"),
+        bundle_dir.join("review-status.json"),
+        bundle_dir.join("continuity-status.json"),
+    ];
+    source_files_newer_than_target(&required, runtime_bridge_file)
+}
+
+fn should_refresh_inbox(
+    inbox_source_path: &Path,
+    review_index_path: Option<&Path>,
+    operator_inbox_file: &Path,
+) -> Result<bool, StoreError> {
+    let mut sources = vec![inbox_source_path.to_path_buf()];
+    if let Some(review_index_path) = review_index_path {
+        sources.push(review_index_path.to_path_buf());
+    }
+    source_files_newer_than_target(&sources, operator_inbox_file)
+}
+
+fn source_files_newer_than_target(
+    source_paths: &[PathBuf],
+    target_path: &Path,
+) -> Result<bool, StoreError> {
+    if !target_path.exists() {
+        return Ok(true);
+    }
+    let target_modified = fs::metadata(target_path)?.modified()?;
+    for source_path in source_paths {
+        if !source_path.exists() {
+            return Err(StoreError::NotFound(format!(
+                "required source file missing: {}",
+                source_path.display()
+            )));
+        }
+        if fs::metadata(source_path)?.modified()? > target_modified {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn derive_queue_status(
@@ -1299,7 +1937,46 @@ fn build_inbox_queue_title(
     }
 }
 
-fn enforce_expected_revision(current_revision: u64, expected_revision: Option<u64>) -> Result<(), StoreError> {
+fn derive_queue_status_from_repo_analysis_run(run: &serde_json::Value) -> QueueItemStatus {
+    match run
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("pending-review")
+    {
+        "review-complete" => QueueItemStatus::Completed,
+        "review-in-progress" => QueueItemStatus::InReview,
+        "dropped" => QueueItemStatus::Dropped,
+        _ => match run
+            .get("handoffState")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("awaiting-first-operator")
+        {
+            "claimed" => QueueItemStatus::Claimed,
+            "in-review" => QueueItemStatus::InReview,
+            "handoff-ready" => QueueItemStatus::HandoffReady,
+            "completed" => QueueItemStatus::Completed,
+            "dropped" => QueueItemStatus::Dropped,
+            _ => QueueItemStatus::Queued,
+        },
+    }
+}
+
+fn derive_claimed_by_from_repo_analysis_run(run: &serde_json::Value) -> Option<String> {
+    if !matches!(
+        derive_queue_status_from_repo_analysis_run(run),
+        QueueItemStatus::Claimed | QueueItemStatus::InReview | QueueItemStatus::HandoffReady
+    ) {
+        return None;
+    }
+    run.get("currentOwner")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn enforce_expected_revision(
+    current_revision: u64,
+    expected_revision: Option<u64>,
+) -> Result<(), StoreError> {
     if let Some(expected_revision) = expected_revision {
         if expected_revision != current_revision {
             return Err(StoreError::Conflict(format!(
@@ -1310,18 +1987,50 @@ fn enforce_expected_revision(current_revision: u64, expected_revision: Option<u6
     Ok(())
 }
 
-fn validate_transition(item: &QueueItem, request: &QueueTransitionRequest) -> Result<(), StoreError> {
+fn validate_transition(
+    item: &QueueItem,
+    request: &QueueTransitionRequest,
+) -> Result<(), StoreError> {
     let current = &item.status;
     let target = &request.to_status;
+    let requested_claimed_by = request.claimed_by.clone().and_then(trimmed);
+    let effective_claimed_by = requested_claimed_by
+        .as_deref()
+        .or(item.claimed_by.as_deref());
     if current == target {
         return Ok(());
     }
 
+    if matches!(
+        current,
+        QueueItemStatus::Claimed | QueueItemStatus::InReview | QueueItemStatus::HandoffReady
+    ) && item.claimed_by.as_deref().is_none()
+    {
+        return Err(StoreError::Conflict(format!(
+            "queue item {} has lifecycle state {:?} without an owner; reopen or fix persisted state first",
+            item.id, current
+        )));
+    }
+
     let allowed = match current {
-        QueueItemStatus::Queued => matches!(target, QueueItemStatus::Claimed | QueueItemStatus::Dropped),
-        QueueItemStatus::Claimed => matches!(target, QueueItemStatus::InReview | QueueItemStatus::HandoffReady | QueueItemStatus::Completed | QueueItemStatus::Dropped),
-        QueueItemStatus::InReview => matches!(target, QueueItemStatus::HandoffReady | QueueItemStatus::Completed | QueueItemStatus::Dropped),
-        QueueItemStatus::HandoffReady => matches!(target, QueueItemStatus::Claimed | QueueItemStatus::Completed | QueueItemStatus::Dropped),
+        QueueItemStatus::Queued => {
+            matches!(target, QueueItemStatus::Claimed | QueueItemStatus::Dropped)
+        }
+        QueueItemStatus::Claimed => matches!(
+            target,
+            QueueItemStatus::InReview
+                | QueueItemStatus::HandoffReady
+                | QueueItemStatus::Completed
+                | QueueItemStatus::Dropped
+        ),
+        QueueItemStatus::InReview => matches!(
+            target,
+            QueueItemStatus::HandoffReady | QueueItemStatus::Completed | QueueItemStatus::Dropped
+        ),
+        QueueItemStatus::HandoffReady => matches!(
+            target,
+            QueueItemStatus::Claimed | QueueItemStatus::Completed | QueueItemStatus::Dropped
+        ),
         QueueItemStatus::Completed | QueueItemStatus::Dropped => false,
     };
     if !allowed {
@@ -1331,16 +2040,21 @@ fn validate_transition(item: &QueueItem, request: &QueueTransitionRequest) -> Re
         )));
     }
 
-    if matches!(target, QueueItemStatus::Claimed)
-        && request
-            .claimed_by
-            .as_ref()
-            .and_then(|value| trimmed(value.clone()))
-            .is_none()
-    {
+    if matches!(target, QueueItemStatus::Claimed) && requested_claimed_by.is_none() {
         return Err(StoreError::Validation(
             "claimed transitions require claimed_by".into(),
         ));
+    }
+
+    if matches!(
+        target,
+        QueueItemStatus::InReview | QueueItemStatus::HandoffReady | QueueItemStatus::Completed
+    ) && effective_claimed_by.is_none()
+    {
+        return Err(StoreError::Conflict(format!(
+            "queue item {} cannot transition to {:?} without an operator owner",
+            item.id, target
+        )));
     }
 
     Ok(())
@@ -1370,7 +2084,9 @@ fn now_utc_string() -> String {
 }
 
 fn bind_address_is_loopback(bind_address: &str) -> bool {
-    bind_address.starts_with("127.") || bind_address.starts_with("localhost:") || bind_address == "localhost"
+    bind_address.starts_with("127.")
+        || bind_address.starts_with("localhost:")
+        || bind_address == "localhost"
 }
 
 #[cfg(test)]
@@ -1446,6 +2162,7 @@ mod tests {
                 &item.id,
                 QueueNoteRequest {
                     note: Some("released for later".into()),
+                    expected_revision: None,
                 },
             )
             .unwrap();
@@ -1458,6 +2175,7 @@ mod tests {
                 &item.id,
                 QueueNoteRequest {
                     note: Some("done locally".into()),
+                    expected_revision: None,
                 },
             )
             .unwrap();
@@ -1468,6 +2186,7 @@ mod tests {
                 &item.id,
                 QueueNoteRequest {
                     note: Some("follow-up needed".into()),
+                    expected_revision: None,
                 },
             )
             .unwrap();
@@ -1479,6 +2198,7 @@ mod tests {
                 &item.id,
                 QueueNoteRequest {
                     note: Some("not actionable".into()),
+                    expected_revision: None,
                 },
             )
             .unwrap();
@@ -1505,6 +2225,7 @@ mod tests {
                 &item.id,
                 QueueNoteRequest {
                     note: Some("done".into()),
+                    expected_revision: None,
                 },
             )
             .unwrap();
@@ -1543,7 +2264,9 @@ mod tests {
                 },
             )
             .expect_err("stale revision should fail");
-        assert!(matches!(stale, StoreError::Conflict(message) if message.contains("revision mismatch")));
+        assert!(
+            matches!(stale, StoreError::Conflict(message) if message.contains("revision mismatch"))
+        );
 
         let dropped = store
             .transition_queue_item(
@@ -1595,7 +2318,9 @@ mod tests {
                 },
             )
             .expect_err("queued -> completed should fail");
-        assert!(matches!(invalid, StoreError::Conflict(message) if message.contains("invalid queue transition")));
+        assert!(
+            matches!(invalid, StoreError::Conflict(message) if message.contains("invalid queue transition"))
+        );
 
         let claimed = store
             .transition_queue_item(
@@ -1636,7 +2361,112 @@ mod tests {
                 },
             )
             .expect_err("backward transition should fail");
-        assert!(matches!(backward, StoreError::Conflict(message) if message.contains("invalid queue transition")));
+        assert!(
+            matches!(backward, StoreError::Conflict(message) if message.contains("invalid queue transition"))
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn enforces_revision_checks_and_terminal_claim_release_across_lifecycle_routes() {
+        let root = temp_workspace("lifecycle-revisions");
+        let store = WebBackendStore::new(StorePaths::from_workspace_root(&root), "127.0.0.1:8787");
+        let item = store
+            .create_queue_item(QueueItemCreateRequest {
+                title: "Review approval packet".into(),
+                kind: "review".into(),
+                note: None,
+                source_path: None,
+            })
+            .unwrap();
+        let claimed = store
+            .claim_queue_item(
+                &item.id,
+                QueueClaimRequest {
+                    claimed_by: "operator-a".into(),
+                    expected_revision: Some(1),
+                },
+            )
+            .unwrap();
+        assert_eq!(claimed.claimed_by.as_deref(), Some("operator-a"));
+
+        let stale_complete = store
+            .complete_queue_item(
+                &item.id,
+                QueueNoteRequest {
+                    note: Some("done locally".into()),
+                    expected_revision: Some(1),
+                },
+            )
+            .expect_err("stale completion should fail");
+        assert!(
+            matches!(stale_complete, StoreError::Conflict(message) if message.contains("revision mismatch"))
+        );
+
+        let completed = store
+            .complete_queue_item(
+                &item.id,
+                QueueNoteRequest {
+                    note: Some("done locally".into()),
+                    expected_revision: Some(2),
+                },
+            )
+            .unwrap();
+        assert_eq!(completed.status, QueueItemStatus::Completed);
+        assert_eq!(completed.claimed_by, None);
+
+        let stale_reopen = store
+            .reopen_queue_item(
+                &item.id,
+                QueueNoteRequest {
+                    note: Some("follow-up needed".into()),
+                    expected_revision: Some(2),
+                },
+            )
+            .expect_err("stale reopen should fail");
+        assert!(
+            matches!(stale_reopen, StoreError::Conflict(message) if message.contains("revision mismatch"))
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_transitioning_ownerless_claimed_state_forward() {
+        let root = temp_workspace("ownerless-claimed-state");
+        let store = WebBackendStore::new(StorePaths::from_workspace_root(&root), "127.0.0.1:8787");
+        store.ensure_storage().unwrap();
+        store
+            .write_queue(&OperatorQueue {
+                schema_version: 1,
+                revision: 7,
+                updated_at_utc: now_utc_string(),
+                items: vec![QueueItem {
+                    id: "item-ownerless".into(),
+                    title: "Broken persisted item".into(),
+                    kind: "review".into(),
+                    status: QueueItemStatus::Claimed,
+                    created_at_utc: now_utc_string(),
+                    claimed_by: None,
+                    note: None,
+                    source_path: None,
+                }],
+            })
+            .unwrap();
+
+        let error = store
+            .transition_queue_item(
+                "item-ownerless",
+                QueueTransitionRequest {
+                    to_status: QueueItemStatus::InReview,
+                    claimed_by: None,
+                    note: Some("triage started".into()),
+                    expected_revision: Some(7),
+                },
+            )
+            .expect_err("ownerless claimed state should not advance");
+        assert!(
+            matches!(error, StoreError::Conflict(message) if message.contains("without an owner"))
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1735,6 +2565,12 @@ mod tests {
             .to_string(),
         )
         .unwrap();
+        fs::write(
+            approvals_dir.join("trace-1.review-status.json"),
+            serde_json::json!({"status":"queued-for-review","summary":"waiting for operator"})
+                .to_string(),
+        )
+        .unwrap();
         let store = WebBackendStore::new(StorePaths::from_workspace_root(&root), "127.0.0.1:8787");
         let report = store.sync_web_approval_inbox().unwrap();
         assert_eq!(report.imported_entries, 1);
@@ -1748,6 +2584,141 @@ mod tests {
         let queue = store.load_queue().unwrap();
         assert_eq!(queue.items.len(), 1);
         assert_eq!(queue.items[0].kind, "web-approval-review");
+        let review_state = store.load_queue_item_review_state(&queue.items[0].id).unwrap();
+        assert_eq!(review_state.backend_source, "web-approval-sync");
+        assert_eq!(review_state.inbox_entry.as_ref().and_then(|entry| entry.trace_id.as_deref()), Some("trace-1"));
+        assert_eq!(review_state.review_status.as_ref().and_then(|value| value.get("status")).and_then(serde_json::Value::as_str), Some("queued-for-review"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn can_load_repo_analysis_review_state_from_backend_paths() {
+        let root = temp_workspace("repo-review-state");
+        let bundle = root.join(".demo-artifacts/repo-analysis-demo/20260412T030700Z");
+        fs::create_dir_all(&bundle).unwrap();
+        fs::write(bundle.join("runtime-bridge.json"), serde_json::json!({"latestSession":{"sessionId":"session-123"},"recentTraces":[{"traceId":"trace-1"}]}).to_string()).unwrap();
+        fs::write(bundle.join("operator-handoff.json"), serde_json::json!({"workflow":"repo-analysis-demo","operatorNextStep":"review it"}).to_string()).unwrap();
+        fs::write(bundle.join("review-status.json"), serde_json::json!({"status":"pending-review"}).to_string()).unwrap();
+        fs::write(bundle.join("continuity-status.json"), serde_json::json!({"handoffState":"claimed","currentOwner":"operator-a"}).to_string()).unwrap();
+        let store = WebBackendStore::new(StorePaths::from_workspace_root(&root), "127.0.0.1:8787");
+        let report = store.import_repo_analysis_bundle(&bundle).unwrap();
+        let review_state = store.load_queue_item_review_state(&report.queue_item_id).unwrap();
+        assert_eq!(review_state.backend_source, "repo-analysis-import");
+        assert_eq!(review_state.operator_handoff_path.as_deref(), Some(".demo-artifacts/repo-analysis-demo/20260412T030700Z/operator-handoff.json"));
+        assert_eq!(review_state.review_status.as_ref().and_then(|value| value.get("status")).and_then(serde_json::Value::as_str), Some("pending-review"));
+        assert_eq!(review_state.continuity_status.as_ref().and_then(|value| value.get("handoffState")).and_then(serde_json::Value::as_str), Some("claimed"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn refresh_local_artifacts_imports_latest_bundle_and_inbox_when_backend_cache_is_stale() {
+        let root = temp_workspace("refresh-local-artifacts");
+        let bundle = root.join(".demo-artifacts/repo-analysis-demo/20260412T030700Z");
+        fs::create_dir_all(&bundle).unwrap();
+        fs::write(bundle.join("runtime-bridge.json"), serde_json::json!({"schemaVersion":2,"latestSession":{"sessionId":"session-123","path":".claw/sessions/session-123.jsonl"},"recentTraces":[{"traceId":"trace-1","path":".claw/trace/trace-1.json"}]}).to_string()).unwrap();
+        fs::write(
+            bundle.join("operator-handoff.json"),
+            serde_json::json!({"workflow":"repo-analysis-demo"}).to_string(),
+        )
+        .unwrap();
+        fs::write(
+            bundle.join("review-status.json"),
+            serde_json::json!({"status":"pending-review"}).to_string(),
+        )
+        .unwrap();
+        fs::write(
+            bundle.join("continuity-status.json"),
+            serde_json::json!({"handoffState":"awaiting-first-operator"}).to_string(),
+        )
+        .unwrap();
+
+        let approvals_dir = root.join(".claw/web-approvals");
+        fs::create_dir_all(&approvals_dir).unwrap();
+        fs::write(
+            approvals_dir.join("inbox-state.json"),
+            serde_json::json!({
+                "generatedAtUtc": 123456,
+                "entries": [{
+                    "itemId": "inbox-trace-1",
+                    "traceId": "trace-1",
+                    "status": "queued",
+                    "queueBucket": "ready-to-review",
+                    "queueLabel": "Ready to review rerun",
+                    "operatorState": "rerun captured for review",
+                    "reviewJsonPath": ".claw/web-approvals/trace-1.review.json",
+                    "approvalPacket": ".claw/web-approvals/trace-1.json"
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            approvals_dir.join("index.review.json"),
+            serde_json::json!({
+                "entries": [{
+                    "traceId": "trace-1",
+                    "reviewJsonPath": ".claw/web-approvals/trace-1.review.json",
+                    "approvalPacket": ".claw/web-approvals/trace-1.json"
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let store = WebBackendStore::new(StorePaths::from_workspace_root(&root), "127.0.0.1:8787");
+        let report = store.refresh_local_artifacts().unwrap();
+        assert!(report.runtime_bridge_imported);
+        assert!(report.operator_inbox_synced);
+        assert_eq!(
+            report.latest_repo_analysis_bundle.as_deref(),
+            Some(".demo-artifacts/repo-analysis-demo/20260412T030700Z")
+        );
+        let snapshot = store.snapshot().unwrap();
+        assert_eq!(
+            snapshot.runtime_bridge.latest_session_id.as_deref(),
+            Some("session-123")
+        );
+        assert_eq!(snapshot.operator_inbox.entry_count, 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn refresh_local_artifacts_skips_unchanged_sources_without_bumping_queue_revision() {
+        let root = temp_workspace("refresh-local-artifacts-skip");
+        let bundle = root.join(".demo-artifacts/repo-analysis-demo/20260412T030700Z");
+        fs::create_dir_all(&bundle).unwrap();
+        fs::write(bundle.join("runtime-bridge.json"), serde_json::json!({"schemaVersion":2,"latestSession":{"sessionId":"session-123","path":".claw/sessions/session-123.jsonl"},"recentTraces":[]}).to_string()).unwrap();
+        fs::write(
+            bundle.join("operator-handoff.json"),
+            serde_json::json!({"workflow":"repo-analysis-demo"}).to_string(),
+        )
+        .unwrap();
+        fs::write(
+            bundle.join("review-status.json"),
+            serde_json::json!({"status":"pending-review"}).to_string(),
+        )
+        .unwrap();
+        fs::write(
+            bundle.join("continuity-status.json"),
+            serde_json::json!({"handoffState":"awaiting-first-operator"}).to_string(),
+        )
+        .unwrap();
+
+        let approvals_dir = root.join(".claw/web-approvals");
+        fs::create_dir_all(&approvals_dir).unwrap();
+        fs::write(
+            approvals_dir.join("inbox-state.json"),
+            serde_json::json!({"generatedAtUtc": 123456, "entries": []}).to_string(),
+        )
+        .unwrap();
+
+        let store = WebBackendStore::new(StorePaths::from_workspace_root(&root), "127.0.0.1:8787");
+        let first = store.refresh_local_artifacts().unwrap();
+        let queue_revision = first.queue_revision;
+        let second = store.refresh_local_artifacts().unwrap();
+        assert!(!second.runtime_bridge_imported);
+        assert!(!second.operator_inbox_synced);
+        assert_eq!(second.queue_revision, queue_revision);
         let _ = fs::remove_dir_all(root);
     }
 }

@@ -29,8 +29,21 @@ enum Command {
         #[arg(long, default_value = ".claw/backend/static-status.html")]
         output: PathBuf,
     },
+    /// Read the backend-backed review/handoff snapshot for a queue item.
+    ReadQueueReviewState { item_id: String },
+    /// Sync staged repo-analysis index artifacts into backend queue/index state.
+    SyncRepoAnalysisIndex,
     /// Sync static web-approval inbox/review artifacts into backend queue/inbox state.
     SyncWebApprovalInbox,
+    /// Refresh cached backend state from local staged artifacts once or in a polling loop.
+    WatchLocalArtifacts {
+        /// Poll interval in milliseconds when not running once.
+        #[arg(long, default_value_t = 2000)]
+        poll_interval_ms: u64,
+        /// Run a single refresh pass and exit.
+        #[arg(long, default_value_t = false)]
+        once: bool,
+    },
 }
 
 #[tokio::main]
@@ -58,10 +71,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let report = export_static_status_page(&api_base_url, &output).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
+        Command::ReadQueueReviewState { item_id } => {
+            let report = store.load_queue_item_review_state(&item_id)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
         Command::SyncWebApprovalInbox => {
             let report = store.sync_web_approval_inbox()?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
+        Command::SyncRepoAnalysisIndex => {
+            let report = store.sync_repo_analysis_index()?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Command::WatchLocalArtifacts {
+            poll_interval_ms,
+            once,
+        } => {
+            watch_local_artifacts(store, poll_interval_ms, once).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn watch_local_artifacts(
+    store: WebBackendStore,
+    poll_interval_ms: u64,
+    once: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    loop {
+        let report = store.refresh_local_artifacts()?;
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        if once {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(poll_interval_ms)).await;
     }
     Ok(())
 }

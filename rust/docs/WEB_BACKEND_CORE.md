@@ -32,6 +32,7 @@ By default the daemon uses:
 
 - `.claw/backend/operator-queue.json`
 - `.claw/backend/runtime-bridge.json`
+- `.claw/backend/operator-inbox.json`
 
 The queue file is the mutable operator work queue.
 The runtime bridge file is the local snapshot surface the service exposes to web/API consumers.
@@ -48,6 +49,8 @@ The runtime bridge file is the local snapshot surface the service exposes to web
 - `POST /v1/queue/items/:id/defer`
 - `POST /v1/queue/items/:id/complete`
 - `POST /v1/queue/items/:id/drop`
+- `GET /v1/operator/inbox`
+- `POST /v1/operator/inbox/sync`
 
 Example create request:
 
@@ -121,10 +124,21 @@ That consumer command fetches `/v1/state` and writes a bounded local page summar
 
 ## Intended next steps
 
+There is now also a bounded local polling helper for artifact refreshes:
+
+```bash
+cd rust
+cargo run -p web-backend-core --bin claw-webd -- watch-local-artifacts --once
+# or keep polling for local changes
+cargo run -p web-backend-core --bin claw-webd -- watch-local-artifacts --poll-interval-ms 2000
+```
+
+That command does **not** claim a real-time collaborative backend. It only watches local staged artifacts and refreshes the cached backend bridge/inbox when those source files become newer than the cached backend copies.
+
 Future work can build on this by:
 - projecting existing review/handoff/dashboard artifacts into the runtime bridge automatically
 - adding bounded status transitions beyond the current local mutation slice if they are truly needed
 - wiring an actual web UI to the local JSON API
-- adding file watchers or event streams if/when justified
+- replacing polling with a tighter watcher or event stream only if that remains honest and justified
 
 For now, the foundation is intentionally small, local, and explicit.
