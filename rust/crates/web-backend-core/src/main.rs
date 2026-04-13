@@ -29,6 +29,8 @@ enum Command {
         #[arg(long, default_value = ".claw/backend/static-status.html")]
         output: PathBuf,
     },
+    /// Sync static web-approval inbox/review artifacts into backend queue/inbox state.
+    SyncWebApprovalInbox,
 }
 
 #[tokio::main]
@@ -56,6 +58,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let report = export_static_status_page(&api_base_url, &output).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
+        Command::SyncWebApprovalInbox => {
+            let report = store.sync_web_approval_inbox()?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
     }
     Ok(())
 }
@@ -69,7 +75,7 @@ async fn serve(
 
     let listener = tokio::net::TcpListener::bind(socket_addr).await?;
     println!(
-        "claw-webd listening on http://{}\nLocal backend core only: persisted operator state + runtime snapshots, not a full live web app.",
+        "claw-webd listening on http://{}\nLocal backend core only: persisted operator state + runtime snapshots, plus on-demand synced inbox snapshots, not a full live web app.",
         listener.local_addr()?
     );
     axum::serve(listener, app(store))

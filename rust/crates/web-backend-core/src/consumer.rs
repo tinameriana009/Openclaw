@@ -187,8 +187,8 @@ fn escape_html(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::state::{
-        BackendApiSchema, BackendPaths, OperatorQueue, QueueItem, QueueItemStatus,
-        RuntimeBridgeSnapshot, ServiceConfig, ServiceInfo,
+        BackendApiSchema, BackendPaths, OperatorInboxSnapshot, OperatorQueue, QueueItem,
+        QueueItemStatus, RuntimeBridgeSnapshot, ServiceConfig, ServiceInfo,
     };
 
     fn sample_snapshot() -> BackendSnapshot {
@@ -210,6 +210,7 @@ mod tests {
                 storage_root: ".claw/backend".into(),
                 queue_file: ".claw/backend/operator-queue.json".into(),
                 runtime_bridge_file: ".claw/backend/runtime-bridge.json".into(),
+                operator_inbox_file: ".claw/backend/operator-inbox.json".into(),
             },
             runtime_bridge: RuntimeBridgeSnapshot {
                 latest_session_id: Some("session-123".into()),
@@ -233,6 +234,16 @@ mod tests {
                     note: None,
                     source_path: Some(".demo-artifacts/run/operator-handoff.json".into()),
                 }],
+            },
+            operator_inbox: OperatorInboxSnapshot {
+                source_file: Some(".claw/backend/operator-inbox.json".into()),
+                review_index_file: Some(".claw/web-approvals/index.review.json".into()),
+                generated_at_utc: Some("123456".into()),
+                synced_at_utc: Some("123457".into()),
+                status: "loaded".into(),
+                entry_count: 1,
+                entries: Vec::new(),
+                honesty_note: "Backend-cached operator inbox snapshot only.".into(),
             },
         }
     }

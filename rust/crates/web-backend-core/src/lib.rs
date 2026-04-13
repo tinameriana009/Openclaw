@@ -5,7 +5,9 @@ pub mod state;
 pub use api::{app, AppState};
 pub use consumer::{export_static_status_page, render_static_status_page, ConsumerExportReport};
 pub use state::{
-    BackendApiSchema, BackendPaths, BackendSnapshot, ImportBundleReport, OperatorQueue,
-    QueueClaimRequest, QueueItem, QueueItemCreateRequest, QueueItemStatus, QueueTransitionRequest,
-    RuntimeBridgeSnapshot, ServiceConfig, ServiceInfo, StoreError, StorePaths, WebBackendStore,
+    BackendApiSchema, BackendPaths, BackendSnapshot, ImportBundleReport, OperatorInboxEntry,
+    OperatorInboxSnapshot, OperatorQueue, QueueClaimRequest, QueueItem, QueueItemCreateRequest,
+    QueueItemStatus, QueueNoteRequest, RuntimeBridgeSnapshot, ServiceConfig, ServiceInfo,
+    StoreError, StorePaths,
+    SyncInboxReport, WebBackendStore,
 };
