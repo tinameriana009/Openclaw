@@ -1804,6 +1804,9 @@ fn should_refresh_bundle(
         bundle_dir.join("review-status.json"),
         bundle_dir.join("continuity-status.json"),
     ];
+    if runtime_bridge_is_placeholder(runtime_bridge_file)? {
+        return Ok(true);
+    }
     source_files_newer_than_target(&required, runtime_bridge_file)
 }
 
@@ -1815,6 +1818,10 @@ fn should_refresh_inbox(
     let mut sources = vec![inbox_source_path.to_path_buf()];
     if let Some(review_index_path) = review_index_path {
         sources.push(review_index_path.to_path_buf());
+    }
+    if operator_inbox_is_empty(operator_inbox_file)? && inbox_source_has_entries(inbox_source_path)?
+    {
+        return Ok(true);
     }
     source_files_newer_than_target(&sources, operator_inbox_file)
 }
@@ -1839,6 +1846,43 @@ fn source_files_newer_than_target(
         }
     }
     Ok(false)
+}
+
+fn runtime_bridge_is_placeholder(runtime_bridge_file: &Path) -> Result<bool, StoreError> {
+    if !runtime_bridge_file.exists() {
+        return Ok(true);
+    }
+    let value = read_json_file(runtime_bridge_file)?;
+    let latest_session = value
+        .get("runtimeBridge")
+        .and_then(|bridge| bridge.get("latestSession"))
+        .or_else(|| value.get("latestSession"))
+        .filter(|session| !session.is_null());
+    let recent_traces = value
+        .get("runtimeBridge")
+        .and_then(|bridge| bridge.get("recentTraces"))
+        .or_else(|| value.get("recentTraces"))
+        .and_then(serde_json::Value::as_array);
+    Ok(latest_session.is_none() && recent_traces.is_none_or(Vec::is_empty))
+}
+
+fn operator_inbox_is_empty(operator_inbox_file: &Path) -> Result<bool, StoreError> {
+    if !operator_inbox_file.exists() {
+        return Ok(true);
+    }
+    let value = read_json_file(operator_inbox_file)?;
+    Ok(value
+        .get("entries")
+        .and_then(serde_json::Value::as_array)
+        .is_none_or(Vec::is_empty))
+}
+
+fn inbox_source_has_entries(inbox_source_path: &Path) -> Result<bool, StoreError> {
+    let value = read_json_file(inbox_source_path)?;
+    Ok(value
+        .get("entries")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|entries| !entries.is_empty()))
 }
 
 fn derive_queue_status(
