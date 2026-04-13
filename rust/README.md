@@ -432,6 +432,14 @@ cargo run -p web-backend-core --bin claw-webd -- import-repo-analysis-bundle \
 
 That command imports the staged `runtime-bridge.json` / `review-status.json` / `continuity-status.json` / `operator-handoff.json` bundle into `.claw/backend/` and creates or updates a real backend queue item. It is a bounded sync step, not a claim that a live web dashboard now exists.
 
+If you want the backend to mirror the staged multi-run repo-analysis review index too, use the explicit index sync bridge:
+
+```bash
+cargo run -p web-backend-core --bin claw-webd -- sync-repo-analysis-index
+```
+
+That reads `.demo-artifacts/repo-analysis-demo/index.json`, updates backend queue items keyed by each run's handoff artifact, and writes `.claw/backend/repo-analysis-index.json`. It is still an on-demand cache of static artifacts, not a watcher or assignment service.
+
 To prove the backend can already be consumed by a separate surface, keep `claw-webd` running and export a static status page from its JSON API:
 
 ```bash

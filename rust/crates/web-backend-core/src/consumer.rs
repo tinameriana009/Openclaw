@@ -457,8 +457,8 @@ mod tests {
     use super::*;
     use crate::state::{
         AuthBoundarySnapshot, BackendApiSchema, BackendPaths, OperatorInboxEntry,
-        OperatorInboxSnapshot, OperatorQueue, QueueItem, QueueItemStatus, RuntimeBridgeSnapshot,
-        ServiceConfig, ServiceInfo,
+        OperatorInboxSnapshot, OperatorQueue, QueueItem, QueueItemStatus,
+        RepoAnalysisIndexSnapshot, RuntimeBridgeSnapshot, ServiceConfig, ServiceInfo,
     };
 
     fn sample_snapshot() -> BackendSnapshot {

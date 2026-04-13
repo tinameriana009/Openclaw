@@ -2479,6 +2479,53 @@ mod tests {
         assert_eq!(snapshot.service.name, "claw-webd");
         assert_eq!(snapshot.schema.version, "v1");
         assert_eq!(snapshot.operator_inbox.status, "empty");
+        assert_eq!(snapshot.repo_analysis_index.status, "empty");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn can_sync_repo_analysis_index_into_backend_state() {
+        let root = temp_workspace("sync-repo-analysis-index");
+        let artifact_root = root.join(".demo-artifacts/repo-analysis-demo");
+        let run_dir = artifact_root.join("20260412T030700Z");
+        fs::create_dir_all(&run_dir).unwrap();
+        fs::write(
+            artifact_root.join("index.json"),
+            serde_json::json!({
+                "workflow": "repo-analysis-demo",
+                "generatedAtUtc": "2026-04-12T03:07:00Z",
+                "runs": [{
+                    "runId": "20260412T030700Z",
+                    "profile": "balanced",
+                    "status": "review-in-progress",
+                    "handoffState": "claimed",
+                    "currentOwner": "operator-a",
+                    "runDir": ".demo-artifacts/repo-analysis-demo/20260412T030700Z",
+                    "operatorHandoff": ".demo-artifacts/repo-analysis-demo/20260412T030700Z/operator-handoff.json",
+                    "reviewStatus": ".demo-artifacts/repo-analysis-demo/20260412T030700Z/review-status.json",
+                    "continuityStatus": ".demo-artifacts/repo-analysis-demo/20260412T030700Z/continuity-status.json",
+                    "dashboard": ".demo-artifacts/repo-analysis-demo/20260412T030700Z/operator-dashboard.html",
+                    "latestSessionId": "session-123",
+                    "operatorNextStep": "review it"
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let store = WebBackendStore::new(StorePaths::from_workspace_root(&root), "127.0.0.1:8787");
+        let report = store.sync_repo_analysis_index().unwrap();
+        assert_eq!(report.imported_runs, 1);
+        let snapshot = store.load_repo_analysis_index().unwrap();
+        assert_eq!(snapshot.run_count, 1);
+        assert_eq!(snapshot.runs[0].run_id, "20260412T030700Z");
+        assert_eq!(
+            snapshot.runs[0].queue_status,
+            Some(QueueItemStatus::InReview)
+        );
+        let queue = store.load_queue().unwrap();
+        assert_eq!(queue.items.len(), 1);
+        assert_eq!(queue.items[0].kind, "repo-analysis-demo");
+        assert_eq!(queue.items[0].claimed_by.as_deref(), Some("operator-a"));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -2584,10 +2631,25 @@ mod tests {
         let queue = store.load_queue().unwrap();
         assert_eq!(queue.items.len(), 1);
         assert_eq!(queue.items[0].kind, "web-approval-review");
-        let review_state = store.load_queue_item_review_state(&queue.items[0].id).unwrap();
+        let review_state = store
+            .load_queue_item_review_state(&queue.items[0].id)
+            .unwrap();
         assert_eq!(review_state.backend_source, "web-approval-sync");
-        assert_eq!(review_state.inbox_entry.as_ref().and_then(|entry| entry.trace_id.as_deref()), Some("trace-1"));
-        assert_eq!(review_state.review_status.as_ref().and_then(|value| value.get("status")).and_then(serde_json::Value::as_str), Some("queued-for-review"));
+        assert_eq!(
+            review_state
+                .inbox_entry
+                .as_ref()
+                .and_then(|entry| entry.trace_id.as_deref()),
+            Some("trace-1")
+        );
+        assert_eq!(
+            review_state
+                .review_status
+                .as_ref()
+                .and_then(|value| value.get("status"))
+                .and_then(serde_json::Value::as_str),
+            Some("queued-for-review")
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -2597,22 +2659,56 @@ mod tests {
         let bundle = root.join(".demo-artifacts/repo-analysis-demo/20260412T030700Z");
         fs::create_dir_all(&bundle).unwrap();
         fs::write(bundle.join("runtime-bridge.json"), serde_json::json!({"latestSession":{"sessionId":"session-123"},"recentTraces":[{"traceId":"trace-1"}]}).to_string()).unwrap();
-        fs::write(bundle.join("operator-handoff.json"), serde_json::json!({"workflow":"repo-analysis-demo","operatorNextStep":"review it"}).to_string()).unwrap();
-        fs::write(bundle.join("review-status.json"), serde_json::json!({"status":"pending-review"}).to_string()).unwrap();
-        fs::write(bundle.join("continuity-status.json"), serde_json::json!({"handoffState":"claimed","currentOwner":"operator-a"}).to_string()).unwrap();
+        fs::write(
+            bundle.join("operator-handoff.json"),
+            serde_json::json!({"workflow":"repo-analysis-demo","operatorNextStep":"review it"})
+                .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            bundle.join("review-status.json"),
+            serde_json::json!({"status":"pending-review"}).to_string(),
+        )
+        .unwrap();
+        fs::write(
+            bundle.join("continuity-status.json"),
+            serde_json::json!({"handoffState":"claimed","currentOwner":"operator-a"}).to_string(),
+        )
+        .unwrap();
         let store = WebBackendStore::new(StorePaths::from_workspace_root(&root), "127.0.0.1:8787");
         let report = store.import_repo_analysis_bundle(&bundle).unwrap();
-        let review_state = store.load_queue_item_review_state(&report.queue_item_id).unwrap();
+        let review_state = store
+            .load_queue_item_review_state(&report.queue_item_id)
+            .unwrap();
         assert_eq!(review_state.backend_source, "repo-analysis-import");
-        assert_eq!(review_state.operator_handoff_path.as_deref(), Some(".demo-artifacts/repo-analysis-demo/20260412T030700Z/operator-handoff.json"));
-        assert_eq!(review_state.review_status.as_ref().and_then(|value| value.get("status")).and_then(serde_json::Value::as_str), Some("pending-review"));
-        assert_eq!(review_state.continuity_status.as_ref().and_then(|value| value.get("handoffState")).and_then(serde_json::Value::as_str), Some("claimed"));
+        assert_eq!(
+            review_state.operator_handoff_path.as_deref(),
+            Some(".demo-artifacts/repo-analysis-demo/20260412T030700Z/operator-handoff.json")
+        );
+        assert_eq!(
+            review_state
+                .review_status
+                .as_ref()
+                .and_then(|value| value.get("status"))
+                .and_then(serde_json::Value::as_str),
+            Some("pending-review")
+        );
+        assert_eq!(
+            review_state
+                .continuity_status
+                .as_ref()
+                .and_then(|value| value.get("handoffState"))
+                .and_then(serde_json::Value::as_str),
+            Some("claimed")
+        );
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn refresh_local_artifacts_imports_latest_bundle_and_inbox_when_backend_cache_is_stale() {
         let root = temp_workspace("refresh-local-artifacts");
+        let store = WebBackendStore::new(StorePaths::from_workspace_root(&root), "127.0.0.1:8787");
+        store.ensure_storage().unwrap();
         let bundle = root.join(".demo-artifacts/repo-analysis-demo/20260412T030700Z");
         fs::create_dir_all(&bundle).unwrap();
         fs::write(bundle.join("runtime-bridge.json"), serde_json::json!({"schemaVersion":2,"latestSession":{"sessionId":"session-123","path":".claw/sessions/session-123.jsonl"},"recentTraces":[{"traceId":"trace-1","path":".claw/trace/trace-1.json"}]}).to_string()).unwrap();
@@ -2665,7 +2761,6 @@ mod tests {
         )
         .unwrap();
 
-        let store = WebBackendStore::new(StorePaths::from_workspace_root(&root), "127.0.0.1:8787");
         let report = store.refresh_local_artifacts().unwrap();
         assert!(report.runtime_bridge_imported);
         assert!(report.operator_inbox_synced);

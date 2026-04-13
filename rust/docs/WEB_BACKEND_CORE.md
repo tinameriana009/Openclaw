@@ -43,6 +43,10 @@ The runtime bridge file is the local snapshot surface the service exposes to web
 - `GET /v1/schema`
 - `GET /v1/state`
 - `GET /v1/queue`
+- `GET /v1/operator/inbox`
+- `POST /v1/operator/inbox/sync`
+- `GET /v1/operator/repo-analysis`
+- `POST /v1/operator/repo-analysis/sync`
 - `POST /v1/queue/items`
 - `POST /v1/queue/items/:id/claim`
 - `POST /v1/queue/items/:id/unclaim`
