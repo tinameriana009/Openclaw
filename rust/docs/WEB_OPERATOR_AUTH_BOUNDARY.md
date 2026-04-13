@@ -123,6 +123,16 @@ The schema is intentionally strict and conservative:
 - `mutationRoutesEnabled` defaults to `false`
 - `trustedProxy.required` defaults to `true`
 - `sessionCookiesSupported` must remain `false`
+- `localOperatorMutations.enabled` defaults to `false`
+
+A small bounded exception now exists for the in-tree localhost queue mutation slice:
+
+- it is still **not** real auth
+- it requires an explicit policy file opt-in
+- it can require loopback binding
+- it requires a per-request acknowledgment header (default `x-claw-local-operator`)
+
+That exception is meant to keep the existing local backend honest while still making any mutation behavior pass through an explicit boundary contract.
 
 That schema is a **boundary contract**, not an implementation contract.
 

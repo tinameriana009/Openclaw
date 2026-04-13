@@ -31,6 +31,7 @@ pub struct BackendPaths {
     pub queue_file: String,
     pub runtime_bridge_file: String,
     pub operator_inbox_file: String,
+    pub auth_policy_file: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -111,9 +112,70 @@ pub struct BackendSnapshot {
     pub schema: BackendApiSchema,
     pub config: ServiceConfig,
     pub paths: BackendPaths,
+    pub auth_boundary: AuthBoundarySnapshot,
     pub runtime_bridge: RuntimeBridgeSnapshot,
     pub queue: OperatorQueue,
     pub operator_inbox: OperatorInboxSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuthBoundarySnapshot {
+    pub policy_loaded: bool,
+    pub policy_source: String,
+    pub mutation_routes_allowed: bool,
+    pub mutation_guard_reason: String,
+    pub required_local_ack_header: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WebOperatorAuthPolicy {
+    pub policy_kind: String,
+    pub schema_version: u64,
+    pub backend_enabled: bool,
+    pub deployment_mode: String,
+    pub anonymous_read_allowed: bool,
+    pub mutation_routes_enabled: bool,
+    pub session_cookies_supported: bool,
+    pub direct_internet_exposure_allowed: bool,
+    pub trusted_proxy: TrustedProxyPolicy,
+    pub local_operator_mutations: LocalOperatorMutationPolicy,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrustedProxyPolicy {
+    pub required: bool,
+    pub identity_headers: Vec<String>,
+    pub allow_client_supplied_identity_headers: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalOperatorMutationPolicy {
+    pub enabled: bool,
+    pub require_loopback_bind: bool,
+    pub required_ack_header: String,
+}
+
+impl Default for LocalOperatorMutationPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            require_loopback_bind: true,
+            required_ack_header: "x-claw-local-operator".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MutationGuard {
+    pub allowed: bool,
+    pub reason: String,
+    pub required_ack_header: Option<String>,
+    pub policy_loaded: bool,
+    pub policy_source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -180,6 +242,7 @@ pub struct StorePaths {
     pub queue_file: PathBuf,
     pub runtime_bridge_file: PathBuf,
     pub operator_inbox_file: PathBuf,
+    pub auth_policy_file: PathBuf,
 }
 
 impl StorePaths {
@@ -193,6 +256,7 @@ impl StorePaths {
             queue_file: storage_root.join("operator-queue.json"),
             runtime_bridge_file: storage_root.join("runtime-bridge.json"),
             operator_inbox_file: storage_root.join("operator-inbox.json"),
+            auth_policy_file: storage_root.join("web-operator-auth-policy.json"),
         }
     }
 }
@@ -299,10 +363,7 @@ impl WebBackendStore {
                     "/v1/queue".into(),
                     "/v1/queue/items".into(),
                     "/v1/queue/items/:id/claim".into(),
-                    "/v1/queue/items/:id/unclaim".into(),
-                    "/v1/queue/items/:id/complete".into(),
-                    "/v1/queue/items/:id/drop".into(),
-                    "/v1/queue/items/:id/reopen".into(),
+                    "/v1/queue/items/:id/transition".into(),
                     "/v1/operator/inbox".into(),
                     "/v1/operator/inbox/sync".into(),
                 ],
@@ -316,11 +377,105 @@ impl WebBackendStore {
                 queue_file: relative_or_absolute(&self.paths.workspace_root, &self.paths.queue_file),
                 runtime_bridge_file: relative_or_absolute(&self.paths.workspace_root, &self.paths.runtime_bridge_file),
                 operator_inbox_file: relative_or_absolute(&self.paths.workspace_root, &self.paths.operator_inbox_file),
+                auth_policy_file: relative_or_absolute(&self.paths.workspace_root, &self.paths.auth_policy_file),
             },
+            auth_boundary: self.auth_boundary_snapshot()?,
             runtime_bridge: self.load_runtime_bridge()?,
             queue: self.load_queue()?,
             operator_inbox: self.load_operator_inbox()?,
         })
+    }
+
+    pub fn auth_boundary_snapshot(&self) -> Result<AuthBoundarySnapshot, StoreError> {
+        let guard = self.mutation_guard()?;
+        Ok(AuthBoundarySnapshot {
+            policy_loaded: guard.policy_loaded,
+            policy_source: guard.policy_source,
+            mutation_routes_allowed: guard.allowed,
+            mutation_guard_reason: guard.reason,
+            required_local_ack_header: guard.required_ack_header,
+        })
+    }
+
+    pub fn mutation_guard(&self) -> Result<MutationGuard, StoreError> {
+        self.ensure_storage()?;
+        let Some(policy) = self.load_auth_policy()? else {
+            return Ok(MutationGuard {
+                allowed: false,
+                reason: format!(
+                    "mutation routes are disabled by default; create {} to opt into explicit local-only mutations",
+                    relative_or_absolute(&self.paths.workspace_root, &self.paths.auth_policy_file)
+                ),
+                required_ack_header: None,
+                policy_loaded: false,
+                policy_source: "absent".into(),
+            });
+        };
+        self.validate_auth_policy(&policy)?;
+        let local = &policy.local_operator_mutations;
+        if !local.enabled {
+            return Ok(MutationGuard {
+                allowed: false,
+                reason: "local operator mutations are disabled by policy".into(),
+                required_ack_header: Some(local.required_ack_header.clone()),
+                policy_loaded: true,
+                policy_source: relative_or_absolute(&self.paths.workspace_root, &self.paths.auth_policy_file),
+            });
+        }
+        if local.require_loopback_bind && !bind_address_is_loopback(&self.bind_address) {
+            return Ok(MutationGuard {
+                allowed: false,
+                reason: format!("local operator mutations require a loopback bind, got {}", self.bind_address),
+                required_ack_header: Some(local.required_ack_header.clone()),
+                policy_loaded: true,
+                policy_source: relative_or_absolute(&self.paths.workspace_root, &self.paths.auth_policy_file),
+            });
+        }
+        Ok(MutationGuard {
+            allowed: true,
+            reason: "explicit local-only mutation policy loaded; acknowledgment header still required per request".into(),
+            required_ack_header: Some(local.required_ack_header.clone()),
+            policy_loaded: true,
+            policy_source: relative_or_absolute(&self.paths.workspace_root, &self.paths.auth_policy_file),
+        })
+    }
+
+    fn load_auth_policy(&self) -> Result<Option<WebOperatorAuthPolicy>, StoreError> {
+        if !self.paths.auth_policy_file.exists() {
+            return Ok(None);
+        }
+        Ok(Some(serde_json::from_str(&fs::read_to_string(&self.paths.auth_policy_file)?)?))
+    }
+
+    fn validate_auth_policy(&self, policy: &WebOperatorAuthPolicy) -> Result<(), StoreError> {
+        if policy.policy_kind != "claw.web-operator-auth-boundary" {
+            return Err(StoreError::Validation(format!("unexpected auth policy kind: {}", policy.policy_kind)));
+        }
+        if policy.schema_version != 1 {
+            return Err(StoreError::Validation(format!("unsupported auth policy schema version: {}", policy.schema_version)));
+        }
+        if policy.anonymous_read_allowed {
+            return Err(StoreError::Validation("anonymousReadAllowed must remain false".into()));
+        }
+        if policy.session_cookies_supported {
+            return Err(StoreError::Validation("sessionCookiesSupported must remain false".into()));
+        }
+        if policy.direct_internet_exposure_allowed {
+            return Err(StoreError::Validation("directInternetExposureAllowed must remain false".into()));
+        }
+        if policy.trusted_proxy.allow_client_supplied_identity_headers {
+            return Err(StoreError::Validation("trustedProxy.allowClientSuppliedIdentityHeaders must remain false".into()));
+        }
+        if policy.backend_enabled {
+            return Err(StoreError::Validation("backendEnabled=true is not supported by this local backend slice".into()));
+        }
+        if policy.mutation_routes_enabled {
+            return Err(StoreError::Validation("mutationRoutesEnabled must remain false until a real authenticated backend exists".into()));
+        }
+        if policy.local_operator_mutations.required_ack_header.trim().is_empty() {
+            return Err(StoreError::Validation("localOperatorMutations.requiredAckHeader must not be empty".into()));
+        }
+        Ok(())
     }
 
     pub fn load_queue(&self) -> Result<OperatorQueue, StoreError> {
@@ -494,21 +649,78 @@ impl WebBackendStore {
         item_id: &str,
         request: QueueClaimRequest,
     ) -> Result<QueueItem, StoreError> {
-        if request.claimed_by.trim().is_empty() {
+        let claimed_by = request.claimed_by.trim();
+        if claimed_by.is_empty() {
             return Err(StoreError::Validation(
                 "claimed_by must not be empty".into(),
             ));
         }
-        self.update_queue_item(item_id, |item| {
-            if matches!(item.status, QueueItemStatus::Completed | QueueItemStatus::Dropped) {
-                return Err(StoreError::Validation(
-                    "cannot claim a completed or dropped queue item; reopen it first".into(),
-                ));
+        let mut queue = self.load_queue()?;
+        enforce_expected_revision(queue.revision, request.expected_revision)?;
+        let item = queue
+            .items
+            .iter_mut()
+            .find(|item| item.id == item_id)
+            .ok_or_else(|| StoreError::NotFound(format!("queue item not found: {item_id}")))?;
+        match item.status {
+            QueueItemStatus::Queued | QueueItemStatus::HandoffReady => {
+                item.status = QueueItemStatus::Claimed;
+                item.claimed_by = Some(claimed_by.to_string());
             }
-            item.status = QueueItemStatus::Claimed;
-            item.claimed_by = Some(request.claimed_by.trim().to_string());
-            Ok(())
-        })
+            QueueItemStatus::Claimed => {
+                if item.claimed_by.as_deref() != Some(claimed_by) {
+                    return Err(StoreError::Conflict(format!(
+                        "queue item {item_id} is already claimed by {}",
+                        item.claimed_by.as_deref().unwrap_or("another operator")
+                    )));
+                }
+            }
+            QueueItemStatus::InReview => {
+                return Err(StoreError::Conflict(format!(
+                    "queue item {item_id} cannot be claimed while in-review; use an explicit transition instead"
+                )));
+            }
+            QueueItemStatus::Completed | QueueItemStatus::Dropped => {
+                return Err(StoreError::Conflict(format!(
+                    "queue item {item_id} is terminal and cannot be claimed from {:?}",
+                    item.status
+                )));
+            }
+        }
+        let updated = item.clone();
+        queue.revision += 1;
+        queue.updated_at_utc = now_utc_string();
+        self.write_queue(&queue)?;
+        Ok(updated)
+    }
+
+    pub fn transition_queue_item(
+        &self,
+        item_id: &str,
+        request: QueueTransitionRequest,
+    ) -> Result<QueueItem, StoreError> {
+        let mut queue = self.load_queue()?;
+        enforce_expected_revision(queue.revision, request.expected_revision)?;
+        let item = queue
+            .items
+            .iter_mut()
+            .find(|item| item.id == item_id)
+            .ok_or_else(|| StoreError::NotFound(format!("queue item not found: {item_id}")))?;
+        validate_transition(item, &request)?;
+        item.status = request.to_status;
+        if let Some(claimed_by) = request.claimed_by.and_then(trimmed) {
+            item.claimed_by = Some(claimed_by);
+        } else if matches!(item.status, QueueItemStatus::Queued | QueueItemStatus::Dropped) {
+            item.claimed_by = None;
+        }
+        if let Some(note) = request.note.and_then(trimmed) {
+            item.note = Some(note);
+        }
+        let updated = item.clone();
+        queue.revision += 1;
+        queue.updated_at_utc = now_utc_string();
+        self.write_queue(&queue)?;
+        Ok(updated)
     }
 
     pub fn unclaim_queue_item(
@@ -516,17 +728,27 @@ impl WebBackendStore {
         item_id: &str,
         request: QueueNoteRequest,
     ) -> Result<QueueItem, StoreError> {
-        self.update_queue_item(item_id, |item| {
-            if matches!(item.status, QueueItemStatus::Completed | QueueItemStatus::Dropped) {
-                return Err(StoreError::Validation(
-                    "cannot unclaim a completed or dropped queue item; reopen it first".into(),
-                ));
-            }
-            item.status = QueueItemStatus::Queued;
-            item.claimed_by = None;
-            item.note = normalize_note(request.note.clone(), item.note.clone());
-            Ok(())
-        })
+        let mut queue = self.load_queue()?;
+        let item = queue
+            .items
+            .iter_mut()
+            .find(|item| item.id == item_id)
+            .ok_or_else(|| StoreError::NotFound(format!("queue item not found: {item_id}")))?;
+        if !matches!(item.status, QueueItemStatus::Claimed) {
+            return Err(StoreError::Conflict(format!(
+                "queue item {item_id} can only be unclaimed from claimed"
+            )));
+        }
+        item.status = QueueItemStatus::Queued;
+        item.claimed_by = None;
+        if let Some(note) = request.note.and_then(trimmed) {
+            item.note = Some(note);
+        }
+        let updated = item.clone();
+        queue.revision += 1;
+        queue.updated_at_utc = now_utc_string();
+        self.write_queue(&queue)?;
+        Ok(updated)
     }
 
     pub fn complete_queue_item(
@@ -534,16 +756,27 @@ impl WebBackendStore {
         item_id: &str,
         request: QueueNoteRequest,
     ) -> Result<QueueItem, StoreError> {
-        self.update_queue_item(item_id, |item| {
-            if item.status == QueueItemStatus::Dropped {
-                return Err(StoreError::Validation(
-                    "cannot complete a dropped queue item; reopen it first".into(),
-                ));
-            }
-            item.status = QueueItemStatus::Completed;
-            item.note = normalize_note(request.note.clone(), item.note.clone());
-            Ok(())
-        })
+        let mut queue = self.load_queue()?;
+        let item = queue
+            .items
+            .iter_mut()
+            .find(|item| item.id == item_id)
+            .ok_or_else(|| StoreError::NotFound(format!("queue item not found: {item_id}")))?;
+        if matches!(item.status, QueueItemStatus::Dropped | QueueItemStatus::Completed) {
+            return Err(StoreError::Conflict(format!(
+                "queue item {item_id} cannot be completed from {:?}",
+                item.status
+            )));
+        }
+        item.status = QueueItemStatus::Completed;
+        if let Some(note) = request.note.and_then(trimmed) {
+            item.note = Some(note);
+        }
+        let updated = item.clone();
+        queue.revision += 1;
+        queue.updated_at_utc = now_utc_string();
+        self.write_queue(&queue)?;
+        Ok(updated)
     }
 
     pub fn drop_queue_item(
@@ -551,12 +784,28 @@ impl WebBackendStore {
         item_id: &str,
         request: QueueNoteRequest,
     ) -> Result<QueueItem, StoreError> {
-        self.update_queue_item(item_id, |item| {
-            item.status = QueueItemStatus::Dropped;
-            item.claimed_by = None;
-            item.note = normalize_note(request.note.clone(), item.note.clone());
-            Ok(())
-        })
+        let mut queue = self.load_queue()?;
+        let item = queue
+            .items
+            .iter_mut()
+            .find(|item| item.id == item_id)
+            .ok_or_else(|| StoreError::NotFound(format!("queue item not found: {item_id}")))?;
+        if matches!(item.status, QueueItemStatus::Dropped | QueueItemStatus::Completed) {
+            return Err(StoreError::Conflict(format!(
+                "queue item {item_id} cannot be dropped from {:?}",
+                item.status
+            )));
+        }
+        item.status = QueueItemStatus::Dropped;
+        item.claimed_by = None;
+        if let Some(note) = request.note.and_then(trimmed) {
+            item.note = Some(note);
+        }
+        let updated = item.clone();
+        queue.revision += 1;
+        queue.updated_at_utc = now_utc_string();
+        self.write_queue(&queue)?;
+        Ok(updated)
     }
 
     pub fn reopen_queue_item(
@@ -564,12 +813,31 @@ impl WebBackendStore {
         item_id: &str,
         request: QueueNoteRequest,
     ) -> Result<QueueItem, StoreError> {
-        self.update_queue_item(item_id, |item| {
-            item.status = QueueItemStatus::Queued;
-            item.claimed_by = None;
-            item.note = normalize_note(request.note.clone(), item.note.clone());
-            Ok(())
-        })
+        let mut queue = self.load_queue()?;
+        let item = queue
+            .items
+            .iter_mut()
+            .find(|item| item.id == item_id)
+            .ok_or_else(|| StoreError::NotFound(format!("queue item not found: {item_id}")))?;
+        match item.status {
+            QueueItemStatus::Completed | QueueItemStatus::Dropped => {
+                item.status = QueueItemStatus::Queued;
+                item.claimed_by = None;
+                if let Some(note) = request.note.and_then(trimmed) {
+                    item.note = Some(note);
+                }
+            }
+            _ => {
+                return Err(StoreError::Conflict(format!(
+                    "queue item {item_id} can only be reopened from a terminal state"
+                )));
+            }
+        }
+        let updated = item.clone();
+        queue.revision += 1;
+        queue.updated_at_utc = now_utc_string();
+        self.write_queue(&queue)?;
+        Ok(updated)
     }
 
     pub fn import_repo_analysis_bundle(
@@ -1027,6 +1295,53 @@ fn build_inbox_queue_title(
     }
 }
 
+fn enforce_expected_revision(current_revision: u64, expected_revision: Option<u64>) -> Result<(), StoreError> {
+    if let Some(expected_revision) = expected_revision {
+        if expected_revision != current_revision {
+            return Err(StoreError::Conflict(format!(
+                "queue revision mismatch: expected {expected_revision}, found {current_revision}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_transition(item: &QueueItem, request: &QueueTransitionRequest) -> Result<(), StoreError> {
+    let current = &item.status;
+    let target = &request.to_status;
+    if current == target {
+        return Ok(());
+    }
+
+    let allowed = match current {
+        QueueItemStatus::Queued => matches!(target, QueueItemStatus::Claimed | QueueItemStatus::Dropped),
+        QueueItemStatus::Claimed => matches!(target, QueueItemStatus::InReview | QueueItemStatus::HandoffReady | QueueItemStatus::Completed | QueueItemStatus::Dropped),
+        QueueItemStatus::InReview => matches!(target, QueueItemStatus::HandoffReady | QueueItemStatus::Completed | QueueItemStatus::Dropped),
+        QueueItemStatus::HandoffReady => matches!(target, QueueItemStatus::Claimed | QueueItemStatus::Completed | QueueItemStatus::Dropped),
+        QueueItemStatus::Completed | QueueItemStatus::Dropped => false,
+    };
+    if !allowed {
+        return Err(StoreError::Conflict(format!(
+            "invalid queue transition for {}: {:?} -> {:?}",
+            item.id, current, target
+        )));
+    }
+
+    if matches!(target, QueueItemStatus::Claimed)
+        && request
+            .claimed_by
+            .as_ref()
+            .and_then(|value| trimmed(value.clone()))
+            .is_none()
+    {
+        return Err(StoreError::Validation(
+            "claimed transitions require claimed_by".into(),
+        ));
+    }
+
+    Ok(())
+}
+
 fn relative_or_absolute(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
         .map(|v| v.display().to_string())
@@ -1048,6 +1363,10 @@ fn unix_timestamp() -> u128 {
 }
 fn now_utc_string() -> String {
     unix_timestamp().to_string()
+}
+
+fn bind_address_is_loopback(bind_address: &str) -> bool {
+    bind_address.starts_with("127.") || bind_address.starts_with("localhost:") || bind_address == "localhost"
 }
 
 #[cfg(test)]

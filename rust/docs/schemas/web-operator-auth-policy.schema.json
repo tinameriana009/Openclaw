@@ -15,6 +15,7 @@
     "sessionCookiesSupported",
     "directInternetExposureAllowed",
     "trustedProxy",
+    "localOperatorMutations",
     "notes"
   ],
   "properties": {
@@ -28,7 +29,7 @@
     "backendEnabled": {
       "type": "boolean",
       "default": false,
-      "description": "Whether a live backend is enabled. Safe default is false."
+      "description": "Whether a future live backend is enabled. Safe default is false. The current in-tree backend slice still treats this as unsupported."
     },
     "deploymentMode": {
       "type": "string",
@@ -45,7 +46,8 @@
     },
     "mutationRoutesEnabled": {
       "type": "boolean",
-      "default": false
+      "default": false,
+      "description": "Reserved for a future authenticated backend. Must remain false for now."
     },
     "sessionCookiesSupported": {
       "type": "boolean",
@@ -79,6 +81,33 @@
         "allowClientSuppliedIdentityHeaders": {
           "type": "boolean",
           "const": false
+        }
+      }
+    },
+    "localOperatorMutations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "requireLoopbackBind",
+        "requiredAckHeader"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Explicit opt-in for the current local-only queue mutation slice. This is not a real auth system."
+        },
+        "requireLoopbackBind": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require the daemon bind address to stay on loopback before local mutations are accepted."
+        },
+        "requiredAckHeader": {
+          "type": "string",
+          "minLength": 1,
+          "default": "x-claw-local-operator",
+          "description": "Per-request acknowledgment header required for local mutation routes. This is an explicit safety boundary, not identity proof."
         }
       }
     },
@@ -120,6 +149,17 @@
             },
             "required": [
               "required"
+            ]
+          },
+          "localOperatorMutations": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "const": false
+              }
+            },
+            "required": [
+              "enabled"
             ]
           }
         }

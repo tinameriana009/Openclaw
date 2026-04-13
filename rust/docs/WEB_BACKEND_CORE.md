@@ -9,7 +9,8 @@ This is **not** a claim that the project already has a complete live web app.
 What exists now is smaller and safer:
 - a localhost-only daemon (`claw-webd`)
 - persisted service state under `.claw/backend/`
-- a small JSON API for queue/state inspection plus a few bounded queue lifecycle mutations
+- a small JSON API for queue/state inspection
+- a bounded queue mutation slice that is now **deny-by-default** unless an explicit local-only auth-boundary policy file opts in
 - a runtime-bridge file intended to mirror or extend the existing static operator artifacts over time
 
 It is still local plumbing for one workspace, not a full multi-user control plane.
@@ -77,15 +78,15 @@ Example bounded mutation request:
 
 ## Mutation semantics
 
-These new mutation routes are intentionally conservative:
+Current mutation behavior is intentionally conservative:
 
-- `claim` only works from `queued`
-- `unclaim` moves an actively claimed item back to `queued`
-- `defer` also moves an actively claimed item back to `queued`, but is intended to leave a note explaining why
-- `complete` only works after an item has been claimed/in-progress
-- `drop` is terminal for local triage purposes and clears any active claim
+- all HTTP mutation routes are blocked by default
+- enabling them now requires a local policy file at `.claw/backend/web-operator-auth-policy.json`
+- that policy must keep `mutationRoutesEnabled=false` for any future authenticated/live backend assumptions
+- the only currently supported opt-in is `localOperatorMutations.enabled=true`
+- when enabled, the daemon must still stay loopback-bound and each mutation request must send the configured acknowledgment header (default: `x-claw-local-operator`)
 
-This is enough to support local queue lifecycle cleanup without pretending the backend already supports cross-user locking, permissions, leases, audit streams, or durable workflow orchestration.
+That is enough to support bounded localhost queue testing without pretending the backend already supports cross-user locking, real authentication, permissions, leases, audit streams, or durable workflow orchestration.
 
 ## Run locally
 
@@ -98,6 +99,12 @@ Optional env vars:
 
 - `CLAW_WORKSPACE_ROOT=/path/to/workspace`
 - `CLAW_WEBD_BIND=127.0.0.1:8787`
+
+Optional local-only mutation policy file:
+
+- `.claw/backend/web-operator-auth-policy.json`
+- see `config-examples/web-operator-auth-policy.example.json`
+- if absent, mutation routes stay disabled
 
 To prove the daemon is consumable without inventing a full live frontend, you can generate a static HTML status page from the JSON API:
 
