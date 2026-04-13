@@ -8,8 +8,8 @@ use tokio::sync::Mutex;
 
 use crate::state::{
     BackendApiSchema, MutationGuard, OperatorInboxSnapshot, QueueClaimRequest, QueueItem,
-    QueueItemCreateRequest, QueueNoteRequest, QueueTransitionRequest, SyncInboxReport,
-    WebBackendStore,
+    QueueItemCreateRequest, QueueItemReviewState, QueueNoteRequest, QueueTransitionRequest,
+    RepoAnalysisIndexSnapshot, SyncInboxReport, SyncRepoAnalysisIndexReport, WebBackendStore,
 };
 
 #[derive(Clone)]
@@ -19,13 +19,15 @@ pub struct AppState {
 }
 
 pub fn app(store: WebBackendStore) -> Router {
-    let mutation_guard = store.mutation_guard().unwrap_or_else(|error| MutationGuard {
-        allowed: false,
-        reason: format!("failed to evaluate auth boundary policy: {error}"),
-        required_ack_header: None,
-        policy_loaded: false,
-        policy_source: "error".into(),
-    });
+    let mutation_guard = store
+        .mutation_guard()
+        .unwrap_or_else(|error| MutationGuard {
+            allowed: false,
+            reason: format!("failed to evaluate auth boundary policy: {error}"),
+            required_ack_header: None,
+            policy_loaded: false,
+            policy_source: "error".into(),
+        });
     let state = AppState {
         store: Arc::new(Mutex::new(store)),
         mutation_guard,
@@ -37,14 +39,27 @@ pub fn app(store: WebBackendStore) -> Router {
         .route("/v1/state", get(state_snapshot))
         .route("/v1/queue", get(queue))
         .route("/v1/queue/items", post(create_queue_item))
+        .route("/v1/queue/items/:id", get(queue_item))
+        .route(
+            "/v1/queue/items/:id/review-state",
+            get(queue_item_review_state),
+        )
         .route("/v1/queue/items/:id/claim", post(claim_queue_item))
         .route("/v1/queue/items/:id/unclaim", post(unclaim_queue_item))
         .route("/v1/queue/items/:id/complete", post(complete_queue_item))
         .route("/v1/queue/items/:id/drop", post(drop_queue_item))
         .route("/v1/queue/items/:id/reopen", post(reopen_queue_item))
-        .route("/v1/queue/items/:id/transition", post(transition_queue_item))
+        .route(
+            "/v1/queue/items/:id/transition",
+            post(transition_queue_item),
+        )
         .route("/v1/operator/inbox", get(operator_inbox))
         .route("/v1/operator/inbox/sync", post(sync_operator_inbox))
+        .route("/v1/operator/repo-analysis", get(repo_analysis_index))
+        .route(
+            "/v1/operator/repo-analysis/sync",
+            post(sync_repo_analysis_index),
+        )
         .with_state(state)
 }
 
@@ -88,6 +103,26 @@ async fn operator_inbox(
     Ok(Json(inbox))
 }
 
+async fn queue_item(
+    Path(item_id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<Json<QueueItem>, (StatusCode, String)> {
+    let store = state.store.lock().await;
+    let item = store.load_queue_item(&item_id).map_err(map_store_error)?;
+    Ok(Json(item))
+}
+
+async fn queue_item_review_state(
+    Path(item_id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<Json<QueueItemReviewState>, (StatusCode, String)> {
+    let store = state.store.lock().await;
+    let review_state = store
+        .load_queue_item_review_state(&item_id)
+        .map_err(map_store_error)?;
+    Ok(Json(review_state))
+}
+
 async fn sync_operator_inbox(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -95,6 +130,24 @@ async fn sync_operator_inbox(
     require_mutation_permission(&state.mutation_guard, &headers)?;
     let store = state.store.lock().await;
     let report = store.sync_web_approval_inbox().map_err(map_store_error)?;
+    Ok(Json(report))
+}
+
+async fn repo_analysis_index(
+    State(state): State<AppState>,
+) -> Result<Json<RepoAnalysisIndexSnapshot>, (StatusCode, String)> {
+    let store = state.store.lock().await;
+    let snapshot = store.load_repo_analysis_index().map_err(internal_error)?;
+    Ok(Json(snapshot))
+}
+
+async fn sync_repo_analysis_index(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<SyncRepoAnalysisIndexReport>, (StatusCode, String)> {
+    require_mutation_permission(&state.mutation_guard, &headers)?;
+    let store = state.store.lock().await;
+    let report = store.sync_repo_analysis_index().map_err(map_store_error)?;
     Ok(Json(report))
 }
 
@@ -159,7 +212,9 @@ async fn drop_queue_item(
 ) -> Result<Json<QueueItem>, (StatusCode, String)> {
     require_mutation_permission(&state.mutation_guard, &headers)?;
     let store = state.store.lock().await;
-    let item = store.drop_queue_item(&item_id, request).map_err(map_store_error)?;
+    let item = store
+        .drop_queue_item(&item_id, request)
+        .map_err(map_store_error)?;
     Ok(Json(item))
 }
 
@@ -202,12 +257,16 @@ fn require_mutation_permission(
         let Some(value) = headers.get(required_header) else {
             return Err((
                 StatusCode::FORBIDDEN,
-                format!(
-                    "missing required local mutation acknowledgment header: {required_header}"
-                ),
+                format!("missing required local mutation acknowledgment header: {required_header}"),
             ));
         };
-        if value.to_str().ok().map(str::trim).filter(|v| !v.is_empty()).is_none() {
+        if value
+            .to_str()
+            .ok()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .is_none()
+        {
             return Err((
                 StatusCode::FORBIDDEN,
                 format!(
@@ -404,7 +463,11 @@ mod tests {
                 serde_json::json!({"title": "Inspect review bundle", "kind": "review"}).to_string(),
             ))
             .unwrap();
-        let response = app.clone().oneshot(create).await.expect("queue create response");
+        let response = app
+            .clone()
+            .oneshot(create)
+            .await
+            .expect("queue create response");
         assert_eq!(response.status(), StatusCode::CREATED);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let created: crate::state::QueueItem = serde_json::from_slice(&body).unwrap();
@@ -443,7 +506,11 @@ mod tests {
                 .header("x-claw-local-operator", "ack")
                 .body(Body::from(payload.to_string()))
                 .unwrap();
-            let response = app.clone().oneshot(request).await.expect("mutation response");
+            let response = app
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("mutation response");
             assert_eq!(response.status(), StatusCode::OK);
             let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
             let item: crate::state::QueueItem = serde_json::from_slice(&body).unwrap();
@@ -485,6 +552,70 @@ mod tests {
         assert!(String::from_utf8(body.to_vec())
             .unwrap()
             .contains("x-claw-local-operator"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn exposes_backend_backed_queue_item_review_state_route() {
+        let root = temp_workspace("review-state-route");
+        let bundle = root.join(".demo-artifacts/repo-analysis-demo/20260412T030700Z");
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::write(bundle.join("runtime-bridge.json"), serde_json::json!({"latestSession":{"sessionId":"session-123","path":".claw/sessions/session-123.jsonl"},"recentTraces":[{"traceId":"trace-1"}]}).to_string()).unwrap();
+        std::fs::write(
+            bundle.join("operator-handoff.json"),
+            serde_json::json!({"workflow":"repo-analysis-demo","operatorNextStep":"review it"})
+                .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            bundle.join("review-status.json"),
+            serde_json::json!({"status":"pending-review"}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            bundle.join("continuity-status.json"),
+            serde_json::json!({"handoffState":"handoff-ready","currentOwner":"operator-a"})
+                .to_string(),
+        )
+        .unwrap();
+
+        let store = WebBackendStore::new(StorePaths::from_workspace_root(&root), "127.0.0.1:8787");
+        let report = store.import_repo_analysis_bundle(&bundle).unwrap();
+        let app = app(store);
+
+        let request = Request::builder()
+            .uri(format!(
+                "/v1/queue/items/{}/review-state",
+                report.queue_item_id
+            ))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.expect("review state response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let review_state: crate::state::QueueItemReviewState =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(review_state.backend_source, "repo-analysis-import");
+        assert_eq!(
+            review_state.queue_item.status,
+            crate::state::QueueItemStatus::HandoffReady
+        );
+        assert_eq!(
+            review_state
+                .review_status
+                .as_ref()
+                .and_then(|value| value.get("status"))
+                .and_then(serde_json::Value::as_str),
+            Some("pending-review")
+        );
+        assert_eq!(
+            review_state
+                .continuity_status
+                .as_ref()
+                .and_then(|value| value.get("handoffState"))
+                .and_then(serde_json::Value::as_str),
+            Some("handoff-ready")
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 }

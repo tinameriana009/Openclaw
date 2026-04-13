@@ -28,19 +28,25 @@ pub async fn export_static_status_page(
     let response = reqwest::get(&state_url)
         .await
         .map_err(|error| StoreError::Validation(format!("failed to fetch {state_url}: {error}")))?;
-    let response = response
-        .error_for_status()
-        .map_err(|error| StoreError::Validation(format!("backend api request failed for {state_url}: {error}")))?;
-    let snapshot = response
-        .json::<BackendSnapshot>()
-        .await
-        .map_err(|error| StoreError::Validation(format!("failed to decode backend snapshot from {state_url}: {error}")))?;
+    let response = response.error_for_status().map_err(|error| {
+        StoreError::Validation(format!(
+            "backend api request failed for {state_url}: {error}"
+        ))
+    })?;
+    let snapshot = response.json::<BackendSnapshot>().await.map_err(|error| {
+        StoreError::Validation(format!(
+            "failed to decode backend snapshot from {state_url}: {error}"
+        ))
+    })?;
 
     let output_path = output_path.as_ref();
     if let Some(parent) = output_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(output_path, render_static_status_page(&snapshot, api_base_url))?;
+    fs::write(
+        output_path,
+        render_static_status_page(&snapshot, api_base_url),
+    )?;
 
     Ok(ConsumerExportReport {
         api_base_url: api_base_url.to_string(),
@@ -64,7 +70,12 @@ pub async fn export_static_status_page(
             .queue
             .items
             .iter()
-            .filter(|item| matches!(item.status, QueueItemStatus::InReview | QueueItemStatus::HandoffReady))
+            .filter(|item| {
+                matches!(
+                    item.status,
+                    QueueItemStatus::InReview | QueueItemStatus::HandoffReady
+                )
+            })
             .count(),
         completed_item_count: snapshot
             .queue
@@ -77,7 +88,12 @@ pub async fn export_static_status_page(
             .operator_inbox
             .entries
             .iter()
-            .filter(|entry| !matches!(entry.queue_status, Some(QueueItemStatus::Completed | QueueItemStatus::Dropped)))
+            .filter(|entry| {
+                !matches!(
+                    entry.queue_status,
+                    Some(QueueItemStatus::Completed | QueueItemStatus::Dropped)
+                )
+            })
             .count(),
         generated_from_schema: snapshot.schema.version,
     })
@@ -238,7 +254,12 @@ fn summarize_queue(snapshot: &BackendSnapshot) -> String {
         .queue
         .items
         .iter()
-        .filter(|item| matches!(item.status, QueueItemStatus::InReview | QueueItemStatus::HandoffReady))
+        .filter(|item| {
+            matches!(
+                item.status,
+                QueueItemStatus::InReview | QueueItemStatus::HandoffReady
+            )
+        })
         .count();
     let completed = snapshot
         .queue
@@ -271,7 +292,12 @@ fn summarize_inbox(snapshot: &BackendSnapshot) -> String {
         .operator_inbox
         .entries
         .iter()
-        .filter(|entry| !matches!(entry.queue_status, Some(QueueItemStatus::Completed | QueueItemStatus::Dropped)))
+        .filter(|entry| {
+            !matches!(
+                entry.queue_status,
+                Some(QueueItemStatus::Completed | QueueItemStatus::Dropped)
+            )
+        })
         .count();
     let needs_trace = snapshot
         .operator_inbox
@@ -346,7 +372,12 @@ fn render_inbox_rows(snapshot: &BackendSnapshot) -> String {
             render_inbox_item_cell(entry),
             escape_html(entry.trace_id.as_deref().unwrap_or("-")),
             escape_html(&render_queue_status_label(entry.queue_status.as_ref())),
-            escape_html(entry.operator_state.as_deref().unwrap_or(entry.status.as_str())),
+            escape_html(
+                entry
+                    .operator_state
+                    .as_deref()
+                    .unwrap_or(entry.status.as_str())
+            ),
             escape_html(entry.next_step.as_deref().unwrap_or("-")),
             render_artifact_cell(entry),
         );
@@ -357,13 +388,22 @@ fn render_inbox_rows(snapshot: &BackendSnapshot) -> String {
 fn render_inbox_item_cell(entry: &OperatorInboxEntry) -> String {
     let mut parts = vec![format!("<strong>{}</strong>", escape_html(&entry.item_id))];
     if let Some(queue_item_id) = &entry.queue_item_id {
-        parts.push(format!("<div class=\"muted\">queue item: <code>{}</code></div>", escape_html(queue_item_id)));
+        parts.push(format!(
+            "<div class=\"muted\">queue item: <code>{}</code></div>",
+            escape_html(queue_item_id)
+        ));
     }
     if let Some(queue_label) = &entry.queue_label {
-        parts.push(format!("<div class=\"muted\">label: {}</div>", escape_html(queue_label)));
+        parts.push(format!(
+            "<div class=\"muted\">label: {}</div>",
+            escape_html(queue_label)
+        ));
     }
     if let Some(queue_bucket) = &entry.queue_bucket {
-        parts.push(format!("<div class=\"muted\">bucket: {}</div>", escape_html(queue_bucket)));
+        parts.push(format!(
+            "<div class=\"muted\">bucket: {}</div>",
+            escape_html(queue_bucket)
+        ));
     }
     parts.join("")
 }
@@ -380,7 +420,10 @@ fn render_artifact_cell(entry: &OperatorInboxEntry) -> String {
         lines.push(format!("review status: <code>{}</code>", escape_html(path)));
     }
     if let Some(path) = &entry.approval_packet {
-        lines.push(format!("approval packet: <code>{}</code>", escape_html(path)));
+        lines.push(format!(
+            "approval packet: <code>{}</code>",
+            escape_html(path)
+        ));
     }
     if lines.is_empty() {
         "-".to_string()
@@ -438,6 +481,7 @@ mod tests {
                 queue_file: ".claw/backend/operator-queue.json".into(),
                 runtime_bridge_file: ".claw/backend/runtime-bridge.json".into(),
                 operator_inbox_file: ".claw/backend/operator-inbox.json".into(),
+                repo_analysis_index_file: ".claw/backend/repo-analysis-index.json".into(),
                 auth_policy_file: ".claw/backend/web-operator-auth-policy.json".into(),
             },
             runtime_bridge: RuntimeBridgeSnapshot {
@@ -495,7 +539,9 @@ mod tests {
                     next_step: Some("inspect replay artifacts".into()),
                     review_json_path: Some(".claw/web-approvals/trace-a.review.json".into()),
                     review_html_path: Some(".claw/web-approvals/trace-a.review.html".into()),
-                    review_status_path: Some(".claw/web-approvals/trace-a.review-status.json".into()),
+                    review_status_path: Some(
+                        ".claw/web-approvals/trace-a.review-status.json".into(),
+                    ),
                     approval_packet: Some(".claw/web-approvals/trace-a.json".into()),
                     session_id: Some("session-123".into()),
                     corpus_id: Some("corpus-123".into()),
@@ -513,6 +559,15 @@ mod tests {
                 mutation_routes_allowed: false,
                 mutation_guard_reason: "Local mutation policy not enabled".into(),
                 required_local_ack_header: Some("x-claw-local-operator".into()),
+            },
+            repo_analysis_index: RepoAnalysisIndexSnapshot {
+                source_file: Some(".claw/backend/repo-analysis-index.json".into()),
+                generated_at_utc: Some("123456".into()),
+                synced_at_utc: Some("123457".into()),
+                status: "loaded".into(),
+                run_count: 0,
+                runs: Vec::new(),
+                honesty_note: "Backend-cached repo-analysis index snapshot only.".into(),
             },
         }
     }
